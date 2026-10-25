@@ -26,6 +26,22 @@ const topology: Topology = {
 const base = (steps: Step[], target: Scope = { device: DEV }, checks?: Scenario['checks']): Scenario => ({ name: 'x', target, steps, ...(checks ? { checks } : {}) });
 const at = (sc: Scenario, topo: Topology = topology) => scenarioProblems(sc, [], topo).map((p) => p.path);
 
+describe('the target of a DHCP action (M23b)', () => {
+  it('a device or a network; a forced new IP only a device; a step may narrow a group to a device', () => {
+    const silence: Step = { id: 'a', at: '0s', dhcp: { action: 'silence' } };
+    const force: Step = { id: 'a', at: '0s', dhcp: { action: 'force_new_ip' } };
+    expect(at(base([silence]))).toEqual([]);
+    expect(at(base([silence], { network: IOT }))).toEqual([]);
+    expect(at(base([silence], { group: GROUP }))).toEqual(['/steps/0/dhcp']);
+    expect(at(base([{ ...silence, target: { device: DEV } }], { group: GROUP }))).toEqual([]);
+    expect(at(base([force]))).toEqual([]);
+    expect(at(base([force], { network: IOT }))).toEqual(['/steps/0/dhcp']);
+    expect(at(base([{ ...force, target: { device: DEV } }], { network: IOT }))).toEqual([]);
+    expect(scenarioProblems(base([force], { network: IOT }), [], topology)[0]!.message).toMatch(/force_new_ip moves a device's reservation/);
+    expect(scenarioProblems(base([silence], { group: GROUP }), [], topology)[0]!.message).toMatch(/not a group/);
+  });
+});
+
 describe('the rules of the gateway in a scenario', () => {
   it('the step id start is reserved', () => {
     expect(at(base([{ id: 'start', at: '0s', restore: true }]))).toEqual(['/steps/0/id']);

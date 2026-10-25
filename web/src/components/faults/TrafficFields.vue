@@ -10,6 +10,10 @@ defineProps<{
   errors: Partial<Record<string, string>>;
   /** Leave the destination out (a selector that has ports only). */
   noDestination?: boolean;
+  /** Leave the protocol out (a selector that is TCP by its kind: a TLS case). */
+  noProtocol?: boolean;
+  /** What an empty ports field means, when it is not "any port" (a TLS case: 443 and 8883). */
+  portsPlaceholder?: string;
 }>();
 const form = defineModel<TrafficForm>({ required: true });
 const uid = useId();
@@ -25,8 +29,8 @@ const eid = (f: string) => `${uid}-${f}-error`;
 </script>
 
 <template>
-  <div class="grid grid-cols-4 gap-3" data-testid="traffic-fields">
-    <div>
+  <div class="grid gap-3" :class="noProtocol ? 'grid-cols-3' : 'grid-cols-4'" data-testid="traffic-fields">
+    <div v-if="!noProtocol">
       <label class="label" :for="fid('protocol')">Protocol</label>
       <select :id="fid('protocol')" v-model="form.protocol" class="input">
         <option value="any">Any</option>
@@ -41,7 +45,7 @@ const eid = (f: string) => `${uid}-${f}-error`;
         :id="fid('ports')"
         v-model="form.ports"
         class="input mono"
-        placeholder="any"
+        :placeholder="portsPlaceholder ?? 'any'"
         :aria-invalid="!!errors.ports"
         :aria-describedby="errors.ports ? eid('ports') : undefined"
       />

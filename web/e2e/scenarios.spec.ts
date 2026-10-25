@@ -106,7 +106,7 @@ test('edit a step, add a step and a check, delete a step: one change of the draf
   // add a wait step: the editor offers what this build runs
   await page.getByTestId('add-step').click();
   const a = dialog(page, 'Add step');
-  await expect(a.getByLabel('Type', { exact: true }).locator('option')).toHaveText(['Profile', 'Fault', 'Access rule', 'WireGuard action', 'Capture', 'Wait', 'Remove', 'Restore']);
+  await expect(a.getByLabel('Type', { exact: true }).locator('option')).toHaveText(['Profile', 'Fault', 'DNS fault', 'TLS case', 'DHCP action', 'Access rule', 'WireGuard action', 'Capture', 'Wait', 'Remove', 'Restore']);
   await a.getByLabel('Type', { exact: true }).selectOption('wait');
   await a.getByLabel('Id', { exact: true }).fill('online');
   await a.getByLabel('At', { exact: true }).fill('50s');
@@ -664,7 +664,7 @@ test('the overview shows the running scenarios with their progress and links to 
   await expect(page.getByTestId('no-running-scenario')).toHaveText('No scenario is running.');
 });
 
-test('a step of a type this build cannot edit is shown and kept; the check types follow the capabilities', async ({ page }) => {
+test('a DNS step is edited with the DNS fields (M23b); a type the gateway does not list is not offered; the check types follow the capabilities', async ({ page }) => {
   const gw = lab();
   gw.config = {
     ...gw.config,
@@ -673,14 +673,18 @@ test('a step of a type this build cannot edit is shown and kept; the check types
       [SCN_BOOT]: { name: 'boot-loop', target: { network: IOT }, steps: [{ id: 'dns', at: '0s', dns: { action: 'nxdomain', names: ['broker.example.com'] } }, { id: 'back', at: '20s', restore: true }] },
     },
   };
+  // a gateway of an older build knows no DHCP actions
+  gw.capabilities.step_types = gw.capabilities.step_types.filter((t) => t !== 'dhcp');
   await gw.install(page);
   await page.goto(`/scenarios/${SCN_BOOT}`);
   await expect(step(page, 'dns').getByTestId('step-type')).toHaveText('DNS fault');
   await expect(step(page, 'dns')).toContainText('DNS nxdomain · broker.example.com');
   await page.getByRole('button', { name: 'Edit step dns' }).click();
   const d = dialog(page, 'Edit step');
-  await expect(d).toContainText('This step is edited in the YAML view.');
-  await expect(d.getByLabel('Type', { exact: true })).toBeDisabled();
+  await expect(d).not.toContainText('This step is edited in the YAML view.');
+  await expect(d.getByLabel('Type', { exact: true })).toBeEnabled();
+  await expect(d.getByLabel('Type', { exact: true }).locator('option')).toHaveText(['Profile', 'Fault', 'DNS fault', 'TLS case', 'Access rule', 'WireGuard action', 'Capture', 'Wait', 'Remove', 'Restore']);
+  await expect(d.getByLabel('Host names')).toHaveValue('broker.example.com');
   await d.getByLabel('At', { exact: true }).fill('2s');
   await d.getByRole('button', { name: 'Save to the changes' }).click();
   await page.getByRole('button', { name: 'Preview & apply' }).click();

@@ -3,9 +3,12 @@
 // an impairment fault (target, traffic, direction, presets to start from, latency, jitter, loss and
 // duration; under Advanced the delay distribution, keep packet order, burst loss, loss correlation,
 // rate, queue limit, reorder, duplicate, corrupt and flapping; each direction with parameters of its
-// own), an MTU/PMTUD fault (target, traffic, size and mode) and a tunnel fault (the WireGuard client
-// or link whose encrypted traffic it impairs, with the parameters a tunnel takes); a live preview
-// sentence. A fault is edited with all its parameters: saving never drops one. Each message stands under its field and Apply stays
+// own), an MTU/PMTUD fault (target, traffic, size and mode), a tunnel fault (the WireGuard client
+// or link whose encrypted traffic it impairs, with the parameters a tunnel takes), a DNS fault (the
+// proxy's action, the names, the delay, the addresses or the TTL) and a TLS case (the responder's
+// case, ports, destination, server names, cutting existing connections, with the download of the
+// test CA; M23b); the last two are overlays only, as the API has no configured fault of their
+// families; a live preview sentence. A fault is edited with all its parameters: saving never drops one. Each message stands under its field and Apply stays
 // disabled until the form is valid; the gateway's refusal (422) is put under the fields it names.
 // An overlay is written at once (`POST /overlays`, the answer comes after the verify) and appears
 // with its TTL; on the faults screen a fault can instead go into the configuration, through the
@@ -22,7 +25,7 @@ import { computed, ref, useId, watch } from 'vue';
 import { ApiError, errorMessage } from '../../api/fetcher';
 import { createOverlay, deleteOverlay } from '../../api/generated/hooks/overlays/overlays';
 import type { ConfigFault, Overlay, OverlayRequest } from '../../api/generated/model';
-import { useGatewayState, useGroups, useNames } from '../../composables/gateway';
+import { useCapabilities, useGatewayState, useGroups, useNames } from '../../composables/gateway';
 import {
   durationChoices,
   keepError,
@@ -36,6 +39,8 @@ import {
   formToOverlay,
   familyLabels,
   mtuModes,
+  overlayOnlyFamilies,
+  overlayToForm,
   previewSentence,
   trafficPresets,
   ttlText,
@@ -56,7 +61,9 @@ import DisclosureButton from '../ui/DisclosureButton.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
 import ScopeSelect from '../ui/ScopeSelect.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
+import DnsFields from './DnsFields.vue';
 import ImpairmentFields from './ImpairmentFields.vue';
+import TlsFields from './TlsFields.vue';
 import TrafficFields from './TrafficFields.vue';
 
 const props = defineProps<{
@@ -104,7 +111,7 @@ watch(open, (o) => {
   error.value = '';
   serverErrors.value = {};
   if (props.overlay) {
-    form.value = faultToForm(props.overlay.fault, props.overlay.target, { ttl: props.overlay.ttl, expiresAt: props.overlay.expires_at });
+    form.value = overlayToForm(props.overlay);
     layer.value = 'overlay';
   } else if (props.config) {
     form.value = faultToForm(props.config.fault, props.config.fault.source, { name: props.config.fault.name });
@@ -125,10 +132,27 @@ watch(open, (o) => {
 const owner = computed(() => (props.overlay && props.overlay.owner.type !== 'user' ? describeOwner(props.overlay.owner) : undefined));
 
 const tunnels = computed(() => tunnelOptions(networks.data.value ?? []));
-/** The kinds a new fault can be: a tunnel fault has no target, so not on a device's page. */
-const families = computed(() =>
-  (['impairment', 'mtu', 'tunnel'] as const).filter((f) => f !== 'tunnel' || !props.fixedTarget).map((value) => ({ value, label: familyLabels[value] })),
-);
+const capabilities = useCapabilities();
+/**
+ * The kinds a new fault can be: a tunnel fault has no target, so not on a device's page; a DNS fault and a TLS case are overlays
+ * only, so not while the fault is saved in the configuration, and only when the gateway has them.
+ */
+const families = computed(() => {
+  const kinds = capabilities.data.value?.overlay_kinds;
+  return (['impairment', 'mtu', 'tunnel', 'dns', 'tls'] as const)
+    .filter((f) => f !== 'tunnel' || !props.fixedTarget)
+    .filter((f) => !overlayOnlyFamilies.includes(f) || (layer.value === 'overlay' && (!kinds || (kinds as string[]).includes(f))))
+    .map((value) => ({ value, label: familyLabels[value] }));
+});
+const overlayOnly = computed(() => overlayOnlyFamilies.includes(form.value.family));
+/** The choice "Save as" is for the kinds that can be configured; a DNS fault or a TLS case is an overlay, as the note says. */
+const showLayer = computed(() => !!props.allowConfig && !editing.value && !overlayOnly.value);
+// a device the TLS case is aimed at: whether it trusts the test CA decides what a certificate case shows
+const trustedDevice = computed(() => {
+  const id = form.value.target.startsWith('device:') ? form.value.target.slice('device:'.length) : undefined;
+  const d = id ? devices.data.value?.find((x) => x.id === id) : undefined;
+  return d?.config ? { trust: d.config.trusts_test_ca === true, name: d.name } : undefined;
+});
 const mtuHint = computed(() => mtuModes.find((m) => m.value === form.value.mtuMode)?.hint);
 
 const targets = computed(() => {
@@ -277,7 +301,7 @@ const errId = (f: string) => `${uid}-${f}-error`;
 <template>
   <ModalDialog v-model:open="open" :title="title" width="640px">
     <form class="flex flex-col gap-4" novalidate data-testid="fault-dialog" @submit.prevent="submit">
-      <div v-if="allowConfig && !editing">
+      <div v-if="showLayer">
         <span :id="fieldId('layer')" class="label">Save as</span>
         <SegmentedControl
           v-model="layer"
@@ -292,6 +316,10 @@ const errId = (f: string) => `${uid}-${f}-error`;
       <div v-if="!editing && families.length > 1">
         <span class="label">Kind</span>
         <SegmentedControl v-model="form.family" label="Kind" :options="families" />
+        <p v-if="overlayOnly" class="m-0 mt-1.5 text-[13px] text-text-2" data-testid="overlay-only-note">
+          {{ form.family === 'dns' ? 'A DNS fault' : 'A TLS case' }} is an overlay: it applies now and goes with its duration; it cannot be saved in the configuration.
+        </p>
+        <p v-else-if="allowConfig && layer === 'config'" class="m-0 mt-1.5 text-[13px] text-text-2">DNS faults and TLS cases are overlays: choose Overlay under Save as to make one.</p>
       </div>
 
       <div v-if="form.family === 'tunnel'">
@@ -325,7 +353,7 @@ const errId = (f: string) => `${uid}-${f}-error`;
           />
           <p v-if="errors.target" :id="errId('target')" class="field-error">{{ errors.target }}</p>
         </div>
-        <div>
+        <div v-if="!overlayOnly">
           <label class="label" :for="fieldId('traffic')">Traffic</label>
           <select :id="fieldId('traffic')" v-model="form.traffic" class="input">
             <option v-for="(t, k) in trafficPresets" :key="k" :value="k">{{ t.label }}</option>
@@ -334,7 +362,7 @@ const errId = (f: string) => `${uid}-${f}-error`;
         </div>
       </div>
 
-      <TrafficFields v-if="form.family !== 'tunnel' && form.traffic === 'custom'" v-model="form" :errors="errors" />
+      <TrafficFields v-if="form.family !== 'tunnel' && !overlayOnly && form.traffic === 'custom'" v-model="form" :errors="errors" />
 
       <template v-if="form.family === 'mtu'">
         <div class="grid grid-cols-3 gap-3">
@@ -366,6 +394,8 @@ const errId = (f: string) => `${uid}-${f}-error`;
         </div>
         <p class="m-0 text-[13px] text-text-2" data-testid="mtu-hint">{{ mtuHint }}</p>
       </template>
+      <DnsFields v-else-if="form.family === 'dns'" v-model="form.dns" :errors="errors" />
+      <TlsFields v-else-if="form.family === 'tls'" v-model="form.tls" :errors="errors" :trust="trustedDevice?.trust" :device-name="trustedDevice?.name" />
       <ImpairmentFields v-else v-model="form" :errors="errors" :tunnel="form.family === 'tunnel'" />
 
       <div class="grid grid-cols-3 gap-3">

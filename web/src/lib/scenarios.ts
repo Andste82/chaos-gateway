@@ -10,8 +10,8 @@ import {
   createRunBodyTwoInlineOneStepsItemIdRegExp as stepIdRegExp,
 } from '../api/generated/zod/runs/runs';
 import { accessLabel, describeDestination, resetError, type FieldChange } from './rules';
-import { createsOverlay, messages, reservedStepId, scopeWithin, startsCapture, tunnelOutsideTarget, type Topology } from './scenarioRules';
-import { describeMatch, describeScope, faultChips, type Names } from './faults';
+import { createsOverlay, dhcpTargetProblem, messages, reservedStepId, scopeWithin, startsCapture, tunnelOutsideTarget, type Topology } from './scenarioRules';
+import { describeMatch, describeScope, dhcpChips, dnsChips, faultChips, tlsChips, type Names } from './faults';
 import { durationMs, formatDuration } from './format';
 import { jsonEqual } from './mergePatch';
 import { profileTitle } from './profileNames';
@@ -21,7 +21,7 @@ export type CheckType = 'reconnected' | 'no_connection' | 'traffic_seen' | 'traf
 export type Zero = 'warning' | 'error';
 
 /** The step types in the order the editor offers them. */
-export const stepTypes: StepType[] = ['profile', 'fault', 'rule', 'wireguard', 'capture', 'wait', 'remove', 'restore', 'dns', 'tls', 'dhcp'];
+export const stepTypes: StepType[] = ['profile', 'fault', 'dns', 'tls', 'dhcp', 'rule', 'wireguard', 'capture', 'wait', 'remove', 'restore'];
 
 export const stepTypeLabels: Record<StepType, string> = {
   profile: 'Profile',
@@ -158,12 +158,13 @@ export function stepText(s: Step, names: ScenarioNames = {}): string {
       return `Remove the overlay of step ${s.remove}`;
     case 'restore':
       return 'Restore: remove all overlays of the run';
+    // the chips of the fault dialog and of the faults screen: what the step carries (the delay, the addresses, the ports, the lease time)
     case 'dns':
-      return `DNS ${s.dns!.action.replace(/_/g, ' ')}${s.dns!.names?.length ? ` · ${s.dns!.names.join(', ')}` : ''}`;
+      return dnsChips(s.dns!).join(', ');
     case 'tls':
-      return `TLS ${s.tls!.case.replace(/_/g, ' ')}${describeMatch(s.tls, names) ? ` ${describeMatch(s.tls, names)}` : ''}`;
+      return tlsChips(s.tls!).join(', ');
     case 'dhcp':
-      return `DHCP ${s.dhcp!.action.replace(/_/g, ' ')}`;
+      return dhcpChips(s.dhcp!).join(', ');
     default:
       return 'Step without a type';
   }
@@ -293,6 +294,9 @@ export function scenarioProblems(sc: Scenario, others: string[] = [], topology: 
       const before = steps.flatMap((x, j) => (x && j !== i && (rank.get(j) ?? 0) < (rank.get(i) ?? 0) ? [x as unknown as Step] : []));
       if (!startsCapture(before, scenarioTarget!, effective)) add(`${p}/capture`, messages.captureStop);
     }
+    const dhcp = obj(s.dhcp);
+    const dhcpProblem = dhcp && effective ? dhcpTargetProblem(str(dhcp.action), effective) : undefined;
+    if (dhcpProblem) add(`${p}/dhcp`, dhcpProblem);
     const fault = obj(s.fault);
     const tunnel = fault?.family === 'tunnel' ? obj(fault.tunnel) : obj(s.wireguard);
     if (effective && tunnel && tunnelOutsideTarget({ client: str(tunnel.client), link: str(tunnel.link) }, effective, topology)) {

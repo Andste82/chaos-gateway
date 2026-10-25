@@ -532,9 +532,9 @@ export class MockGateway {
   capabilities: Capabilities = {
     version: 'test',
     features: ['runs', 'checks', 'captures'],
-    overlay_kinds: ['fault', 'profile', 'rule', 'wireguard'],
-    fault_families: ['impairment', 'mtu', 'tunnel'],
-    step_types: ['profile', 'fault', 'rule', 'wireguard', 'capture', 'wait', 'remove', 'restore'],
+    overlay_kinds: ['fault', 'profile', 'rule', 'dns', 'tls', 'dhcp', 'wireguard'],
+    fault_families: ['impairment', 'mtu', 'dns', 'tls', 'dhcp', 'tunnel'],
+    step_types: ['profile', 'fault', 'rule', 'dns', 'tls', 'dhcp', 'wireguard', 'capture', 'wait', 'remove', 'restore'],
     check_types: ['reconnected', 'no_connection', 'traffic_seen', 'traffic_not_seen', 'dns_query_seen', 'tls_rejected', 'tls_accepted'],
   };
   private nextRun = 1;
@@ -586,6 +586,8 @@ export class MockGateway {
   failApply?: 'apply' | 'verify';
   /** The next POST /overlays is refused with 422 and these errors. */
   rejectOverlay?: ValidationError[];
+  /** The address a `force_new_ip` without one is given (the gateway takes the last free address of the pools). */
+  forcedAddress = '10.10.0.254';
   /** What GET /port-forwards adds to a forward of the configuration (its counter, a status), by id. */
   forwardViews: Record<string, Partial<PortForwardView>> = {};
   /** The answer of GET /explain. */
@@ -867,6 +869,14 @@ export class MockGateway {
       return f ? json(200, f) : problem(404, 'not_found', 'no such port forward');
     }
     if (path === '/capabilities') return json(200, this.capabilities);
+    if (path === '/tls/ca' && method === 'GET') {
+      return route.fulfill({
+        status: 200,
+        headers: { ...headers, 'Content-Disposition': 'attachment; filename="chaos-gateway-test-ca.pem"' },
+        contentType: 'application/x-pem-file',
+        body: '-----BEGIN CERTIFICATE-----\nMIIBtest\n-----END CERTIFICATE-----\n',
+      });
+    }
     if (path.startsWith('/captures') && !this.capabilities.features.includes('captures')) return problem(422, 'unsupported_feature', 'this deployment cannot capture: the executor has no capture volume (--captures-dir)');
     if (path === '/captures' && method === 'GET') {
       const run = url.searchParams.get('run');
@@ -1588,10 +1598,19 @@ export class MockGateway {
 
   /** POST /overlays: a new overlay, or the one with the same key replaced (it keeps its id). */
   putOverlay(req: OverlayRequest): { overlay: Overlay; created: boolean } {
-    const kind = req.profile ? 'profile' : req.rule ? 'rule' : 'fault';
-    // a fault's key has its family and its traffic, or its tunnel (a tunnel fault has no target)
+    const kind = req.profile ? 'profile' : req.rule ? 'rule' : req.dns ? 'dns' : req.tls ? 'tls' : req.dhcp ? 'dhcp' : 'fault';
+    // a fault's key has its family and its traffic, or its tunnel (a tunnel fault has no target); a DNS fault's the set of its
+    // names, a TLS case's its selection and server names, a DHCP action's the action (plan §2.15)
     const sel = (o: OverlayRequest) =>
-      kind === 'profile' ? '' : JSON.stringify([o.fault?.family ?? 'impairment', o.fault?.tunnel, o.fault?.protocol, o.fault?.ports, o.fault?.destination, o.rule?.protocol, o.rule?.ports]);
+      kind === 'profile'
+        ? ''
+        : kind === 'dns'
+          ? JSON.stringify([...(o.dns?.names ?? [])].map((n) => n.toLowerCase()).sort())
+          : kind === 'tls'
+            ? JSON.stringify([o.tls?.protocol, o.tls?.ports, o.tls?.port_ranges, o.tls?.destination, o.tls?.sni])
+            : kind === 'dhcp'
+              ? JSON.stringify(o.dhcp?.action)
+              : JSON.stringify([o.fault?.family ?? 'impairment', o.fault?.tunnel, o.fault?.protocol, o.fault?.ports, o.fault?.destination, o.rule?.protocol, o.rule?.ports]);
     const key = (o: OverlayRequest) => JSON.stringify([o.target ?? {}, sel(o)]);
     const old = this.overlays.find((o) => o.kind === kind && o.owner.id === 'admin' && key(o) === key(req));
     const unit: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000 };
@@ -1609,7 +1628,9 @@ export class MockGateway {
       updated_at: new Date().toISOString(),
       generation: ++this.state.generation,
       state: 'effective',
-      counters: { packets: 0, bytes: 0, epoch: 1 },
+      // a forced new IP always reads back with the address the gateway chose; a DHCP action has no counter
+      ...(req.dhcp?.action === 'force_new_ip' ? { dhcp: { ...req.dhcp, ip: req.dhcp.ip ?? this.forcedAddress } } : {}),
+      ...(kind === 'dhcp' ? {} : { counters: { packets: 0, bytes: 0, epoch: 1 } }),
       ...(ttlMs ? { expires_at: new Date(this.now() + ttlMs).toISOString() } : {}),
     };
     this.overlays = old ? this.overlays.map((o) => (o.id === old.id ? overlay : o)) : [...this.overlays, overlay];

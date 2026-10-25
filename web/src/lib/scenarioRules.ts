@@ -105,6 +105,19 @@ export function tunnelOutsideTarget(tunnel: { client?: string; link?: string } |
   return false;
 }
 
+/**
+ * What the gateway refuses of the target of a DHCP action (`dhcpTarget`): a device or a network, and for `force_new_ip`
+ * a device, because a reservation is one device's. Undefined for a target that is none of the kinds, as the
+ * rules above do not say anything for what the configuration leaves open.
+ */
+export function dhcpTargetProblem(action: string | undefined, target: Scope): string | undefined {
+  const k = kindOf(target);
+  if (k === undefined) return undefined;
+  if (k !== 'device' && k !== 'network') return `A DHCP action targets a device or a network, not a ${k.replace('_', ' ')}: narrow the step to one.`;
+  if (k !== 'device' && action === 'force_new_ip') return "The action force_new_ip moves a device's reservation: it targets a device, not a network. Narrow the step to a device.";
+  return undefined;
+}
+
 /** A canonical text of a scope to tell whether two name the same thing. */
 export function scopeKey(s: Scope): string {
   const sort = (v: unknown): unknown =>

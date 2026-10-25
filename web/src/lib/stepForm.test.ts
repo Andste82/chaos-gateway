@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Scenario, Step } from '../api/generated/model';
+import type { Scenario, Scope, Step } from '../api/generated/model';
 import { GetScenarioResponse } from '../api/generated/zod/config/config';
 import { editableTypes, emptyStepForm, formToStep, stepFieldOf, stepFormErrors, stepToForm, type StepForm } from './stepForm';
 import { ESP, mqttOutage } from './scenarioFixtures';
@@ -16,7 +16,7 @@ describe('the step form', () => {
     for (const s of mqttOutage.steps) expect(formToStep(stepToForm(s))).toEqual(s);
   });
 
-  it('gives back the other types too, and the step the editor does not make as it was', () => {
+  it('gives back the other types too: DNS, TLS and DHCP steps are made by the form since M23b, none is kept', () => {
     const steps: Step[] = [
       { id: 'a', at: '1s', target: { device: ESP }, capture: 'start' },
       { id: 'b', at: '2s', wait: { for: 'online', timeout: '2m' } },
@@ -34,8 +34,15 @@ describe('the step form', () => {
       expect(formToStep(stepToForm(s))).toEqual(s);
       expect(spec(s)).toBe(true);
     }
-    expect(stepToForm(steps[9]!).kept).toEqual(steps[9]);
-    expect(editableTypes.has('dns')).toBe(false);
+    // the editor makes every type of this build: nothing is kept as it was
+    for (const s of steps) expect(stepToForm(s).kept).toBeUndefined();
+    for (const t of ['dns', 'tls', 'dhcp'] as const) expect(editableTypes.has(t)).toBe(true);
+    // the settings and the rules of an interception case are not edited, and come back as they were
+    const intercept: Step = { id: 'l', at: '12s', tls: { case: 'intercept', ports: [443], intercept: { keylog: false, http_rules: [{ action: 'status', status: 503, match: { path_prefix: '/v1' } }] } } };
+    expect(formToStep(stepToForm(intercept))).toEqual(intercept);
+    // a case written with its protocol keeps it
+    const tcp: Step = { id: 'm', at: '13s', tls: { case: 'expired', protocol: 'tcp', ports: [8883], sni: ['broker.example.com'], cut_existing: true } };
+    expect(formToStep(stepToForm(tcp))).toEqual(tcp);
   });
 
   it('a step that is edited keeps what the form leaves out; a tunnel step and a WireGuard action never narrow', () => {
@@ -64,6 +71,9 @@ describe('the step form', () => {
       fill('profile', (f) => (f.profile = 'lte')),
       fill('fault', () => undefined),
       fill('rule', (f) => (f.action = 'drop')),
+      fill('dns', () => undefined),
+      fill('tls', () => undefined),
+      fill('dhcp', (f) => (f.dhcp.leaseTime = '7s')),
       fill('wireguard', (f) => (f.who = `client:${ESP}`)),
       fill('capture', () => undefined),
       fill('wait', () => undefined),
@@ -73,7 +83,10 @@ describe('the step form', () => {
     for (const s of steps) expect(spec(s)).toBe(true);
     expect(steps[1]).toEqual({ id: 'x', at: '0s', fault: { latency: '200ms', jitter: '50ms' } });
     expect(steps[2]).toEqual({ id: 'x', at: '0s', rule: { action: 'drop' } });
-    expect(steps[5]).toEqual({ id: 'x', at: '0s', wait: { for: 'online', timeout: '60s' } });
+    expect(steps[3]).toEqual({ id: 'x', at: '0s', dns: { action: 'nxdomain' } });
+    expect(steps[4]).toEqual({ id: 'x', at: '0s', tls: { case: 'untrusted_ca' } });
+    expect(steps[5]).toEqual({ id: 'x', at: '0s', dhcp: { action: 'short_lease', lease_time: '7s' } });
+    expect(steps[8]).toEqual({ id: 'x', at: '0s', wait: { for: 'online', timeout: '60s' } });
   });
 });
 
@@ -151,6 +164,45 @@ describe('the checks under the fields', () => {
     expect(e(f).destination).toBeDefined();
   });
 
+  it('a DNS step has the checks of the DNS form; a TLS step those of the TLS form; a DHCP step those of the DHCP form', () => {
+    const dns = emptyStepForm('dns', 'a');
+    expect(e(dns)).toEqual({});
+    dns.dns.action = 'delay';
+    dns.dns.delay = 'soon';
+    expect(e(dns).dnsDelay).toBeDefined();
+    dns.dns.delay = '2s';
+    dns.dns.names = 'not a name!';
+    expect(e(dns).dnsNames).toBeDefined();
+    const tls = emptyStepForm('tls', 'a');
+    expect(e(tls)).toEqual({});
+    tls.tls.traffic.ports = '99999';
+    expect(e(tls).ports).toBeDefined();
+    tls.tls.traffic.ports = '8883';
+    tls.tls.sni = 'a!b';
+    expect(e(tls).tlsSni).toBeDefined();
+    const dhcp = emptyStepForm('dhcp', 'a');
+    expect(e(dhcp)).toEqual({});
+    dhcp.dhcp.leaseTime = '0s';
+    expect(e(dhcp).leaseTime).toBeDefined();
+  });
+
+  it('a DHCP step acts on a device or a network, a forced new IP on a device', () => {
+    const dhcp = emptyStepForm('dhcp', 'a');
+    const target = (s: Scope) => ({ ...ctx, target: s });
+    expect(e(dhcp, target({ device: ESP }))).toEqual({});
+    expect(e(dhcp, target({ network: IOT }))).toEqual({});
+    // a group or a remote network is no target of an action: the scenario's target or the step's narrowing has to be one
+    expect(e(dhcp, target({ group: 'sensors' })).narrow).toMatch(/targets a device or a network, not a group/);
+    dhcp.narrow = `device:${ESP}`;
+    expect(e(dhcp, target({ group: 'sensors' })).narrow).toBeUndefined();
+    const force = emptyStepForm('dhcp', 'a');
+    force.dhcp.action = 'force_new_ip';
+    expect(e(force, target({ device: ESP }))).toEqual({});
+    expect(e(force, target({ network: IOT })).dhcpAction).toMatch(/moves a device's reservation/);
+    // without the scenario's target the rule is not checked here: the gateway has the last word
+    expect(e(force)).toEqual({});
+  });
+
   it('a remove names a step that comes before', () => {
     const f = emptyStepForm('remove', 'a');
     expect(e(f).remove).toBe('Choose the step whose overlay is removed.');
@@ -191,6 +243,17 @@ describe('the gateway\'s messages', () => {
     expect(stepFieldOf('wait/destination/network')).toBe('destination');
     expect(stepFieldOf('remove')).toBe('remove');
     expect(stepFieldOf('capture')).toBe('capture');
+    expect(stepFieldOf('dns/delay')).toBe('dnsDelay');
+    expect(stepFieldOf('dns/names/1')).toBe('dnsNames');
+    expect(stepFieldOf('dns/answers/0')).toBe('dnsAnswers');
+    expect(stepFieldOf('tls/ports/0')).toBe('ports');
+    expect(stepFieldOf('tls/sni/0')).toBe('tlsSni');
+    expect(stepFieldOf('tls/destination/cidr')).toBe('destination');
+    expect(stepFieldOf('dhcp/lease_time')).toBe('leaseTime');
+    expect(stepFieldOf('dhcp/ip')).toBe('ip');
+    expect(stepFieldOf('dhcp/options/custom/0/code')).toBe('custom');
+    // the target of an action is the step's narrowing
+    expect(stepFieldOf('dhcp')).toBe('narrow');
     expect(stepFieldOf('')).toBeUndefined();
   });
 });

@@ -3,8 +3,10 @@
 // their parameters, affected packets and remaining TTL, and the counters. "Add fault" starts where
 // the device is (the fault dialog with the device as its fixed target), a fault of the device can
 // be edited, "Apply profile" leads to the profiles with the device as the scope. The captures of the device
-// are listed with a "Capture" action (M23a). The panels whose backend comes later (flows view, DNS, DHCP
-// and TLS test actions, diagnostics) arrive with their milestones. The port forwards to the device (M35a)
+// are listed with a "Capture" action (M23a). The DHCP test actions (short lease, delete lease, force a new
+// IP, set options, silence) are made and listed in the DHCP card beside the lease (M23b); a DNS fault or a TLS
+// case of the device is made in the fault dialog and edited where it is listed. The panels whose backend comes
+// later (flows view, diagnostics) arrive with their milestones. The port forwards to the device (M35a)
 // are listed with their status and counter, each with a link to edit it on the networks page, which also
 // adds one to the device.
 // A configured device is edited (name, network, fixed IP) in the device dialog (#73); the Network card
@@ -22,6 +24,7 @@ import AdoptDialog from '../components/devices/AdoptDialog.vue';
 import DeviceDialog from '../components/devices/DeviceDialog.vue';
 import RemoveDeviceDialog from '../components/devices/RemoveDeviceDialog.vue';
 import CapturePanel from '../components/captures/CapturePanel.vue';
+import DhcpActionsCard from '../components/dhcp/DhcpActionsCard.vue';
 import ActiveFaultList from '../components/faults/ActiveFaultList.vue';
 import FaultDialog from '../components/faults/FaultDialog.vue';
 import PageHeader from '../components/layout/PageHeader.vue';
@@ -31,6 +34,7 @@ import EmptyState from '../components/ui/EmptyState.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
 import StatusDot from '../components/ui/StatusDot.vue';
+import TestCaLink from '../components/ui/TestCaLink.vue';
 import { fetchAll, firstError, useActiveConfig, useConfigFaults, useGatewayState, useNames, usePortForwards, type ActiveFault } from '../composables/gateway';
 import { counterHint, counterText, entryLabels, forwardDeviceProblem, forwardRows, forwardSummary, forwardTitle, rowStatus } from '../lib/forwards';
 import { useNow } from '../composables/useNow';
@@ -71,6 +75,10 @@ const notFound = computed(() => device.error.value instanceof ApiError && device
 const network = computed(() => networks.data.value?.find((n) => n.id === d.value?.network));
 const networkConfig = computed(() => network.value?.config as { name?: string; address?: string } | undefined);
 const netInfo = computed(() => (d.value ? deviceNetworkInfo(network.value?.config, d.value.id) : undefined));
+/** DHCP is off where the device is, or the device is in no network the gateway serves (a WireGuard client has none: its card is left out). */
+const dhcpOff = computed(() => !!networks.data.value && (!network.value || (networkConfig.value as { dhcp?: { enabled?: boolean } } | undefined)?.dhcp?.enabled === false));
+/** The DHCP server knows a device by its MAC addresses, the configured ones or the seen ones. */
+const hasMac = computed(() => !!d.value && ((d.value.observed.macs?.length ?? 0) > 0 || (d.value.config?.identifiers?.macs?.length ?? 0) > 0));
 const groupNames = computed(() => (d.value?.groups ?? []).map((g) => names.value.group?.(g) ?? g));
 
 const identity = computed(() => {
@@ -350,6 +358,14 @@ useApiScreen('this device', () => [
           </p>
         </SectionCard>
 
+        <DhcpActionsCard
+          v-if="network?.config.type !== 'wireguard'"
+          :target="{ device: d.id }"
+          :name="d.name"
+          :dhcp-off="dhcpOff"
+          :no-mac="!hasMac"
+        />
+
         <SectionCard title="Port forwards">
           <template #actions>
             <RouterLink v-if="!forwardBlocked" class="btn btn-sm" :to="{ path: '/networks', query: { forward: 'new', device: d.id } }" :aria-label="`Add a port forward to ${d.name}`">Add</RouterLink>
@@ -406,7 +422,7 @@ useApiScreen('this device', () => [
             </template>
             <template v-if="d.config">
               <dt class="text-text-2">Test CA</dt>
-              <dd class="m-0">{{ d.config.trusts_test_ca ? 'trusted' : 'not trusted' }}</dd>
+              <dd class="m-0">{{ d.config.trusts_test_ca ? 'trusted' : 'not trusted' }} · <TestCaLink /></dd>
             </template>
           </dl>
           <DisclosureButton v-model:open="linuxOpen" :controls="linuxId" class="mt-3">

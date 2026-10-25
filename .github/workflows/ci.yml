@@ -273,6 +273,27 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y qemu-user
       - run: make test-arm64
 
+  # The interception proxy's container (plan §3.8, M22): the image builds with mitmproxy in its virtualenv (the jobs arm64 and mounts build it too, and
+  # start nothing from it), and the container of deploy/compose.tlsproxy.yaml starts from it, loads the addon, passes its healthcheck and carries a
+  # request (deploy/smoke-tlsproxy.sh). It needs no namespace and no capability, so a hosted runner is enough.
+  tlsproxy-image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: chaos-gateway:ci
+          cache-from: type=gha,scope=image
+      - name: the container of the interception proxy starts from its compose file
+        run: deploy/smoke-tlsproxy.sh
+        env:
+          CHAOSGW_VERSION: ci
+
   # issue #57 (F4): the executor container mounts nothing into the host. It shares /run/netns with the
   # host (rshared); a volume mounted inside another volume of the container then propagated into the
   # host's mount table, and `docker compose down -v` failed with "device or resource busy". The executor

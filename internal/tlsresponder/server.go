@@ -61,6 +61,10 @@ type Options struct {
 	OriginalDst func(net.Conn) (netip.AddrPort, error)
 	// Dial connects to the destination of a connection that is passed through; default a plain dial.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// Proxy is the address of the interception proxy (plan §2.8, M22) the connections of the case `intercept` are handed to;
+	// empty hands none (they are reset and reported as `proxy_unavailable`). ProxyDial connects to it; default a plain dial.
+	Proxy     string
+	ProxyDial func(ctx context.Context, network, addr string) (net.Conn, error)
 	// HelloTimeout is how long a connection may take to send its ClientHello (default 10 s), HandshakeTimeout how long a
 	// handshake with a certificate may take (default 10 s), StallFor how long handshake_stall holds the connection
 	// (default 30 s), ResolveTimeout how long the decision may take (default 3 s) and DialTimeout how long a
@@ -80,8 +84,12 @@ type Server struct {
 	ready   chan struct{}
 	readyOn sync.Once
 
+	// the pacers of the connections handed to the proxy, by connection id (intercept.go)
+	pacerMu sync.Mutex
+	pacers  map[string]*pacer
+
 	// Counters for tests and diagnostics.
-	connections, passedThrough, resolveErrors, resets, denied atomic.Int64
+	connections, passedThrough, resolveErrors, resets, denied, intercepted, proxyFailures, aborted atomic.Int64
 }
 
 // held is a connection a case holds: the overlay that decided it, and the generation of the decision.
@@ -106,6 +114,9 @@ func New(o Options) *Server {
 	if o.Dial == nil {
 		o.Dial = (&net.Dialer{}).DialContext
 	}
+	if o.ProxyDial == nil {
+		o.ProxyDial = (&net.Dialer{}).DialContext
+	}
 	for _, d := range []struct {
 		p *time.Duration
 		v time.Duration
@@ -114,7 +125,7 @@ func New(o Options) *Server {
 			*d.p = d.v
 		}
 	}
-	return &Server{opt: o, rep: newReporter(o.Sink, o.Clock, o.Log), held: map[*held]struct{}{}, active: map[string]bool{}, ready: make(chan struct{})}
+	return &Server{opt: o, rep: newReporter(o.Sink, o.Clock, o.Log), held: map[*held]struct{}{}, active: map[string]bool{}, ready: make(chan struct{}), pacers: map[string]*pacer{}}
 }
 
 // Connections is the number of connections accepted, PassedThrough the number passed on to their destination and

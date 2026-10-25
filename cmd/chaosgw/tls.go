@@ -30,6 +30,8 @@ func runTLS(args []string, stdout, stderr io.Writer) int {
 	caDir := fs.String("ca-dir", envOr("CHAOSGW_TLS_CA_DIR", "/var/lib/chaosgw/tlsca"), "the directory the API made the test CA and the unknown CA in")
 	nsCheck := fs.Bool("namespace-check", true, "exit if this process's namespace loses the service address (plan §3.8); a holder restart replaces the namespace under the same name")
 	serviceAddr := fs.String("service-addr", "169.254.100.2", "the service address --namespace-check expects on this namespace's interfaces")
+	proxy := fs.String("proxy", tlsresponder.DefaultProxyAddr, "address of the interception proxy (the container tls-proxy, in the same namespace) the connections of the case intercept are handed to; empty hands none")
+	control := fs.String("control", tlsresponder.DefaultControlAddr, "address the interception proxy asks on to pace or reset a connection it was handed; empty turns the interface off (loopback only)")
 	health := fs.Bool("health", false, "check that a responder answers on --listen and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -93,11 +95,18 @@ func runTLS(args []string, stdout, stderr io.Writer) int {
 	go tlsresponder.WatchCAs(runCtx, clk, *caDir, issuer, 5*time.Second, log)
 
 	c := &tlsresponder.APIClient{Base: *api, TokenFile: *tokenFile, CertFile: *certFile}
-	srv := tlsresponder.New(tlsresponder.Options{Clock: clk, Log: log, Issuer: issuer, Resolver: c, Sink: c})
+	srv := tlsresponder.New(tlsresponder.Options{Clock: clk, Log: log, Issuer: issuer, Resolver: c, Sink: c, Proxy: *proxy})
 	go srv.Follow(runCtx, c, log)
+	if *control != "" {
+		go func() {
+			if err := srv.ServeControl(runCtx, *control); err != nil {
+				log.Error("the control interface of the interception proxy cannot listen: the proxy cannot pace or reset connections", "addr", *control, "error", err)
+			}
+		}()
+	}
 	reportsDone := make(chan struct{})
 	go func() { srv.RunReports(runCtx); close(reportsDone) }()
-	log.Info("the TLS responder starts", "listen", *listen, "api", *api)
+	log.Info("the TLS responder starts", "listen", *listen, "api", *api, "proxy", *proxy)
 	serveErr := srv.Serve(runCtx, *listen)
 	select {
 	case <-reportsDone: // the last reports are sent

@@ -34,6 +34,11 @@ func (s *Server) serve(ctx context.Context, c net.Conn, hello []byte, herr error
 		}
 		s.rep.add(rep)
 	}
+	if tc.Case == model.TlsCaseCaseIntercept {
+		// the proxy takes the connection, also one that is no TLS (plain HTTP on a port the case names)
+		s.intercept(ctx, c, hello, herr, info, dec, &rep, finish)
+		return
+	}
 	if herr != nil {
 		// it did not get as far as a ClientHello: there is no handshake to break or to show a certificate to
 		finish(helloFailure(herr))
@@ -54,7 +59,7 @@ func (s *Server) serve(ctx context.Context, c net.Conn, hello []byte, herr error
 		s.stall(ctx, c)
 	default:
 		if !IsCertificateCase(tc.Case) {
-			// a case this build does not serve (intercept comes with M22): never let the device through
+			// a case this build does not serve: never let the device through
 			s.opt.Log.Warn("a TLS case the responder does not serve", "case", tc.Case)
 			reset(c)
 			return

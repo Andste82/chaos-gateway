@@ -136,7 +136,9 @@ certificate). A server that is refused answers the device with a 502 page over t
 CA can be replaced (`POST /api/v1/tls/ca/regenerate`, scope `full`); every device that installed the old certificate then has to
 install the new one. Captures that run while a device talks through the proxy get the TLS secrets of its connections as a key log
 (`GET /api/v1/captures/{id}/download?part=keylog`, scope `full`): the capture and its key log together show the traffic in
-Wireshark, so such a capture is marked sensitive.
+Wireshark, so such a capture is marked sensitive. The web app has the **Interception** screen for all of this (the cases and their HTTP rules,
+the exchanges the proxy saw, the download and the replacement of the test CA), and `chaosctl` has `intercept set`, `intercept flows` and
+`tls ca` ("Command line client" below).
 
 ## 4. Finish the setup
 
@@ -216,9 +218,14 @@ chaosctl wait device esp32-42 --online --connected tcp/8883 --timeout 90s
 chaosctl run -f mqtt-outage.yaml --set target.device=esp32-42 --wait --junit report.xml --artifacts out/
 chaosctl with --device esp32-42 --profile bad-lte --ttl 10m -- pytest tests/
 chaosctl explain --device esp32-42 --dst mqtt.example.com --protocol tcp --port 8883   # why is it refused or slow?
+chaosctl tls ca --out test-ca.pem          # the test CA a development firmware (and the interception) trusts
+chaosctl intercept set --device esp32-42 --rule 'host=api.example.com;path=/v1/;status=503' --ttl 5m
+chaosctl intercept flows --device esp32-42 --faulted   # what the interception proxy saw, and the rules that acted
 ```
 
-`chaosctl help` lists the commands. A run that is waited for has a lease of 30 s that the client renews, and the overlays of
+`chaosctl intercept set` needs the interception proxy of `compose.tlsproxy.yaml` (section 3) and a device that trusts the test CA;
+`chaosctl tls ca regenerate --yes` replaces the test CA and needs a token with the scope `full`. The Interception screen of the web app does the same
+(the cases, the table of the exchanges, the CA buttons). `chaosctl help` lists the commands. A run that is waited for has a lease of 30 s that the client renews, and the overlays of
 `chaosctl with` have one too, so a CI job that is killed leaves no fault on the lab: the gateway removes it. The exit codes
 (0 passed, 1 a check failed, 2 error or aborted) and the example suites for pytest and Jest are in
 [`clients/examples`](../clients/examples/README.md).

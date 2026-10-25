@@ -113,8 +113,9 @@ type rig struct {
 	sink   *fakeSink
 	addr   string
 	cancel context.CancelFunc
-	// dst is the "original destination" every connection is reported to have had
-	dst netip.AddrPort
+	// dst is the "original destination" every connection is reported to have had; setDst changes it while the responder runs
+	dst   netip.AddrPort
+	dstMu sync.RWMutex
 	// dial replaces the dialer of the passed-through connections
 	dial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
@@ -129,7 +130,7 @@ func newRig(t *testing.T, decide func(ConnInfo) Decision, mod func(*Options)) *r
 	r := &rig{t: t, cas: cas, sink: &fakeSink{}, dst: netip.MustParseAddrPort("203.0.113.10:8883")}
 	r.res = &fakeResolver{fn: func(c ConnInfo) (Decision, error) { return decide(c), nil }}
 	opt := Options{Issuer: iss, Resolver: r.res, Sink: r.sink, Log: slog.New(slog.DiscardHandler),
-		OriginalDst:  func(net.Conn) (netip.AddrPort, error) { return r.dst, nil },
+		OriginalDst:  func(net.Conn) (netip.AddrPort, error) { return r.getDst(), nil },
 		Dial:         func(ctx context.Context, n, a string) (net.Conn, error) { return r.dial(ctx, n, a) },
 		HelloTimeout: 2 * time.Second, HandshakeTimeout: 3 * time.Second, StallFor: 3 * time.Second, ResolveTimeout: time.Second, DialTimeout: time.Second}
 	if mod != nil {
@@ -194,4 +195,23 @@ func validServerCert(t *testing.T, cas *CAs, name string) tls.Certificate {
 func readAll(c net.Conn) error {
 	_, err := io.Copy(io.Discard, c)
 	return err
+}
+
+func (r *rig) setDst(a netip.AddrPort) {
+	r.dstMu.Lock()
+	r.dst = a
+	r.dstMu.Unlock()
+}
+
+func (r *rig) getDst() netip.AddrPort {
+	r.dstMu.RLock()
+	defer r.dstMu.RUnlock()
+	return r.dst
+}
+
+// all returns the reports so far.
+func (f *fakeSink) all() []model.TlsHandshakeReport {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]model.TlsHandshakeReport(nil), f.reports...)
 }

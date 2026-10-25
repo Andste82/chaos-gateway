@@ -90,9 +90,7 @@ func ValidateOverlay(cfg *model.Configuration, req *model.OverlayRequest, opts .
 	case "dhcp":
 		v.dhcpAction("/dhcp", *out.Dhcp)
 		if out.Target != nil {
-			if k := scopeKind(out.Target); k != "device" && k != "network" {
-				v.add("/target", CodeTargetKind, "a DHCP action targets a device or a network, not a %s", k)
-			}
+			v.dhcpTarget("/target", out.Target, *out.Dhcp)
 		}
 	case "wireguard":
 		v.wireguardAction("/wireguard", *out.Wireguard)

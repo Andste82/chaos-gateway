@@ -862,6 +862,7 @@ const (
 	EventTypeDeviceOffline         EventType = "device_offline"
 	EventTypeDeviceOnline          EventType = "device_online"
 	EventTypeDhcpLease             EventType = "dhcp_lease"
+	EventTypeDhcpLeasesDeleted     EventType = "dhcp_leases_deleted"
 	EventTypeDiskLow               EventType = "disk_low"
 	EventTypeDnsFaultTriggered     EventType = "dns_fault_triggered"
 	EventTypeDnsSetEpoch           EventType = "dns_set_epoch"
@@ -918,6 +919,8 @@ func (e EventType) Valid() bool {
 	case EventTypeDeviceOnline:
 		return true
 	case EventTypeDhcpLease:
+		return true
+	case EventTypeDhcpLeasesDeleted:
 		return true
 	case EventTypeDiskLow:
 		return true
@@ -3686,13 +3689,41 @@ type DeviceView struct {
 	Overlays *[]Uuid        `json:"overlays,omitempty"`
 }
 
-// DhcpAction DHCP family (plan §2.7), target a network or a device. `short_lease`, `set_options`,
-// `silence` and `force_new_ip` last as long as the overlay; `delete_lease` acts once.
-// Requires M23.
+// DhcpAction DHCP family (plan §2.7, M23), target a network or a device (never a group or the global
+// scope). `short_lease`, `set_options`, `silence` and `force_new_ip` last as long as the
+// overlay; `delete_lease` acts once, when it is written (writing it again acts again), and
+// stays in the list until its TTL or its owner removes it.
+//
+//   - `short_lease`: the lease time of the network's clients, or of the device, is `lease_time`
+//     (Kea hands out leases below 120 s), and a client that asks for a longer one is given the
+//     short one. The clients keep the lease they have until they renew it.
+//   - `delete_lease`: the leases of the network, or of the device, are deleted. A client that
+//     renews simply gets the same address again.
+//   - `force_new_ip` (a device only): the device's DHCP reservation moves to another address of
+//     its network's pools, so the renewing client is refused (NAK) and asks for the new address.
+//     While the overlay exists the reservation replaces the device's `fixed_ip`; when it goes the
+//     device keeps what it was given until its lease runs out. The device's first MAC is the one
+//     reserved (plan §2.7), and the device's network must serve DHCP.
+//   - `set_options`: the options of the network's scope, or of the device's reservation, are
+//     the configured ones with the fields of `options` replaced (as in the scope, an empty list
+//     sets nothing).
+//   - `silence`: the server does not answer the network's clients, or the device's.
+//
+// The more specific scope wins (a device beats its network; one effective action per device,
+// plan §2.4), and the newer overlay wins at the same scope. The overlay is `effective` while
+// the DHCP server is configured with it, `overridden` while another action wins for all its
+// clients and `disabled` while its network has DHCP off or its device has no MAC.
 type DhcpAction struct {
 	Action DhcpActionAction `json:"action"`
 
-	// LeaseTime For `short_lease` (Kea, may be below 120 s).
+	// Ip Only for `force_new_ip`: the address the device is moved to. Without it in the request the
+	// gateway chooses one when the action is written, a free address of the network's pools that
+	// is neither leased nor reserved nor known to belong to a device, from the end of the last
+	// pool downwards (every write of the action chooses again), and the overlay as read always
+	// has it. A request may name an address inside the device's network instead.
+	Ip *Ipv4 `json:"ip,omitempty"`
+
+	// LeaseTime For `short_lease` (Kea, may be below 120 s), at least 1 s.
 	LeaseTime *Duration    `json:"lease_time,omitempty"`
 	Options   *DhcpOptions `json:"options,omitempty"`
 }
@@ -5160,9 +5191,30 @@ type Overlay struct {
 	Counters  *Counter  `json:"counters,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 
-	// Dhcp DHCP family (plan §2.7), target a network or a device. `short_lease`, `set_options`,
-	// `silence` and `force_new_ip` last as long as the overlay; `delete_lease` acts once.
-	// Requires M23.
+	// Dhcp DHCP family (plan §2.7, M23), target a network or a device (never a group or the global
+	// scope). `short_lease`, `set_options`, `silence` and `force_new_ip` last as long as the
+	// overlay; `delete_lease` acts once, when it is written (writing it again acts again), and
+	// stays in the list until its TTL or its owner removes it.
+	//
+	// - `short_lease`: the lease time of the network's clients, or of the device, is `lease_time`
+	//   (Kea hands out leases below 120 s), and a client that asks for a longer one is given the
+	//   short one. The clients keep the lease they have until they renew it.
+	// - `delete_lease`: the leases of the network, or of the device, are deleted. A client that
+	//   renews simply gets the same address again.
+	// - `force_new_ip` (a device only): the device's DHCP reservation moves to another address of
+	//   its network's pools, so the renewing client is refused (NAK) and asks for the new address.
+	//   While the overlay exists the reservation replaces the device's `fixed_ip`; when it goes the
+	//   device keeps what it was given until its lease runs out. The device's first MAC is the one
+	//   reserved (plan §2.7), and the device's network must serve DHCP.
+	// - `set_options`: the options of the network's scope, or of the device's reservation, are
+	//   the configured ones with the fields of `options` replaced (as in the scope, an empty list
+	//   sets nothing).
+	// - `silence`: the server does not answer the network's clients, or the device's.
+	//
+	// The more specific scope wins (a device beats its network; one effective action per device,
+	// plan §2.4), and the newer overlay wins at the same scope. The overlay is `effective` while
+	// the DHCP server is configured with it, `overridden` while another action wins for all its
+	// clients and `disabled` while its network has DHCP off or its device has no MAC.
 	Dhcp *DhcpAction `json:"dhcp,omitempty"`
 
 	// Dns DNS family (plan §2.6, M20), implemented by the DNS proxy: an overlay of the kind `dns`, or the `dns` part of an
@@ -5353,9 +5405,30 @@ type OverlayPage struct {
 // or a network (level 8); tunnel faults are resolved per tunnel only (overlay before
 // configuration, newest wins) and have no level.
 type OverlayRequest struct {
-	// Dhcp DHCP family (plan §2.7), target a network or a device. `short_lease`, `set_options`,
-	// `silence` and `force_new_ip` last as long as the overlay; `delete_lease` acts once.
-	// Requires M23.
+	// Dhcp DHCP family (plan §2.7, M23), target a network or a device (never a group or the global
+	// scope). `short_lease`, `set_options`, `silence` and `force_new_ip` last as long as the
+	// overlay; `delete_lease` acts once, when it is written (writing it again acts again), and
+	// stays in the list until its TTL or its owner removes it.
+	//
+	// - `short_lease`: the lease time of the network's clients, or of the device, is `lease_time`
+	//   (Kea hands out leases below 120 s), and a client that asks for a longer one is given the
+	//   short one. The clients keep the lease they have until they renew it.
+	// - `delete_lease`: the leases of the network, or of the device, are deleted. A client that
+	//   renews simply gets the same address again.
+	// - `force_new_ip` (a device only): the device's DHCP reservation moves to another address of
+	//   its network's pools, so the renewing client is refused (NAK) and asks for the new address.
+	//   While the overlay exists the reservation replaces the device's `fixed_ip`; when it goes the
+	//   device keeps what it was given until its lease runs out. The device's first MAC is the one
+	//   reserved (plan §2.7), and the device's network must serve DHCP.
+	// - `set_options`: the options of the network's scope, or of the device's reservation, are
+	//   the configured ones with the fields of `options` replaced (as in the scope, an empty list
+	//   sets nothing).
+	// - `silence`: the server does not answer the network's clients, or the device's.
+	//
+	// The more specific scope wins (a device beats its network; one effective action per device,
+	// plan §2.4), and the newer overlay wins at the same scope. The overlay is `effective` while
+	// the DHCP server is configured with it, `overridden` while another action wins for all its
+	// clients and `disabled` while its network has DHCP off or its device has no MAC.
 	Dhcp *DhcpAction `json:"dhcp,omitempty"`
 
 	// Dns DNS family (plan §2.6, M20), implemented by the DNS proxy: an overlay of the kind `dns`, or the `dns` part of an
@@ -6623,9 +6696,30 @@ type Step struct {
 	// `capture: true` capture is stopped by neither.
 	Capture *StepCapture `json:"capture,omitempty"`
 
-	// Dhcp DHCP family (plan §2.7), target a network or a device. `short_lease`, `set_options`,
-	// `silence` and `force_new_ip` last as long as the overlay; `delete_lease` acts once.
-	// Requires M23.
+	// Dhcp DHCP family (plan §2.7, M23), target a network or a device (never a group or the global
+	// scope). `short_lease`, `set_options`, `silence` and `force_new_ip` last as long as the
+	// overlay; `delete_lease` acts once, when it is written (writing it again acts again), and
+	// stays in the list until its TTL or its owner removes it.
+	//
+	// - `short_lease`: the lease time of the network's clients, or of the device, is `lease_time`
+	//   (Kea hands out leases below 120 s), and a client that asks for a longer one is given the
+	//   short one. The clients keep the lease they have until they renew it.
+	// - `delete_lease`: the leases of the network, or of the device, are deleted. A client that
+	//   renews simply gets the same address again.
+	// - `force_new_ip` (a device only): the device's DHCP reservation moves to another address of
+	//   its network's pools, so the renewing client is refused (NAK) and asks for the new address.
+	//   While the overlay exists the reservation replaces the device's `fixed_ip`; when it goes the
+	//   device keeps what it was given until its lease runs out. The device's first MAC is the one
+	//   reserved (plan §2.7), and the device's network must serve DHCP.
+	// - `set_options`: the options of the network's scope, or of the device's reservation, are
+	//   the configured ones with the fields of `options` replaced (as in the scope, an empty list
+	//   sets nothing).
+	// - `silence`: the server does not answer the network's clients, or the device's.
+	//
+	// The more specific scope wins (a device beats its network; one effective action per device,
+	// plan §2.4), and the newer overlay wins at the same scope. The overlay is `effective` while
+	// the DHCP server is configured with it, `overridden` while another action wins for all its
+	// clients and `disabled` while its network has DHCP off or its device has no MAC.
 	Dhcp *DhcpAction `json:"dhcp,omitempty"`
 
 	// Dns DNS family (plan §2.6, M20), implemented by the DNS proxy: an overlay of the kind `dns`, or the `dns` part of an

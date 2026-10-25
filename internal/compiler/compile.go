@@ -416,6 +416,7 @@ func Compile(in Input) *Target {
 	t.compileKea(cfg, idx)
 	t.compileIdentity(idx, in.Identity, in.DeviceNums, in.DeviceNumHigh)
 	t.compileFaults(in, idx)
+	t.compileDHCPActions(in, idx)
 	t.compileAccess(in, idx)
 	t.finishHostnames()
 	t.compileNft(cfg, t.topology(idx, netByID), in.DynamicSets)

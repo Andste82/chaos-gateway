@@ -211,6 +211,43 @@ func (c *Client) DeleteLease(ctx context.Context, ip string) error {
 	return err
 }
 
+// DeleteLeases deletes the leases of a subnet (`lease4-wipe`) and returns how many there were; with macs it deletes
+// only those of the clients with these MAC addresses. As with DeleteLease, a client that renews gets an address
+// again, the same one unless something else changes it.
+func (c *Client) DeleteLeases(ctx context.Context, subnetID int, macs []string) (int, error) {
+	all, err := c.Leases(ctx)
+	if err != nil {
+		return 0, err
+	}
+	want := map[string]bool{}
+	for _, m := range macs {
+		want[strings.ToLower(m)] = true
+	}
+	var mine []Lease
+	for _, l := range all {
+		if l.SubnetID == subnetID && (len(macs) == 0 || want[strings.ToLower(l.MAC)]) {
+			mine = append(mine, l)
+		}
+	}
+	if len(mine) == 0 {
+		return 0, nil
+	}
+	if len(macs) == 0 {
+		_, err := c.Do(ctx, "lease4-wipe", map[string]any{"subnet-id": subnetID})
+		var ke *Error
+		if errors.As(err, &ke) && ke.Empty() {
+			err = nil
+		}
+		return len(mine), err
+	}
+	for _, l := range mine {
+		if err := c.DeleteLease(ctx, l.IP); err != nil {
+			return 0, err
+		}
+	}
+	return len(mine), nil
+}
+
 // ErrNoInterface is the error of a configuration that names an interface Kea does not know: one
 // that was created after Kea started. Kea learns about it with a configuration that re-detects.
 func ErrNoInterface(err error) bool {

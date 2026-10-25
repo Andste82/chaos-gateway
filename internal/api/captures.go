@@ -219,6 +219,14 @@ func (s *Server) ListCaptures(c *gin.Context, params model.ListCapturesParams) {
 	c.JSON(200, listBody(items, next))
 }
 
+// GetCaptureStorage implements GET /captures/storage: the quota, the volume and the running captures.
+func (s *Server) GetCaptureStorage(c *gin.Context) {
+	if !s.needCaptures(c) {
+		return
+	}
+	c.JSON(200, s.captures.Storage())
+}
+
 // GetCapture implements GET /captures/{captureId}.
 func (s *Server) GetCapture(c *gin.Context, id model.CaptureId) {
 	if !s.needCaptures(c) {

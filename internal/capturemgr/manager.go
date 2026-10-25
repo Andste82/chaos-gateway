@@ -219,6 +219,31 @@ func (m *Manager) diskLow() (bool, float64) {
 	return pct < m.cfg.MinFreePercent, pct
 }
 
+// Storage reports what the captures take of the quota and of the volume (plan §2.17, the screen of the captures): the
+// sum of their sizes against the quota, the free space against the limit and the running captures against the most
+// that run at once. The volume's numbers are left out when it cannot be read.
+func (m *Manager) Storage() model.CaptureStorage {
+	quota := m.quota()
+	m.mu.Lock()
+	used := m.usageLocked()
+	running := 0
+	for _, c := range m.caps {
+		if c.rec.Status == model.CaptureStatusRunning {
+			running++
+		}
+	}
+	m.mu.Unlock()
+	out := model.CaptureStorage{QuotaBytes: quota, UsedBytes: used, MinFreePercent: float32(m.cfg.MinFreePercent), Running: running, MaxRunning: MaxRunning}
+	if free, total, err := m.cfg.DiskFree(); err == nil && total > 0 {
+		pct := float64(free) * 100 / float64(total)
+		out.VolumeFreeBytes = ptr(int64(free))
+		out.VolumeTotalBytes = ptr(int64(total))
+		out.FreePercent = ptr(float32(pct))
+		out.DiskLow = pct < m.cfg.MinFreePercent
+	}
+	return out
+}
+
 // Recover takes over the captures an earlier process left: one that was running ended with that process
 // (the executor closes the files when the stream breaks), so it is `failed` with the reason `error`.
 func (m *Manager) Recover() error {

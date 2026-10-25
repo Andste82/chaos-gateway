@@ -54,6 +54,9 @@ type ServerInterface interface {
 	// StartCapture Start a capture
 	// (POST /captures)
 	StartCapture(c *gin.Context, params StartCaptureParams)
+	// GetCaptureStorage What the captures take of the quota and of the volume
+	// (GET /captures/storage)
+	GetCaptureStorage(c *gin.Context)
 	// DeleteCapture Delete a stopped capture and its files
 	// (DELETE /captures/{captureId})
 	DeleteCapture(c *gin.Context, captureId CaptureId)
@@ -597,6 +600,19 @@ func (siw *ServerInterfaceWrapper) StartCapture(c *gin.Context) {
 	}
 
 	siw.Handler.StartCapture(c, params)
+}
+
+// GetCaptureStorage operation middleware
+func (siw *ServerInterfaceWrapper) GetCaptureStorage(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetCaptureStorage(c)
 }
 
 // DeleteCapture operation middleware
@@ -3586,6 +3602,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/runs/:runId/events", wrapper.GetRunEvents)
 	router.GET(options.BaseURL+"/captures", wrapper.ListCaptures)
 	router.POST(options.BaseURL+"/captures", wrapper.StartCapture)
+	router.GET(options.BaseURL+"/captures/storage", wrapper.GetCaptureStorage)
 	router.DELETE(options.BaseURL+"/captures/:captureId", wrapper.DeleteCapture)
 	router.GET(options.BaseURL+"/captures/:captureId", wrapper.GetCapture)
 	router.POST(options.BaseURL+"/captures/:captureId/stop", wrapper.StopCapture)
@@ -4031,6 +4048,44 @@ type StartCapturedefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response StartCapturedefaultApplicationProblemPlusJSONResponse) VisitStartCaptureResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCaptureStorageRequestObject struct {
+}
+
+type GetCaptureStorageResponseObject interface {
+	VisitGetCaptureStorageResponse(w http.ResponseWriter) error
+}
+
+type GetCaptureStorage200JSONResponse CaptureStorage
+
+func (response GetCaptureStorage200JSONResponse) VisitGetCaptureStorageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCaptureStoragedefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetCaptureStoragedefaultApplicationProblemPlusJSONResponse) VisitGetCaptureStorageResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -7984,6 +8039,9 @@ type StrictServerInterface interface {
 	// StartCapture Start a capture
 	// (POST /captures)
 	StartCapture(ctx context.Context, request StartCaptureRequestObject) (StartCaptureResponseObject, error)
+	// GetCaptureStorage What the captures take of the quota and of the volume
+	// (GET /captures/storage)
+	GetCaptureStorage(ctx context.Context, request GetCaptureStorageRequestObject) (GetCaptureStorageResponseObject, error)
 	// DeleteCapture Delete a stopped capture and its files
 	// (DELETE /captures/{captureId})
 	DeleteCapture(ctx context.Context, request DeleteCaptureRequestObject) (DeleteCaptureResponseObject, error)
@@ -8608,6 +8666,30 @@ func (sh *strictHandler) StartCapture(ctx *gin.Context, params StartCaptureParam
 		sh.options.HandlerErrorFunc(ctx, err)
 	} else if validResponse, ok := response.(StartCaptureResponseObject); ok {
 		if err := validResponse.VisitStartCaptureResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetCaptureStorage operation middleware
+func (sh *strictHandler) GetCaptureStorage(ctx *gin.Context) {
+	var request GetCaptureStorageRequestObject
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetCaptureStorage(ctx, request.(GetCaptureStorageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetCaptureStorage")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(GetCaptureStorageResponseObject); ok {
+		if err := validResponse.VisitGetCaptureStorageResponse(ctx.Writer); err != nil {
 			sh.options.ResponseErrorHandlerFunc(ctx, err)
 		}
 	} else if response != nil {

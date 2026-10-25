@@ -149,7 +149,7 @@ func (p *Proxy) WaitReady(timeout time.Duration) error {
 	for time.Now().Before(deadline) {
 		select {
 		case <-p.done:
-			return fmt.Errorf("the proxy ended: %v\n%s", p.err, p.Output())
+			return fmt.Errorf("the proxy ended: %w\n%s", p.err, p.Output())
 		default:
 		}
 		c, err := dial(context.Background(), "tcp", p.opt.Listen)

@@ -485,7 +485,7 @@ func TestTheControlInterfacePacesTheBytesTowardsTheDevice(t *testing.T) {
 			t.Errorf("%s: %d, want %d", body, st, want)
 		}
 	}
-	if resp, err := http.Get(base + "/throttle"); err != nil || resp.StatusCode != 405 {
+	if resp, err := http.Get(base + "/throttle"); err != nil || resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("a GET: %v %v", resp, err)
 	}
 }

@@ -233,19 +233,6 @@ func (s *Server) ListInterceptFlows(c *gin.Context, params model.ListInterceptFl
 	c.JSON(200, listBody(out, next))
 }
 
-// interceptFlows returns the logged exchanges at or after the time, oldest first (for tests and the checks that may read them).
-func (s *Server) interceptFlows(since time.Time) []model.InterceptFlow {
-	s.intercept.mu.Lock()
-	defer s.intercept.mu.Unlock()
-	var out []model.InterceptFlow
-	for _, f := range s.intercept.entries {
-		if !f.e.Time.Before(since) {
-			out = append(out, f.e)
-		}
-	}
-	return out
-}
-
 // PostInterceptKeylog implements POST /internal/intercept/keylog: the TLS secrets of the proxy's connections go into the
 // key log of every running capture that covers the client. Nothing is kept when no capture does.
 func (s *Server) PostInterceptKeylog(c *gin.Context) {

@@ -383,7 +383,7 @@ func TestADeviceTrustingTheTestCASeesTheModifiedResponses(t *testing.T) {
 	dev := ir.device(ir.roots, nil)
 
 	resp, body, err := ir.get(dev, "/plain")
-	if err != nil || resp.StatusCode != 200 || body != "hello from upstream /plain" || resp.Header.Get("X-Upstream") != "yes" {
+	if err != nil || resp.StatusCode != http.StatusOK || body != "hello from upstream /plain" || resp.Header.Get("X-Upstream") != "yes" {
 		t.Fatalf("a request no rule selects passes unchanged: %v %v %q", err, resp, body)
 	}
 	// the certificate the device saw is the proxy's, made by the test CA for the name it asked for
@@ -393,11 +393,11 @@ func TestADeviceTrustingTheTestCASeesTheModifiedResponses(t *testing.T) {
 
 	before := ir.upHits.Load()
 	resp, body, err = ir.get(dev, "/fail/now")
-	if err != nil || resp.StatusCode != 503 || body != "" {
+	if err != nil || resp.StatusCode != http.StatusServiceUnavailable || body != "" {
 		t.Errorf("status: %v %v %q", err, resp, body)
 	}
 	resp, body, err = ir.get(dev, "/secret/page")
-	if err != nil || resp.StatusCode != 403 || !strings.Contains(body, "Blocked by Chaos Gateway") {
+	if err != nil || resp.StatusCode != http.StatusForbidden || !strings.Contains(body, "Blocked by Chaos Gateway") {
 		t.Errorf("block: %v %v %q", err, resp, body)
 	}
 	if ir.upHits.Load() != before {
@@ -405,7 +405,7 @@ func TestADeviceTrustingTheTestCASeesTheModifiedResponses(t *testing.T) {
 	}
 
 	resp, body, err = ir.get(dev, "/mod/x")
-	if err != nil || resp.StatusCode != 200 || body != "hello from the gateway /mod/x" || resp.Header.Get("X-Chaos") != "yes" || resp.Header.Get("X-Upstream") != "" {
+	if err != nil || resp.StatusCode != http.StatusOK || body != "hello from the gateway /mod/x" || resp.Header.Get("X-Chaos") != "yes" || resp.Header.Get("X-Upstream") != "" {
 		t.Errorf("modify: %v %v %q", err, resp, body)
 	}
 
@@ -508,7 +508,7 @@ func TestConnectionReuseAcrossRequestsIsOneHandoverAndManyExchanges(t *testing.T
 			const n = 6
 			reused, protos := 0, map[int]int{}
 			for i := 0; i < n; i++ {
-				req, _ := http.NewRequest("GET", "https://"+hostName+fmt.Sprintf("/r%d", i), nil)
+				req, _ := http.NewRequest(http.MethodGet, "https://"+hostName+fmt.Sprintf("/r%d", i), nil)
 				req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) {
 					if i.Reused {
 						reused++
@@ -705,7 +705,7 @@ func TestAnAbortRuleResetsTheConnectionOfTheDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, err := ir.get(dev, "/abort/now")
-	if err == nil || !(strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "EOF")) {
+	if err == nil || (!strings.Contains(err.Error(), "reset") && !strings.Contains(err.Error(), "EOF")) {
 		t.Fatalf("the connection was not broken: %v", err)
 	}
 	var fl map[string]any
@@ -986,7 +986,7 @@ func TestAConnectionWithoutAServerNameIsInterceptedForTheAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	if resp.StatusCode != 200 || resp.TLS == nil || resp.TLS.PeerCertificates[0].Issuer.CommonName != TestCAName {
+	if resp.StatusCode != http.StatusOK || resp.TLS == nil || resp.TLS.PeerCertificates[0].Issuer.CommonName != TestCAName {
 		t.Errorf("%d %+v", resp.StatusCode, resp.TLS)
 	}
 	flows := ir.gw.waitFlows(t, 1)

@@ -34,6 +34,13 @@ func (t *targetFlags) add(fs *pflag.FlagSet) {
 	fs.BoolVar(&t.global, "global", false, "target: every test, WireGuard and remote network")
 }
 
+// addDeviceOrNetwork registers the targets of what a device or a network has and a group or everything has not (a DHCP
+// action); `scope` then names exactly one of the two.
+func (t *targetFlags) addDeviceOrNetwork(fs *pflag.FlagSet) {
+	fs.StringVar(&t.device, "device", "", "target: a device (name or UUID)")
+	fs.StringVar(&t.network, "network", "", "target: a network")
+}
+
 // scope is the target as the API takes it.
 func (t *targetFlags) scope() (map[string]any, error) {
 	out := map[string]any{}

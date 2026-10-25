@@ -264,3 +264,109 @@ func TestACommittedHookCarriesEveryLease(t *testing.T) {
 		t.Error("no size")
 	}
 }
+
+func TestLeaseClassesSilenceAndOptionReservationsAreRendered(t *testing.T) {
+	c := sampleConfig()
+	c.Subnets[0].LeaseSeconds, c.Subnets[0].LeaseMin, c.Subnets[0].LeaseMax = 8, 8, 8
+	c.Subnets[0].Reservations = []Reservation{
+		{MAC: "02:00:00:00:00:31", IP: netip.MustParseAddr("10.10.0.31")},
+		{MAC: "02:00:00:00:00:32", Options: Options{Router: netip.MustParseAddr("10.10.0.9"), Domain: "x.test"}},
+	}
+	c.LeaseClasses = []LeaseClass{
+		{Name: "b", MACs: []string{"02:00:00:00:00:41"}, Seconds: 600},
+		{Name: "a", MACs: []string{"02:00:00:00:00:43", "02:00:00:00:00:42"}, Seconds: 5, Min: 5, Max: 5},
+	}
+	c.Silenced = []Silence{{Interface: "br-iot", Except: []string{"02:00:00:00:00:44", "02:00:00:00:00:45"}}, {MACs: []string{"02:00:00:00:00:46"}}}
+	doc, err := c.Document()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d4 := doc["Dhcp4"].(jsonMap)
+	sub := d4["subnet4"].([]any)[0].(jsonMap)
+	if sub["valid-lifetime"] != 8 || sub["min-valid-lifetime"] != 8 || sub["max-valid-lifetime"] != 8 {
+		t.Errorf("a subnet with bounds: %v", sub)
+	}
+	resv := sub["reservations"].([]any)
+	if r := resv[0].(jsonMap); r["ip-address"] != "10.10.0.31" || r["option-data"] != nil {
+		t.Errorf("a reservation of an address: %v", r)
+	}
+	if r := resv[1].(jsonMap); r["ip-address"] != nil || len(r["option-data"].([]any)) != 2 {
+		t.Errorf("a reservation of options only has no address: %v", r)
+	}
+	classes := d4["client-classes"].([]any)
+	if len(classes) != 3 {
+		t.Fatalf("%v", classes)
+	}
+	a, b, drop := classes[0].(jsonMap), classes[1].(jsonMap), classes[2].(jsonMap)
+	if a["name"] != "a" || a["test"] != "pkt4.mac == 0x020000000042 or pkt4.mac == 0x020000000043" || a["valid-lifetime"] != 5 || a["min-valid-lifetime"] != 5 || a["max-valid-lifetime"] != 5 {
+		t.Errorf("a class with bounds, sorted by name, its clients sorted: %v", a)
+	}
+	if b["name"] != "b" || b["min-valid-lifetime"] != 5 || b["max-valid-lifetime"] != 3600 {
+		t.Errorf("a class without bounds takes the defaults of a subnet: %v", b)
+	}
+	if drop["name"] != "DROP" || drop["test"] != "(pkt.iface == 'br-iot' and not (pkt4.mac == 0x020000000044 or pkt4.mac == 0x020000000045)) or (pkt4.mac == 0x020000000046)" {
+		t.Errorf("the class DROP is the union of what is silenced: %v", drop)
+	}
+	// nothing silenced and no class: Kea takes no empty list
+	c.LeaseClasses, c.Silenced = nil, []Silence{{Interface: ""}}
+	doc, _ = c.Document()
+	if _, ok := doc["Dhcp4"].(jsonMap)["client-classes"]; ok {
+		t.Error("an empty class list is rendered, which Kea refuses")
+	}
+}
+
+func TestChecksRefuseABadLeaseClassOrSilence(t *testing.T) {
+	for name, mod := range map[string]func(*Config){
+		"a class name with a blank": func(c *Config) {
+			c.LeaseClasses = []LeaseClass{{Name: "a b", MACs: []string{"02:00:00:00:00:41"}, Seconds: 5}}
+		},
+		"two classes of one name": func(c *Config) {
+			lc := LeaseClass{Name: "a", MACs: []string{"02:00:00:00:00:41"}, Seconds: 5}
+			c.LeaseClasses = []LeaseClass{lc, lc}
+		},
+		"a class without a client":   func(c *Config) { c.LeaseClasses = []LeaseClass{{Name: "a", Seconds: 5}} },
+		"a class without a time":     func(c *Config) { c.LeaseClasses = []LeaseClass{{Name: "a", MACs: []string{"02:00:00:00:00:41"}}} },
+		"a class with a bad MAC":     func(c *Config) { c.LeaseClasses = []LeaseClass{{Name: "a", MACs: []string{"nope"}, Seconds: 5}} },
+		"a silenced client, bad MAC": func(c *Config) { c.Silenced = []Silence{{MACs: []string{"02:00:00:00:00"}}} },
+		"an exception, bad MAC":      func(c *Config) { c.Silenced = []Silence{{Interface: "x", Except: []string{"zz"}}} },
+		"a reservation outside": func(c *Config) {
+			c.Subnets[0].Reservations = []Reservation{{MAC: "02:00:00:00:00:31", IP: netip.MustParseAddr("192.0.2.1")}}
+		},
+	} {
+		c := sampleConfig()
+		mod(&c)
+		if _, err := c.Document(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// Kea's own check takes what the test actions add to the configuration: classes with lease times, the class DROP with an
+// expression on the interface, and reservations that name no address.
+func TestKeaAcceptsTheClassesAndReservationsOfTheTestActions(t *testing.T) {
+	bin, err := exec.LookPath("kea-dhcp4")
+	if err != nil {
+		t.Skip("kea-dhcp4 is not installed")
+	}
+	cfg := sampleConfig()
+	cfg.Subnets[0].Interface = "lo"
+	cfg.Subnets[0].LeaseSeconds, cfg.Subnets[0].LeaseMin, cfg.Subnets[0].LeaseMax = 8, 8, 8
+	cfg.Subnets[0].Reservations = []Reservation{
+		{MAC: "02:00:00:00:00:31", IP: netip.MustParseAddr("10.10.0.31"), Options: Options{DNS: []netip.Addr{netip.MustParseAddr("192.0.2.53")}, Custom: []CustomOption{{Code: 224, Value: "0a0b"}}}},
+		{MAC: "02:00:00:00:00:32", Options: Options{Router: netip.MustParseAddr("10.10.0.9"), Domain: "x.test", NTP: []netip.Addr{netip.MustParseAddr("10.10.0.2")}}},
+	}
+	cfg.LeaseClasses = []LeaseClass{{Name: "cgw-a", MACs: []string{"02:00:00:00:00:41", "02:00:00:00:00:42"}, Seconds: 5, Min: 5, Max: 5}}
+	cfg.Silenced = []Silence{{Interface: "lo", Except: []string{"02:00:00:00:00:44"}}, {MACs: []string{"02:00:00:00:00:46"}}}
+	cfg.Script = ""
+	text, err := cfg.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(t.TempDir(), "kea.json")
+	if err := os.WriteFile(f, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(bin, "-t", f).CombinedOutput(); err != nil {
+		t.Fatalf("kea-dhcp4 -t rejects the configuration: %v\n%s\n%s", err, out, text)
+	}
+}

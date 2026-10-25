@@ -159,9 +159,7 @@ func (v *validator) step(path string, i int, st model.Step, sc model.Scenario, f
 		v.tlsCase(path+"/tls", *st.Tls)
 	case "dhcp":
 		v.dhcpAction(path+"/dhcp", *st.Dhcp)
-		if k := scopeKind(&target); k != "device" && k != "network" {
-			v.add(path+"/dhcp", CodeTargetKind, "a DHCP action targets a device or a network, not a %s", k)
-		}
+		v.dhcpTarget(path+"/dhcp", &target, *st.Dhcp)
 	case "wireguard":
 		v.wireguardAction(path+"/wireguard", *st.Wireguard)
 		v.tunnelInsideTarget(path+"/wireguard", &model.TunnelRef{Client: st.Wireguard.Client, Link: st.Wireguard.Link}, target)

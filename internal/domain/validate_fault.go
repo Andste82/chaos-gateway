@@ -449,7 +449,26 @@ func (v *validator) dhcpAction(path string, d model.DhcpAction) {
 			v.add(path+"/lease_time", CodeInvalidDuration, "the lease time must be at least 1s")
 		}
 	}
+	if d.Ip != nil {
+		switch a, ok := parseAddr(*d.Ip); {
+		case action != "force_new_ip":
+			v.add(path+"/ip", CodeInvalidDHCPAction, "ip is only used by the action force_new_ip")
+		case !ok || a.IsUnspecified() || a.IsMulticast() || a.IsLoopback():
+			v.add(path+"/ip", CodeInvalidAddress, "must be a unicast IPv4 address")
+		}
+	}
 	v.dhcpOptions(path+"/options", d.Options)
+}
+
+// dhcpTarget checks where a DHCP action can be aimed: at a device or a network, and the action that moves a device's
+// reservation (force_new_ip) at a device, since a reservation is one device's.
+func (v *validator) dhcpTarget(path string, target *model.Scope, d model.DhcpAction) {
+	switch k := scopeKind(target); {
+	case k != "device" && k != "network":
+		v.add(path, CodeTargetKind, "a DHCP action targets a device or a network, not a %s", k)
+	case k != "device" && d.Action == model.ForceNewIp:
+		v.add(path, CodeTargetKind, "the action force_new_ip moves a device's reservation: it targets a device, not a %s", k)
+	}
 }
 
 func (v *validator) wireguardAction(path string, a model.WireGuardAction) {

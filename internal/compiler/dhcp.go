@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"errors"
 	"net/netip"
 	"sort"
 	"strconv"
@@ -23,6 +24,8 @@ type KeaTarget struct {
 	Text string `json:"text"`
 	// Networks maps a Kea subnet id to the UUID of its network: lease events carry the id.
 	Networks map[int]string `json:"networks"`
+	// Deletions are the deletions of leases the DHCP actions ask for, each done once (compileDHCPActions).
+	Deletions []LeaseDeletion `json:"deletions,omitempty"`
 }
 
 // defaultLease is the lease time of a scope that names none (the spec's default).
@@ -131,6 +134,25 @@ func reservingDevices(idx *domain.Index, on map[string]bool) []reservation {
 	return out
 }
 
+// ScopePools are the pools a network's DHCP scope serves: the ones it names, else the default (the second half of
+// the subnet without the gateway's address). addr is the gateway's address with the subnet's length. An error says a
+// named pool is not a range of addresses; no pool at all means the subnet is too small for the default.
+func ScopePools(addr netip.Prefix, scope *model.DhcpScope) ([]kea.Pool, error) {
+	if scope != nil && scope.Pools != nil && len(*scope.Pools) > 0 {
+		var pools []kea.Pool
+		for _, p := range *scope.Pools {
+			a, e1 := netip.ParseAddr(p.Start)
+			b, e2 := netip.ParseAddr(p.End)
+			if e1 != nil || e2 != nil {
+				return nil, errors.New("a pool is not a range of addresses")
+			}
+			pools = append(pools, kea.Pool{Start: a, End: b})
+		}
+		return pools, nil
+	}
+	return kea.DefaultPool(addr, addr.Addr()), nil
+}
+
 func (t *Target) keaSubnet(sid int, id string, n *domain.NetInfo, br *Bridge) (kea.Subnet, bool) {
 	scope := n.Lan.Dhcp
 	sub := kea.Subnet{ID: sid, Network: id, Subnet: br.Address.Masked(), Interface: br.Name, LeaseSeconds: int(defaultLease.Seconds())}
@@ -143,22 +165,16 @@ func (t *Target) keaSubnet(sid int, id string, n *domain.NetInfo, br *Bridge) (k
 		}
 		sub.LeaseSeconds = int(d.Seconds())
 	}
-	if scope.Pools != nil && len(*scope.Pools) > 0 {
-		for _, p := range *scope.Pools {
-			a, e1 := netip.ParseAddr(p.Start)
-			b, e2 := netip.ParseAddr(p.End)
-			if e1 != nil || e2 != nil {
-				t.errorf(CodeDHCP, n.Name, "a pool of network %q is not valid", n.Name)
-				return sub, false
-			}
-			sub.Pools = append(sub.Pools, kea.Pool{Start: a, End: b})
-		}
-	} else if ps := kea.DefaultPool(br.Address, gw); len(ps) > 0 {
-		sub.Pools = ps
-	} else {
+	pools, err := ScopePools(br.Address, scope)
+	switch {
+	case err != nil:
+		t.errorf(CodeDHCP, n.Name, "a pool of network %q is not valid", n.Name)
+		return sub, false
+	case len(pools) == 0:
 		t.errorf(CodeDHCP, n.Name, "network %q is too small for a DHCP pool: name one", n.Name)
 		return sub, false
 	}
+	sub.Pools = pools
 	sub.Router, sub.DNS = gw, []netip.Addr{gw}
 	if o := scope.Options; o != nil {
 		if o.Router != nil {

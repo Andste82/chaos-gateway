@@ -1005,7 +1005,14 @@ func (c Candidate) Summary() string {
 		}
 	case FamilyDHCP:
 		if c.DHCP != nil {
-			return "dhcp " + string(c.DHCP.Action)
+			out := "dhcp " + string(c.DHCP.Action)
+			switch {
+			case c.DHCP.LeaseTime != nil:
+				out += " " + *c.DHCP.LeaseTime
+			case c.DHCP.Ip != nil:
+				out += " " + *c.DHCP.Ip
+			}
+			return out
 		}
 	}
 	return ""

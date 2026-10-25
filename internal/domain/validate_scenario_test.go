@@ -59,6 +59,10 @@ func TestScenarioStepRules(t *testing.T) {
 		{"a step short lease without a time", func(t *testing.T, d doc) {
 			scenarioWith(t, d, `[{"id":"a","at":"0s","dhcp":{"action":"short_lease"}}]`, "")
 		}, sc("/steps/0/dhcp/lease_time"), CodeInvalidDHCPAction},
+		{"a step that moves a reservation of a network", func(t *testing.T, d doc) {
+			d.set(t, obj(t, `{"network":"IoT"}`), "scenarios", idScenario, "target")
+			scenarioWith(t, d, `[{"id":"a","at":"0s","dhcp":{"action":"force_new_ip"}}]`, "")
+		}, sc("/steps/0/dhcp"), CodeTargetKind},
 		{"a step that removes an unknown step", func(t *testing.T, d doc) {
 			scenarioWith(t, d, `[{"id":"a","at":"0s","remove":"ghost"}]`, "")
 		}, sc("/steps/0/remove"), CodeStepOrder},

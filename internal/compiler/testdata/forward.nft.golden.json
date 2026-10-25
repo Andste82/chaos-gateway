@@ -2603,6 +2603,43 @@
       "add": {
         "rule": {
           "chain": "forward",
+          "comment": "cc52ab654ea6",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "svc0"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "oifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
+              }
+            },
+            {
+              "accept": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "forward",
           "comment": "b2f96a069b8e",
           "expr": [
             {
@@ -3374,6 +3411,49 @@
                 },
                 "op": "==",
                 "right": "wan0"
+              }
+            },
+            {
+              "masquerade": null
+            }
+          ],
+          "family": "inet",
+          "table": "chaosgw"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "chain": "postrouting",
+          "comment": "c53b48f8f4e2",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "saddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "prefix": {
+                    "addr": "169.254.100.0",
+                    "len": 30
+                  }
+                }
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "oifname"
+                  }
+                },
+                "op": "==",
+                "right": "@ifs_test_bf4feb"
               }
             },
             {

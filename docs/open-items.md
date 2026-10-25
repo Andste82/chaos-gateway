@@ -2435,7 +2435,7 @@ found that no later milestone of the plan completes and that need a decision of 
 
 ## Phase 5 open items
 
-Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5`. Items below are what the implementation found that no later milestone of the plan completes and that need a decision of the maintainer.
+Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` (M20 to M22 so far). Items below are what the implementation found that no later milestone of the plan completes and that need a decision of the maintainer.
 
 ### P5-M20-01 A hostname selector of a fault is tried in front of the lookup levels, not at its rank among them
 
@@ -2480,11 +2480,63 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5`.
 
 - Status: open
 - Severity: minor
-- Reason: needs-decision. Plan §2.8: a connection that the kernel selected and no case decides (a server name no case names, a shared CDN address) is passed on to its destination unchanged, and only if the gateway would have forwarded it. The responder terminates the connection, so the pass-through is a second connection that starts in the service namespace and leaves it through `svc0`; the forward chain accepts that path towards the uplink only (`serviceForward`, `internal/compiler/service.go`) and the namespace is masqueraded there, as for the DNS proxy's upstream queries. A server in another test network or behind a WireGuard link is not reached: the device sees a reset, where the gateway would have forwarded the connection. It matters when a case selects traffic that is wider than its server names (no destination, so every server on port 443 or 8883) and a device talks to a server of that kind inside the test setup. Reaching those servers means accepting the namespace's connections towards the test networks and tunnels in the forward chain (after the access rules and the matrix, which judge the original connection as for the uplink, `AccessDecision`) and a decision on the source address the server sees (the namespace's, which the server answers through the gateway because the gateway routes `169.254.100.0/30`, or the device's, which needs a TPROXY-like path); the plan weighed neither. M21 resets what it cannot pass on instead of choosing one.
+- Reason: needs-decision. Plan §2.8: a connection that the kernel selected and no case decides (a server name no case names, a shared CDN address) is passed on to its destination unchanged, and only if the gateway would have forwarded it. The responder terminates the connection, so the pass-through is a second connection that starts in the service namespace and leaves it through `svc0`; the forward chain accepts that path towards the uplink only (`serviceForward`, `internal/compiler/service.go`) and the namespace is masqueraded there, as for the DNS proxy's upstream queries. A server in another test network or behind a WireGuard link is not reached: the device sees a reset, where the gateway would have forwarded the connection. It matters when a case selects traffic that is wider than its server names (no destination, so every server on port 443 or 8883) and a device talks to a server of that kind inside the test setup. Reaching those servers means accepting the namespace's connections towards the test networks and tunnels in the forward chain (after the access rules and the matrix, which judge the original connection as for the uplink, `AccessDecision`) and a decision on the source address the server sees (the namespace's, which the server answers through the gateway because the gateway routes `169.254.100.0/30`, or the device's, which needs a TPROXY-like path); the plan weighed neither. M21 resets what it cannot pass on instead of choosing one. **M22:** the interception proxy's own connection to the server takes the same path (`svc0`, the uplink only), so a case `intercept` that selects traffic to a server inside the test setup resets it too; the decision of the item covers both.
 - Evidence: `docs/development.md` "TLS responder: certificate cases (M21)", decision 4; `compiler.Target.serviceForward`; `engine.TLSDecision.Passthrough`; `TestAConnectionNoCaseDecidesAndTheGatewayWouldNotForwardIsResetNotPassedThrough`.
 - Task: decide whether a pass-through has to reach every destination the gateway forwards to, or only the uplink (a case that must not touch other servers names its destination, which the kernel then selects exactly).
 - Options: (a) leave it: pass-through reaches the uplink only, a case with a destination or with the server's network in it does not touch other servers; (b) accept the namespace towards the test networks and the tunnels, the server sees the namespace's address; (c) (b) with the device's address as the source, which needs a transparent path from the namespace and a level 1 test of it.
 - Recommendation: (a) for V1, (b) when a user needs a case with a wide selection next to servers inside the test setup.
 - Acceptance: the plan states which destinations a pass-through reaches, and a level 1 test pins it.
+- Needs maintainer: yes
+- Effort: M
+
+### P5-M22-01 The interception cannot be made, watched or administered in the web UI or with `chaosctl`
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. M22 delivers the interception in the API (the case `intercept` of the overlay kind `tls`, of a profile part and of the step `tls`, `GET /intercept/flows`, `POST /tls/ca/regenerate`, the key log of a capture) and the UI shows what exists (the chips of an interception case with the number of its rules). The plan names no UI work for it: M22's scope and tests are about the proxy, §2.17 lists no interception screen, and no later milestone adds one (M23 is DHCP, M23a the Captures screen, whose download of the key log is for scope `full` as the API says). The form of an interception case has more fields than any other (ports, server names, destination, and a list of HTTP rules with a match, an action and the fields of the action) and the log of the exchanges wants a table with filters (device, host, rule acted) and a live update from `http_fault_triggered`, so it is a design, not a variant of the DNS and TLS forms of P5-M20-02 and P5-M21-01. Today an interception is made with the API or the generated clients, with `chaosctl overlay create` and a document, in the YAML of a scenario or by activating a profile with a `tls` part of the case `intercept`; the exchanges are read with `GET /intercept/flows`; the test CA is downloaded with `GET /tls/ca` and replaced with `POST /tls/ca/regenerate`.
+- Evidence: `web/src/lib/stepForm.ts` (`editableTypes`), `web/src/lib/faultForm.ts`, `internal/ctl/overlays.go`; `docs/development.md` "TLS interception and HTTP faults (M22)".
+- Task: decide whether V1 needs an interception kind in the "Add fault" dialog (the case, the settings and the list of HTTP rules), a view of the exchanges (a screen or a panel of the device detail), the download and the regeneration of the test CA in the UI, `chaosctl` commands for them (`chaosctl intercept flows`, `chaosctl tls ca`), and in which milestone. M22 is optional for V1 (plan §5), and so would be its UI.
+- Options: (a) leave it: the API, the clients, scenario files and profiles are the way to use the interception, the UI shows its cases; (b) the form of the rules in the "Add fault" dialog and the step dialog, the table of the exchanges, the CA buttons and the `chaosctl` commands, with Playwright tests (with the TLS and DNS forms of P5-M21-01 and P5-M20-02, so the dialog gets its application-layer kinds once).
+- Recommendation: (a) for V1 (the interception is optional for V1 and a scenario file is the natural way to write a list of rules); (b) after the DNS and TLS forms, when users of the interception ask for it.
+- Acceptance: the plan has the milestone (or the decision to leave it out) and the design of the form and of the exchange table in §2.17.
+- Needs maintainer: yes
+- Effort: L
+
+### P5-M22-02 mitmproxy has not been measured on small hardware, and bodies are buffered
+
+- Status: open
+- Severity: minor
+- Reason: hardware limit. Plan risk 19: "mitmproxy throughput and resource use on small hardware: TLS proxy limits throughput; only selected traffic is proxied; targets in §3.10". §3.10 names no target for the proxy and H1 (hardware validation) lists none; the tests of M22 ran on x86. The proxy reads a body whole to change it (`response_body_replace`, decision 11 of "TLS interception and HTTP faults (M22)": streaming large bodies would let the replacement skip them without saying so), so a device that downloads a firmware image through an interception case costs the image's size in the memory of the proxy's container, and mitmproxy's CPU use per connection on a Raspberry Pi is not known. Nothing in the gateway limits either (the container has no memory limit in `deploy/compose.tlsproxy.yaml` either, because no limit was measured to be safe).
+- Evidence: `docs/development.md` "TLS interception and HTTP faults (M22)", decision 11; `sidecars/tls-proxy/chaosgw_tlsproxy/addon.py` (`response`), `deploy/compose.tlsproxy.yaml`.
+- Task: when hardware exists (H1), measure the proxy's throughput, its memory with a large body and with 50 connections, and its CPU on a Raspberry Pi 4 and 5; then give §3.10 a target, set a memory limit of the container and decide whether bodies above a size are streamed (and what `response_body_replace` does for them: skip with a warning in the exchange's report, or refuse the rule).
+- Options: (a) leave it: the interception is for test setups with a few devices, the release notes say that the proxy is unvalidated on ARM64 as the other targets are; (b) add the proxy to H1 and act on its results.
+- Recommendation: (b) with H1, (a) until then.
+- Acceptance: H1's tests include the proxy and §3.10 states its target.
+- Needs maintainer: yes (the hardware)
+- Effort: S
+
+### P5-M22-03 The proxy verifies the servers' certificates against mitmproxy's bundle and the policy is an environment variable
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. The proxy opens its own connection to the server a device meant and has to decide whether to verify its certificate. M22 verifies it (a proxy that accepts any certificate would show the device a working connection to a server whose certificate is wrong, and a test of the device's own checks would be a test of the proxy), against the bundle of mitmproxy (`certifi`); a server with a private CA fails the connection, which the proxy logs and reports as an exchange with the error `TLS to the server failed`. Two environment variables of the container change it for all cases at once: `CHAOSGW_UPSTREAM_CA_FILE` (other CAs) and `CHAOSGW_UPSTREAM_INSECURE=1` (verify nothing). The plan names neither. A per-case setting (`intercept.upstream_verify`, or the CAs of a network) would be a field of the API with a UI and a validation, and the choice between "verify", "verify against these CAs" and "do not verify" is a product decision.
+- Evidence: `deploy/compose.tlsproxy.yaml`, `sidecars/tls-proxy/chaosgw_tlsproxy/launcher.py` (`--upstream-ca-file`, `--upstream-insecure`), `docs/install.md`.
+- Task: decide whether the policy needs to be a setting of the case (or of the configuration), with which values.
+- Options: (a) leave it: the two variables of the container, set once for the installation; (b) a field `upstream` of `InterceptSettings` (`verify` default, `insecure`, and the CAs by a name in the configuration's settings), applied by the addon per connection.
+- Recommendation: (a) until a user needs different policies for different devices at the same time.
+- Acceptance: the plan states where the policy is set, and a test pins that a server with a certificate that is not valid is refused by default.
+- Needs maintainer: yes
+- Effort: S
+
+### P5-M22-04 Runs and their reports know nothing of the HTTP exchanges of the proxy
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. The exchanges the proxy reports are kept in memory (the newest 20000) and read with `GET /intercept/flows`; a run's check can look at the TLS handshakes of the proxy (`tls_accepted`, `tls_rejected`) and its counters count connections, but there is no check on what the device asked or got ("the device requested `/v1/telemetry` within 30 s after the restore", "no request got a 5xx") and the report of a run has no list of the exchanges. The plan's M22 scope and tests name the proxy, its rules and the key log only; the check types of M16 are connection, traffic, DNS and TLS checks. Adding a check type is a change of the scenario schema and of the checks' evidence, and the report would need the log to be kept per run (a size and retention decision).
+- Evidence: `internal/run/checks.go` (the check types), `api/openapi.yaml` (`Check`), `docs/development.md` "TLS interception and HTTP faults (M22)", decision 10.
+- Task: decide whether a run needs a check type for HTTP exchanges (e.g. `http_request_seen`, `http_status_seen` with a host, a path prefix, a method and a window) and the exchanges in its report (with the artifacts), and in which milestone.
+- Options: (a) leave it: a test reads `GET /intercept/flows` itself (`chaosctl` or the client library) after the run, the run's captures with the key log are the evidence; (b) a check type `http_exchange` (host, path prefix, method, status, with the window of the others) and a log of the run's exchanges as an artifact (`kind: http_exchanges`, a JSONL file kept with the run).
+- Recommendation: (a) for V1; (b) after a user needs a pass or a fail of a run by what the device asked.
+- Acceptance: the plan has the check type (or the decision to leave it out) and the artifact.
 - Needs maintainer: yes
 - Effort: M

@@ -10,6 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/Andste82/chaos-gateway/internal/preflight"
+	"github.com/Andste82/chaos-gateway/internal/tlsresponder"
 )
 
 // networkdDefaults is the mount of systemd-networkd's default files (I64-02): source and target.
@@ -26,6 +27,7 @@ type service struct {
 	User        string    `yaml:"user"`
 	SecurityOpt []string  `yaml:"security_opt"`
 	Command     []string  `yaml:"command"`
+	Entrypoint  []string  `yaml:"entrypoint"`
 	Tmpfs       []string  `yaml:"tmpfs"`
 	CapAdd      []string  `yaml:"cap_add"`
 	CapDrop     []string  `yaml:"cap_drop"`
@@ -462,6 +464,116 @@ func TestTLSContainerHardeningProfile(t *testing.T) {
 	}
 	if !strings.Contains(string(api), "chaosgw-tlsca:/var/lib/chaosgw/tlsca") || !strings.Contains(string(api), `"--tls-ca-dir", "/var/lib/chaosgw/tlsca"`) {
 		t.Error("the API does not make the CAs where the responder reads them")
+	}
+}
+
+// The interception proxy (M22) joins the namespace of the holder like the other services, drops every capability, mounts the service token and
+// the CAs read-only and listens where the responder looks for it: the addresses of the compose file are the defaults of the responder, and the
+// flags are those of the launcher.
+func TestTLSProxyContainerHardeningProfile(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/compose.tlsproxy.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Services map[string]service `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Services) != 1 {
+		t.Fatalf("services %v", doc.Services)
+	}
+	p := doc.Services["tls-proxy"]
+	if p.Privileged || !p.ReadOnly || !contains(p.CapDrop, "ALL") || len(p.CapAdd) != 0 || !contains(p.SecurityOpt, "no-new-privileges:true") || p.User != "65532:65532" {
+		t.Errorf("%+v", p)
+	}
+	if p.NetworkMode != "service:svcns" {
+		t.Errorf("the proxy joins the namespace of the holder: %+v", p)
+	}
+	if len(p.Entrypoint) != 3 || !strings.HasSuffix(p.Entrypoint[0], "/venv/bin/python") || p.Entrypoint[1] != "-m" || p.Entrypoint[2] != "chaosgw_tlsproxy.launcher" {
+		t.Fatalf("entrypoint %v", p.Entrypoint)
+	}
+	launcher, err := os.ReadFile("../../sidecars/tls-proxy/chaosgw_tlsproxy/launcher.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]string{}
+	for i := 0; i < len(p.Command); i++ {
+		a := p.Command[i]
+		if !strings.HasPrefix(a, "--") {
+			continue
+		}
+		if !strings.Contains(string(launcher), `"`+a+`"`) {
+			t.Errorf("flag %s is not a flag of the launcher", a)
+		}
+		if i+1 < len(p.Command) {
+			args[a] = p.Command[i+1]
+		}
+	}
+	// the responder hands the connections to the address the proxy listens on and the proxy asks the responder where it listens
+	if args["--listen"] != tlsresponder.DefaultProxyAddr || args["--control"] != "http://"+tlsresponder.DefaultControlAddr {
+		t.Errorf("the proxy listens on %q and asks %q, the responder defaults to %s and %s", args["--listen"], args["--control"], tlsresponder.DefaultProxyAddr, tlsresponder.DefaultControlAddr)
+	}
+	if !strings.HasPrefix(args["--listen"], "127.0.0.1:") {
+		t.Errorf("the proxy listens beyond the loopback of its namespace: %s", args["--listen"])
+	}
+	if args["--ca-dir"] != "/var/lib/chaosgw/tlsca" || args["--service-token-file"] != "/var/lib/chaosgw/service/token" {
+		t.Errorf("%v", args)
+	}
+	mounted := map[string]bool{}
+	for _, v := range p.Volumes {
+		var m struct {
+			Source   string `yaml:"source"`
+			Target   string `yaml:"target"`
+			ReadOnly bool   `yaml:"read_only"`
+		}
+		if v.Kind != yaml.MappingNode {
+			t.Fatalf("a short volume: %v", v.Value)
+		}
+		if err := v.Decode(&m); err != nil {
+			t.Fatal(err)
+		}
+		if !m.ReadOnly {
+			t.Errorf("the proxy only reads %s", m.Target)
+		}
+		mounted[m.Source+":"+m.Target] = true
+	}
+	if len(p.Volumes) != 2 || !mounted["chaosgw-service:/var/lib/chaosgw/service"] || !mounted["chaosgw-tlsca:/var/lib/chaosgw/tlsca"] {
+		t.Errorf("volumes: %v", mounted)
+	}
+	// the root file system is read-only, so what mitmproxy writes has a tmpfs, which is the configuration directory
+	if len(p.Tmpfs) != 1 || !strings.HasPrefix(p.Tmpfs[0], "/tmp:") || args["--confdir"] != "/tmp/mitmproxy" {
+		t.Errorf("tmpfs %v, confdir %q", p.Tmpfs, args["--confdir"])
+	}
+	// and the image has the virtualenv and the addon where the file says
+	dockerfile, err := os.ReadFile("../../deploy/Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"/opt/chaosgw/tls-proxy/venv", "mitmproxy==${MITMPROXY_VERSION}", "COPY sidecars/tls-proxy/chaosgw_tlsproxy /opt/chaosgw/tls-proxy/chaosgw_tlsproxy", "COPY sidecars/tls-proxy/entry.py /opt/chaosgw/tls-proxy/entry.py"} {
+		if !strings.Contains(string(dockerfile), want) {
+			t.Errorf("the Dockerfile lacks %q", want)
+		}
+	}
+	// the version the image installs is the one the testbed image runs the tests against
+	var imageVersion, devVersion string
+	for _, f := range []struct {
+		file string
+		out  *string
+	}{{"../../deploy/Dockerfile", &imageVersion}, {"../../.devcontainer/Dockerfile", &devVersion}} {
+		b, err := os.ReadFile(f.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range strings.Split(string(b), "\n") {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(l), "ARG MITMPROXY_VERSION="); ok {
+				*f.out = v
+			}
+		}
+	}
+	if imageVersion == "" || imageVersion != devVersion {
+		t.Errorf("mitmproxy %q in the image, %q in the testbed image", imageVersion, devVersion)
 	}
 }
 

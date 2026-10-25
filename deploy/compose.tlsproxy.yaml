@@ -1,0 +1,69 @@
+# The interception proxy (plan §2.8, §3.8, M22): mitmproxy with the Chaos Gateway addon, for the TLS case `intercept`. It is
+# optional: without it the other cases work, and a connection that an interception case selects is reset (the health check lists
+# the component `tls_proxy` as degraded while such a case is in force).
+#
+# It joins the service namespace that `svcns` holds (compose.dns.yaml), like the TLS responder, and listens on the loopback of that
+# namespace: the responder (which decides every connection that the gateway sends into the namespace) hands the connections of the
+# case to it with `CONNECT` and relays the bytes, so nothing outside the namespace can reach the proxy. Its own connections to the
+# servers leave through the namespace and the gateway's service path, as those of the DNS proxy do. It fetches its rules from the API
+# (169.254.100.1) and reports what it sees; the responder's control interface (127.0.0.1:9445) is where it asks for a connection to
+# be paced or reset.
+#
+# It signs with the test CA, which the API makes in the volume `chaosgw-tlsca` and which this container reads, key included
+# (the volume is the CAs' alone), and starts mitmproxy again when `POST /tls/ca/regenerate` replaces it. It needs no capability (its
+# ports are above 1024) and keeps its working files in a tmpfs. The certificates of the servers are verified against the bundle of
+# mitmproxy; `CHAOSGW_UPSTREAM_CA_FILE` names other CAs (a file in a volume you mount), `CHAOSGW_UPSTREAM_INSECURE=1` verifies
+# nothing (a lab with private servers).
+services:
+  tls-proxy:
+    image: chaos-gateway:${CHAOSGW_VERSION:-latest}
+    entrypoint: ["/opt/chaosgw/tls-proxy/venv/bin/python", "-m", "chaosgw_tlsproxy.launcher"]
+    command: ["--api", "https://169.254.100.1:${CHAOSGW_UI_PORT:-8443}", "--service-token-file", "/var/lib/chaosgw/service/token", "--api-cert-file", "/var/lib/chaosgw/service/api.pem", "--ca-dir", "/var/lib/chaosgw/tlsca", "--listen", "127.0.0.1:9444", "--control", "http://127.0.0.1:9445", "--confdir", "/tmp/mitmproxy"]
+    environment:
+      PYTHONPATH: /opt/chaosgw/tls-proxy
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      HOME: /tmp
+      CHAOSGW_UPSTREAM_CA_FILE: ${CHAOSGW_UPSTREAM_CA_FILE:-}
+      CHAOSGW_UPSTREAM_INSECURE: ${CHAOSGW_UPSTREAM_INSECURE:-0}
+    user: "65532:65532"
+    network_mode: "service:svcns"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=0700
+    volumes:
+      # the token the proxy authenticates with and the API's certificate: nothing else of the service volume
+      - type: volume
+        source: chaosgw-service
+        target: /var/lib/chaosgw/service
+        read_only: true
+      # the test CA the API made (and the unknown CA beside it, which the proxy does not use)
+      - type: volume
+        source: chaosgw-tlsca
+        target: /var/lib/chaosgw/tlsca
+        read_only: true
+    depends_on:
+      svcns:
+        condition: service_started
+        # a recreated holder has a new namespace: the proxy has to join it again
+        restart: true
+    restart: unless-stopped
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD", "/opt/chaosgw/tls-proxy/venv/bin/python", "-c", "import socket; socket.create_connection(('127.0.0.1', 9444), 3).close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  chaosgw-service:
+  chaosgw-tlsca:

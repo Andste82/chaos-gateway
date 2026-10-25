@@ -101,7 +101,7 @@ reads only the host's `/etc`), so run the check before the wizard.
 
 ## 3. Start the containers
 
-The deployment is six compose files in `deploy/`. Name them once in the environment, so every later
+The deployment is six compose files in `deploy/` (seven with the optional interception proxy, below). Name them once in the environment, so every later
 `docker compose` command (logs, exec, down) finds them without repeating `-f`:
 
 ```sh
@@ -121,6 +121,18 @@ profile of the user that operates the gateway, or into `deploy/.env` (compose re
 `docker compose up -d` again; without it the health check lists the component `tls` as degraded and a TLS case
 (plan §2.8) has nothing to answer the device. The API makes the two CAs of the cases in the volume `chaosgw-tlsca`
 at its start; the certificate to install on a development firmware is `GET /api/v1/tls/ca`.
+
+`compose.tlsproxy.yaml` is the optional interception proxy for the TLS case `intercept` (plan §2.8, M22): mitmproxy with the
+gateway's addon, in the service namespace behind the TLS responder. It is not in the list above: add it
+(`COMPOSE_FILE=...:compose.tls.yaml:compose.tlsproxy.yaml:...`) when you want to inspect and change the HTTP(S) traffic of
+a device that trusts the test CA. Without it the other cases work, and a connection that an interception case selects is
+reset (the health check lists the component `tls_proxy` as degraded while such a case is in force). The proxy checks the
+certificates of the servers it connects to against the bundle of mitmproxy: set `CHAOSGW_UPSTREAM_CA_FILE` (a CA file in a
+volume you mount into the container) for servers with a private CA, or `CHAOSGW_UPSTREAM_INSECURE=1` to verify nothing. The test
+CA can be replaced (`POST /api/v1/tls/ca/regenerate`, scope `full`); every device that installed the old certificate then has to
+install the new one. Captures that run while a device talks through the proxy get the TLS secrets of its connections as a key log
+(`GET /api/v1/captures/{id}/download?part=keylog`, scope `full`): the capture and its key log together show the traffic in
+Wireshark, so such a capture is marked sensitive.
 
 ## 4. Finish the setup
 

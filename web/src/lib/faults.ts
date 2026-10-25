@@ -109,7 +109,10 @@ export function dnsChips(d: DnsFault): string[] {
   return [names.length ? `${what} · ${names.join(', ')}` : what];
 }
 
-/** The chips of a TLS case: "TLS expired · 8883", "TLS self signed · broker.example.com", "TLS untrusted ca · 203.0.113.0/24 · cuts existing". */
+/**
+ * The chips of a TLS case: "TLS expired · 8883", "TLS self signed · broker.example.com", "TLS untrusted ca · 203.0.113.0/24 · cuts existing". The
+ * interception adds what its settings change: "TLS intercept · 443 · 2 HTTP rules · QUIC allowed · no key log".
+ */
 export function tlsChips(t: TlsCase): string[] {
   const what = `TLS ${t.case.replace(/_/g, ' ')}`;
   const parts: string[] = [];
@@ -121,6 +124,12 @@ export function tlsChips(t: TlsCase): string[] {
   if (t.destination?.uplink) parts.push('uplink');
   if (t.sni?.length) parts.push(`SNI ${t.sni.join(', ')}`);
   if (t.cut_existing) parts.push('cuts existing');
+  if (t.case === 'intercept') {
+    const rules = t.intercept?.http_rules?.length ?? 0;
+    if (rules) parts.push(`${rules} HTTP rule${rules === 1 ? '' : 's'}`);
+    if (t.intercept?.block_quic === false) parts.push('QUIC allowed');
+    if (t.intercept?.keylog === false) parts.push('no key log');
+  }
   return [parts.length ? `${what} · ${parts.join(' · ')}` : what];
 }
 

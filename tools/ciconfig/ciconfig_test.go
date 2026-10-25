@@ -123,3 +123,57 @@ func TestEveryTestbedRunNamesTheLevel1Lists(t *testing.T) {
 		}
 	}
 }
+
+// The interception proxy (M22) runs the same mitmproxy everywhere: in the image of the gateway, in the testbed image the level 1 tests run in and in the
+// level 0 job that starts the real one for the tests of the responder. A version that differs in one of them would test something other than what ships.
+func TestMitmproxyIsOneVersionInTheImageTheTestbedAndTheLevel0Job(t *testing.T) {
+	want := map[string]string{}
+	for file, re := range map[string]string{
+		"deploy/Dockerfile":        `(?m)^ARG MITMPROXY_VERSION=(\S+)$`,
+		".devcontainer/Dockerfile": `(?m)^ARG MITMPROXY_VERSION=(\S+)$`,
+		".github/workflows/ci.yml": `pip" install -q mitmproxy==(\S+)`,
+	} {
+		m := regexp.MustCompile(re).FindStringSubmatch(read(t, strings.Split(file, "/")...))
+		if m == nil {
+			t.Errorf("%s names no mitmproxy version", file)
+			continue
+		}
+		want[file] = m[1]
+	}
+	for file, v := range want {
+		if v != want["deploy/Dockerfile"] {
+			t.Errorf("%s has mitmproxy %s, the image has %s", file, v, want["deploy/Dockerfile"])
+		}
+	}
+	// the level 0 job fails without mitmproxy instead of skipping the tests that need it
+	if !strings.Contains(read(t, ".github", "workflows", "ci.yml"), "CHAOSGW_REQUIRE_MITMPROXY=1") {
+		t.Error("the level 0 job does not require mitmproxy")
+	}
+}
+
+// The tests that must run in the testbed jobs are all there: every test the list M22_LEVEL1 names exists in the Go sources, so a rename cannot leave
+// a name in the list that no run can pass (the run would fail, which is the point; this says which name).
+func TestEveryTestOfTheLevel1ListsExists(t *testing.T) {
+	var sources []string
+	root := filepath.Join("..", "..")
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, "_test.go") && !strings.Contains(p, "node_modules") {
+			if b, err := os.ReadFile(p); err == nil {
+				sources = append(sources, string(b))
+			}
+		}
+		return nil
+	})
+	all := strings.Join(sources, "\n")
+	for _, l := range strings.Split(read(t, ".github", "level1-tests.env"), "\n") {
+		m := regexp.MustCompile(`^([A-Z0-9_]+)=(.+)`).FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		for _, name := range strings.Split(m[2], ",") {
+			if !strings.Contains(all, "func "+name+"(t *testing.T)") {
+				t.Errorf("%s names %s, which is no test", m[1], name)
+			}
+		}
+	}
+}

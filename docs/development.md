@@ -6060,7 +6060,7 @@ milestone and is in plan §2.17 (the row "Captures" of the table of screens; it 
   Network, Selector (a source of everything, a network, a group or a device, and the traffic fields the fault dialog and the scenario
   steps use: `TrafficFields.vue`) or Uplink; duration; size limit; under *Advanced* the format, the packet length and a ring buffer that
   replaces the size limit (the request never has both, as the API refuses it). `captureErrors` mirrors the limits of the gateway
-  (a size of at least 64 KiB, 2 to 100 files, a packet length of 64 to 262144, a duration that is not zero) so Start waits until the form is
+  (a size of at least 64 KiB, 2 to 100 files, a packet length of 64 to 262144, a duration of at least a second) so Start waits until the form is
   valid; what only the gateway can know (a device without an address, a host name nobody asked for yet, a size above the quota) comes back
   as `422` with a pointer, `captureFieldOf` finds the field, and a refusal of an advanced field opens *Advanced*. The refusals without a
   field (`capacity_exceeded`: a low disk, eight captures running, the quota used by running ones) stand under the form. From a device's page
@@ -6114,11 +6114,11 @@ that is in the build). Web unit tests (`make test-web`, vitest, 505 tests in 39 
 the quota tell from the size limit, the sizes, the storage view, the scope in words and the captures of a device, the form and the request it
 makes, the checks of the limits, the field a refusal names) and `composables/eventStream.test.ts` (the events read the captures, the three
 toasts and the ends that have none) and the route in `router.test.ts`. Playwright against the mocked API (`make test-e2e`,
-`e2e/captures.spec.ts`, 18 tests): the navigation link; the list with all its columns and the storage; the counters of a running capture
+`e2e/captures.spec.ts`, 19 tests): the navigation link; the list with all its columns and the storage; the counters of a running capture
 following the gateway; starting a capture on a device, seeing it run in the panel and in the list, downloading it while it runs, stopping it,
 downloading it; the panel of a device lists only its captures; a capture the quota, a low disk or a failure ended is shown as such and one the
 size limit ended is not; the live stop by the quota and the low disk with their toasts; a capture started elsewhere appearing in both places;
-deleting from the list and from the panel with the question; the key log and the mark SENSITIVE, and the same with a smaller scope; New
+deleting from the list and from the panel with the question; a capture that is gone when it is stopped or deleted (the quota took it) says so and leaves the list at once; the key log and the mark SENSITIVE, and the same with a smaller scope; New
 capture for a network, a selector, the uplink with a ring buffer and a pcap file, with the request that is sent; the messages under the
 fields and Start that waits; the refusals of the gateway under their fields, opening *Advanced* and below the form; the request in the API
 panel and in the dialog and no admin tunnel among the choices; a gateway without a capture volume; a list that cannot be read; the API

@@ -169,7 +169,13 @@ describe('the form', () => {
     expect(captureErrors(f).snaplen).toBeDefined();
     f.snaplen = '262144';
     f.duration = '0s';
-    expect(captureErrors(f).duration).toBeDefined();
+    expect(captureErrors(f).duration).toBe('At least 1s.');
+    f.duration = '999ms'; // the gateway wants a second at least
+    expect(captureErrors(f).duration).toBe('At least 1s.');
+    f.duration = '1s';
+    expect(captureErrors(f).duration).toBeUndefined();
+    f.duration = '1.5';
+    expect(captureErrors(f).duration).toBe('A duration like 90s, 5m or 1h.');
     f.duration = '1h30m';
     f.maxSize = '12 gigs';
     expect(captureErrors(f).maxSize).toBe('A size like 512MiB or 2GiB.');

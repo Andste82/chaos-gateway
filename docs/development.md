@@ -8,18 +8,18 @@ How to build, test and generate code. Everything runs in the devcontainer
 | Path | Content |
 |---|---|
 | `api/` | `openapi.yaml`, the source of truth for the domain model and the REST API; examples and their validator |
-| `cmd/chaosgw`, `cmd/chaosctl` | the core binary and the CLI (`chaosgw exec` is the executor; `chaosgw tls` is the TLS responder (M21); `cmd/chaosctl` is a `main` over `internal/ctl`) |
+| `cmd/chaosgw`, `cmd/chaosctl` | the core binary and the CLI (`chaosgw exec` is the executor; `chaosgw tls` is the TLS responder (M21), which hands the connections of the case `intercept` to the proxy (M22); `cmd/chaosctl` is a `main` over `internal/ctl`) |
 | `internal/ctl` | `chaosctl` (M18): the commands (Cobra), the API client with its token and certificate options, runs that are waited for with their lease, `wait device`, `with` |
 | `internal/clock` | injectable clock: real and fake, wall time apart from monotonic time |
 | `internal/preflight` | kernel version, the one shared kernel-module list, namespace capability |
-| `internal/testbed` | namespace topologies for integration tests; `vmrun` runs them in a VM |
+| `internal/testbed` | namespace topologies for integration tests; `vmrun` runs them in a VM; the starter of the interception proxy for the tests that run the real mitmproxy (M22) |
 | `internal/model` | generated Go types of `api/openapi.yaml`: the domain model (no hand-written code) |
 | `internal/schema` | validates JSON/YAML documents against the schemas of the spec: pointers, codes, unknown fields |
 | `internal/domain` | what the model means: decoding, reference resolution, the rules the schema cannot express, built-in profiles, precedence resolution and the classification tables built from it, overlays and their keys, the overlays a revision orphans or moves, observed state and device identity, candidate creation (merge patch), domain diff |
 | `internal/overlay` | the in-memory overlay store (M8a): owner, key, TTL, lease, renew, reset, expiry on the injected clock, retargeting after a merge; never persisted |
 | `internal/run` | the engine of scenario runs (M15): create, queue per target, preconditions, the timeline on the monotonic clock with `wait` steps, lease, abort, the records of runs on disk, events, JSON and JUnit reports; the checks of a scenario and the zero-hit warnings (M16) |
 | `internal/capture` | the packet capture engine (M17): the filter of a capture (a selector as a user space matcher and as a classic BPF program), the pcap and pcapng writers and reader, the files of a capture with ring buffer and size limit, and the session that reads AF_PACKET sockets (runs in the executor) |
-| `internal/capturemgr` | the management of captures (M17): the scope of a request resolved to interfaces and filters, the records, the quota and the free-space limit, the stream to the executor, the download |
+| `internal/capturemgr` | the management of captures (M17): the scope of a request resolved to interfaces and filters, the records, the quota and the free-space limit, the stream to the executor, the download, and the TLS key log of a capture with the clients a scope covers (M22) |
 | `internal/store` | persistence: immutable revisions with checksum, status, commit-confirm, atomic writes, schema migrations |
 | `internal/linux` | parsers for `ip -j`, `tc -j`, `nft -j` and `ethtool -k` output (recorded outputs in `testdata/`) |
 | `internal/executor` | the privileged executor: closed set of typed operations, strict decoder, scope checks, command planning, serialized queue, Unix-socket protocol with version handshake and `SO_PEERCRED` check, client |
@@ -35,7 +35,8 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/audit` | the append-only audit log (JSON lines) |
 | `internal/linkexport` | what a link's remote side needs besides WireGuard: its BIRD configuration |
 | `internal/appliance` | the harness of test level 2 (M5b): Ubuntu cloud images with checksum verification, the cloud-init seed, the QEMU command line, the host topology (bridges, taps, namespaces), SSH into the VM, log collection |
-| `internal/tlsresponder` | the TLS responder (M21): the two CAs (the test CA and the unknown CA), the certificates of the cases per name, the ClientHello reader, the connection handling (a case, a passed-through connection, reset on removal), the reports of the handshakes, the client of the internal API |
+| `internal/tlsresponder` | the TLS responder (M21): the two CAs (the test CA and the unknown CA), the certificates of the cases per name, the ClientHello reader, the connection handling (a case, a passed-through connection, reset on removal), the reports of the handshakes, the hand-over to the interception proxy and the control interface it asks (M22), the client of the internal API |
+| `sidecars/tls-proxy` | the interception proxy (M22): the only Python of the project, a mitmproxy addon (`chaosgw_tlsproxy`: the rules, the API client, the addon, the launcher of the container) with its unit tests; the container is `deploy/compose.tlsproxy.yaml` |
 | `internal/svcapi` | the client of the internal API that the service containers share (service token, the API's certificate from a file) |
 | `internal/kea` | the Kea DHCPv4 server: configuration renderer (one subnet per network on its bridge, reservations), control socket client (`config-test`, `config-set`, leases), the `run_script` hook's environment as a lease event |
 | `internal/wireguard` | key generation and derivation, provisioning of a configuration's keys, export of client and link configurations (wg-quick `.conf`, QR as PNG/SVG, zip, export once) |
@@ -1564,8 +1565,8 @@ and `Target.TC`. `apply.Apply` puts the tree in the kernel and verifies it (M8b,
   store goes back to its checkpoint, nothing else is affected), and then it makes a generation and a
   desired state that carries the overlays (`desired.Overlays`; the apply loop hands them to the
   compiler together with the fault ids of its last verified target, so ids stay stable).
-  Overlays of kinds whose milestone is not in the build (`CheckOverlaySupported`: DHCP M23,
-  and the TLS case `intercept`, M22; the kind `dns` has been supported since M20, the kind `tls` since M21) are refused with `unsupported_feature` before they reach the owner. The
+  Overlays of kinds whose milestone is not in the build (`CheckOverlaySupported`: DHCP M23;
+  the kind `dns` has been supported since M20, the kind `tls` since M21, with its case `intercept` since M22) are refused with `unsupported_feature` before they reach the owner. The
   kind `rule` has been supported since M9 (see "Access rules (M9)"), the WireGuard action and the
   mtu and tunnel families since M10 (see "Extended faults (M10)"), the kind `profile` since M11 (see
   "Profiles (M11)").
@@ -3302,7 +3303,7 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
   (`engine.checkProfileAvailable`, after `ValidateOverlay` resolved the reference, P2-M11-01), so a half-working profile never
   runs; the compiler ignores the parts of families it does not resolve yet. Transferred to the plan on 2026-10-11: M20 and M21
   lift the check family by family (`domain.unavailableFamilies`), and their acceptance criteria include that a profile with a
-  `dns` part (M20) or a `tls` part (M21) activates and its part competes in that family. Both are done: only a `tls` part with the case `intercept` is still unavailable (M22).
+  `dns` part (M20) or a `tls` part (M21) activates and its part competes in that family. Both are done, and so is the case `intercept` of a `tls` part (M22): every family is available, and `unavailableFamilies` is empty (the rules about a family that is not are kept, and the tests name one with `domain.SetUnavailableFamilies`).
 - **Activation** is an overlay of kind `profile` with the key *(owner, kind, target)*: one profile per owner and target, so
   writing the activation again with another profile **switches** it (`200`, the same overlay id, the same TTL rules as any
   overlay: `ttl`, `lease`, `renew`, reset, restart). The fault ids follow the existing rules (M8b): a switch between
@@ -3330,7 +3331,7 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
   Deleting an unreferenced profile needs nothing. A profile that a scenario step refers to is a missing reference in the
   scenario (M15). The activation follows an edit of the impairment and MTU parts, but not into a profile that has a
   part this build cannot resolve: a revision that gives a custom profile a `dns` or `tls` part while an overlay activates it
-  is **refused** with `unsupported_feature`, naming the profile and the milestone (M22 for a `tls` part with the case `intercept`; M20 and M21 lifted `dns` and `tls`), by the
+  is **refused** with `unsupported_feature`, naming the profile and the milestone (none since M22: M20 and M21 lifted `dns` and `tls`, M22 the case `intercept`), by the
   same rule as the write of the activation (`checkProfileAvailable`), so no revision leaves an activation with a half profile
   (`engine.unavailableProfileRevision`, `UnsupportedProfileRevisionError`, called where the apply settles the overlays
   of a revision and by the preview, which reports it as a problem; the API answers 422 before it applies). `force` does
@@ -4553,7 +4554,7 @@ file `chaosctl run -f` takes in M18), the runs (`POST /runs` and `POST /scenario
   that was active, and what it executes: renaming an object, or editing the stored scenario, changes nothing
   for a run that has started (plan §2.1.1). A scenario the build cannot run is `422 unsupported_feature`
   naming the milestone: a `tls` step
-  with the case `intercept` (M22), a `dhcp` step (M23), a profile with such a TLS part (a `dns` step, a profile with a DNS part and a host name in a `wait` or a check are supported since M20, a `tls` step and a profile with a certificate or handshake case since M21), and, on a gateway
+  with the case `intercept` is supported since M22 (the interception step), a `dhcp` step (M23) is not (a `dns` step, a profile with a DNS part and a host name in a `wait` or a check are supported since M20, a `tls` step and a profile with a certificate or handshake case since M21), and, on a gateway
   without a capture volume, `capture: true` or a `capture` step (see Packet captures (M17)); `GET
   /capabilities` lists `step_types` (profile, fault, rule, dns since M20, tls since M21, wireguard, capture, wait, remove, restore) and, since M16, the
   `check_types` (the checks `tls_rejected` and `tls_accepted` since M21; one for a host name works since M20). Nothing is stored
@@ -5085,8 +5086,9 @@ operations of the spec that were declared with it (`GET`/`POST /captures`, `GET`
   and the file name `<name>.pcapng`/`.pcap` (the name as `[A-Za-z0-9._-]`, else `capture-<id>`); the body is streamed from
   the files, never held in memory: the complete records of every file of the capture in the order they were written,
   while the capture runs too (a running capture's file is as current as the last flush, at most 250 ms behind). A file
-  the ring deletes while the download runs is skipped. `part=keylog` is `404 not_found` (no capture has a key log before
-  M22); `part=keylog` and a capture marked `sensitive` need the scope `full`, which the check in the handler already
+  the ring deletes while the download runs is skipped. `part=keylog` is `404 not_found` for a capture that has no key log (since M22 a capture
+  has one when the interception proxy handled a connection of its device while it ran, "TLS interception and HTTP faults (M22)");
+  `part=keylog` and a capture marked `sensitive` need the scope `full`, which the check in the handler already
   applies.
 - **API details.** `POST /captures` takes `Idempotency-Key` and the scope `overlays`; it writes `capture.start`,
   `capture.stop` and `capture.delete` to the audit log; a deployment without a capture volume (`--captures-dir` empty)
@@ -5684,8 +5686,7 @@ Plan §2.4 (E11), §2.8, §3.3 and M21, with the acceptance carried over from Ph
 of the precedence rules has a mechanism now: selected new connections of a device are routed unchanged into the service namespace and end at
 the TLS responder, which shows a deliberately broken certificate (or breaks the handshake) and reports what the device did with it. The check types
 `tls_rejected` and `tls_accepted` and the step type `tls` of M16 work, "TLS broken" activates, and the `tls` family is lifted from
-`domain.unavailableFamilies` (it is empty now; what is still missing is the case `intercept`, which M22 brings and which is refused with
-`unsupported_feature`, also as the part of a profile).
+`domain.unavailableFamilies` (it is empty now; the case `intercept` was refused with `unsupported_feature` until M22, which brings it).
 
 ### How it works
 
@@ -5694,7 +5695,7 @@ the TLS responder, which shows a deliberately broken certificate (or breaks the 
   cases `expired`, `not_yet_valid` and `hostname_mismatch`) and `unknown-ca.pem` (the *unknown CA*, never distributed; it signs `untrusted_ca`), each with its key
   (`*.key`, 0600, the user of the responder is the one of the API). Both are ECDSA P-256 and last ten years; they start five years back, so the certificate of `expired`
   (ran out a day ago, began three months before) lies inside the CA's validity. A CA that exists is never replaced (the devices that installed it would trust nothing
-  any more); `POST /tls/ca/regenerate` is M22's. `GET /tls/ca` serves `test-ca.pem` as a download (`Content-Disposition: attachment`) for every scope that reads, never a key
+  any more); `POST /tls/ca/regenerate` is M22's (below). `GET /tls/ca` serves `test-ca.pem` as a download (`Content-Disposition: attachment`) for every scope that reads, never a key
   and never the unknown CA.
 - **The certificates** (`tlsresponder/certs.go`). One per case and name, the name being the server name of the ClientHello (without one: the name the DNS proxy
   answered last for the destination address, else the address itself in an IP SAN). `untrusted_ca`: valid, signed by the unknown CA. `self_signed`: its own issuer.
@@ -5771,7 +5772,7 @@ Taken by best practice where the plan leaves room (what needs the maintainer is 
 Level 0, all run here: `tlsresponder` (the CAs and their file modes, that a CA is never replaced, the download holds the certificate only; the certificate of each case fails exactly the check it is meant for under Go's verifier, for both keys; the ClientHello reader on real hellos of TLS 1.2 and 1.3, split over records, malformed;
 real TLS clients against the responder on the loopback: every certificate case with TLS 1.2 and 1.3 is rejected and reported with its alert, an insecure client completes the handshake and is reported, the name of the certificate, the handshake cases, a connection that never says ClientHello, passthrough to a real
 TLS server, a decision that cannot be had, the reset on removal and the generation that spares a newer decision, a connection decided just before its case went, no connection is held after it ends; the API client), `compiler/tls_test.go` (the responder's list, the rules of the chain for a new connection and for `cut_existing`, every kind of destination, hostname set, shared uplink set, order and grouping, no service namespace, **the golden test of E11**
-(`testdata/e11.golden.txt`), the transaction is accepted by nft's parser: `scenarioTLS` is in `transactionScenarios`), `executor/plan_test.go` (the fixed ruleset of the namespace), `apply/service_test.go` (the namespace holds the redirect, a namespace without it is found by verify and made anew), `domain` (the profile's parts, the intercept case is unavailable until M22, what each case expects and what a rejection tests, the default ports),
+(`testdata/e11.golden.txt`), the transaction is accepted by nft's parser: `scenarioTLS` is in `transactionScenarios`), `executor/plan_test.go` (the fixed ruleset of the namespace), `apply/service_test.go` (the namespace holds the redirect, a namespace without it is found by verify and made anew), `domain` (the profile's parts, the intercept case was unavailable until M22, what each case expects and what a rejection tests, the default ports),
 `engine/tls_test.go` (the snapshot and the kernel's chain, "TLS broken" competing with a device's case, the decision by port, server name, destination and client, the matrix and passthrough, `explain`), `api/tlsservice_test.go` (the configuration by long poll, the decision, host names and the name without SNI, malformed requests, events and counters, the test CA download, health, `explain` and E11), the flows of the API, `run/checks_tls_test.go` (both checks, windows, the report that comes late, selectors, zero hits),
 `cmd/chaosgw` (the daemon makes the CAs, `tls --health`), the hardening test of `compose.tls.yaml`, `tools/ciconfig` (the new volume in the fresh-volume check and the upgrade note). Web: `lib/faults.test.ts` (TLS chips), the Playwright specs of profiles ("TLS broken" activates) and scenarios (a TLS check is added and sent).
 
@@ -5798,6 +5799,121 @@ Two things seen while building M21 on a machine with a nearly full disk, neither
 | Scope: check type "TLS rejected/accepted" | `run/checks_tls_test.go` (all of it), `TestADeviceThatTakesTheBrokenCertificateIsFlaggedByTheCheckOnTheRealKernel` |
 | Scope: "TLS broken" profile, TLS scenario step type | `TestTheTLSBrokenProfileActivatesAndCompetesInTheTLSFamily`, `TestTheTLSBrokenProfileResetsTheHandshakeOnTheDefaultPortsOnTheRealKernel`, `TestATLSCaseThatHeldNoConnectionIsAZeroHitWarning` |
 | Acceptance: a profile with a `tls` part, custom or "TLS broken", activates and competes in the TLS family; the family is lifted (P2-M11-01) | `TestADeviceLatencyAndATLSBrokenProfileOnTheNetworkCombine`, `TestACustomProfileWithAnInterceptPartIsStoredButCannotBeActivatedAndOneWithADNSOrTLSPartCan`, `TestOnlyProfilesWithAPartOfALaterFamilyAreUnavailable` |
+
+## TLS interception and HTTP faults (M22)
+
+Plan §2.8 (interception with inspection), §2.11 (the key log of a capture), §3.1, §3.8 and M22. A TLS case with the case `intercept` hands the selected new connections to
+the interception proxy, mitmproxy with an addon of this project in its own container, which terminates the device's TLS with a certificate of the test CA, opens its own
+connection to the real server, applies the HTTP rules of the case and reports what it sees; the key log of its connections goes to the captures that run while the device talks.
+The step type of the interception is the step `tls` with the case `intercept` (the settings are `intercept`), and a profile with such a `tls` part activates: no part of a
+profile waits for a milestone any more.
+
+### How it works
+
+- **The path of a connection.** The kernel side is that of M21: the chain `tls_redirect` selects the new connections of the case (the case's ports, 443 and 8883 by default), the
+  service mark routes them unchanged into the service namespace, where the fixed chain redirects them to the responder's port (`SO_ORIGINAL_DST` keeps where the device was
+  going). The responder reads the ClientHello (or, for a connection that is no TLS, the first bytes), asks the API for the decision (`Engine.ResolveTLS`: the case by port, server
+  name, destination and client, as for the other cases) and, for the case `intercept`, does not answer the connection but hands it over (`tlsresponder/intercept.go`): it opens a
+  connection to the proxy (`127.0.0.1:9444`, the loopback of the service namespace, which the proxy's container shares), sends `CONNECT <original destination> HTTP/1.1` with the
+  headers `X-Chaosgw-Connection` (an id), `-Client`, `-Overlay`, `-Device` and `-Sni`, waits for the `200`, writes what the device sent first (the ClientHello, which the responder had read) and
+  relays both directions. mitmproxy runs in `regular` mode: the CONNECT gives it the destination (the address, as the device meant it) and the headers tell the addon who the
+  device is (the connection it accepts comes from the responder, so the device's address is not otherwise known to it). From the first bytes mitmproxy sees TLS, HTTP or a stream that is no HTTP
+  and acts accordingly. Its own connection to the server leaves the namespace through `svc0` like the passed-through connections of M21 (masqueraded at the uplink).
+- **What the responder adds.** The hand-over is a connection a case holds, so *reset on removal* works for it (the device's connection is reset and the proxy's closed when a later configuration
+  does not hold the overlay); a connection that the gateway would not have forwarded (the access matrix keeps the device from the server) is reset without asking the proxy
+  (`passthrough` is part of the decision of an interception case, too); the responder reports `intercepted` when the proxy took the connection (that is the report that counts the connection for the overlay),
+  `proxy_unavailable` when it could not be reached or refused (the connection is reset and counted in `ProxyFailures`) and `server_unreachable` when the proxy answered `502` or `504` to the CONNECT, which is what mitmproxy
+  does when its connection to the server fails (the device is reset like by a server that is down, the proxy is not at fault). A connection that says nothing is not handed over. The first bytes of a connection that is no TLS are
+  sent to the proxy in one piece (`firstBytes`): mitmproxy decides between HTTP and a raw stream from the first chunk it gets, and a request line that arrives in two pieces is taken for a stream.
+- **The control interface** (`ControlHandler`, `127.0.0.1:9445`, the loopback of the namespace only). Two things need the connection the responder holds: the bytes towards the device pass through it (and are TLS, which the
+  responder cannot read), so a rule that paces the response asks for it by connection id (`POST /throttle {connection, rate_bps}`, `rate_bps` 0 removes the pacing); and an abort wants a reset (a close of the proxy's connection would reach the device as an
+  orderly end), so the proxy asks for it (`POST /abort`). The pacing sends the bytes in pieces of what the rate allows in 50 ms, each piece when the bytes before it and itself have had their time at that rate (`send`), so
+  the last byte of a response arrives when it would on a link of that speed and a long response trickles.
+- **The addon** (`sidecars/tls-proxy/chaosgw_tlsproxy`, Python, the only Python of the project). `rules.py` is pure (no mitmproxy): the rules, the matching, the decision for one request, the changes. `addon.py` is the mitmproxy
+  addon: it follows `GET /internal/tls/config?consumer=proxy` by long poll (`api.py`, standard library only), where the cases of the kind `intercept` are entries with their settings, and applies the rules in the hooks
+  `request` (delay, status, block, abort, the request headers, pacing), `response` (response headers, body, `Alt-Svc`), the WebSocket and TCP hooks; it reports in batches through `Batcher` (a failure keeps the batch, the oldest are dropped past 5000).
+  `launcher.py` is the container's entry point: it waits for the test CA, gives mitmproxy its configuration directory (`mitmproxy-ca.pem` is the key and the certificate in one file) in a tmpfs, starts `mitmdump` with the addon and
+  starts it again when the CA files change. `deploy/compose.tlsproxy.yaml` is the container (no capability, read-only, the two volumes read-only, the namespace of the holder), `deploy/Dockerfile` has mitmproxy in a virtualenv
+  of its own (`/opt/chaosgw/tls-proxy/venv`, `MITMPROXY_VERSION`, the same version as in `.devcontainer/Dockerfile` and the level 0 job of `ci.yml`: `tools/ciconfig` checks the three).
+- **The rules** (`intercept.http_rules`, the text of `HttpRule` in the spec). They are looked at in the order written; every rule whose `match` (host, path prefix without the query, method) selects the request applies, until a terminal action has acted.
+  `block` answers 403 with a short text, `status` the given code with an empty body (neither reaches the server), `abort` resets the connection, `delay` holds the request back (the delays of several rules add up, and a delay before a
+  terminal action holds its answer back), `modify` sets or removes (empty value) request and response headers and replaces text in the body of the response (the body is buffered; a compressed body is decoded and encoded again),
+  `throttle` paces the response to the request. A connection that is no HTTP (MQTT over TLS) is decided by the rules that name neither a path nor a method (`decide_connection`): `block` and `abort` reset it, `delay` holds it back once, `throttle`
+  paces it, `status` and `modify` do nothing there; its bytes are counted, not kept. mitmproxy tells HTTP from a stream by the first bytes (`rawtcp`): a stream that starts like a request line (text such as `ping 0`) is taken for HTTP.
+  A WebSocket is an HTTP exchange (the handshake, which every rule can act on) and then a connection whose messages are counted. With `block_quic` (on unless the case turns it off) the `Alt-Svc` headers lose their `h3` entries.
+- **Reports.** What the device did with the proxy's certificate is a report of `POST /internal/tls/handshakes` with the case `intercept` (`accepted` with the version, `rejected` with the alert, `client_closed`, `timeout`), so the events `tls_handshake`, the log and the checks
+  `tls_accepted` and `tls_rejected` work for it as for the responder's cases (a device that trusts the test CA completes the handshake: `accepted`; the expectation of an interception case is `any`, neither is a failure of the device). The API counts for
+  the overlay only the reports of the responder (`intercepted`, `proxy_unavailable`, `server_unreachable`), not the proxy's again (`countsForTheOverlay`). Every exchange is a report of `POST /internal/intercept/flows` (method, host, path, status, bytes, duration, the actions that acted, the
+  error) that the API keeps (the newest 20000, in memory, like the DNS log) and lists (`GET /intercept/flows`: by device, host, time and whether a rule acted); a rule that acts announces itself with `http_fault_triggered`, at most once per overlay, device and ten seconds.
+- **The test CA.** `POST /tls/ca/regenerate` (scope `full`, audit `tls.ca_regenerate`) writes a new test CA (`tlsresponder.RegenerateTestCA`: the key, then the certificate, which is the file the services watch) and returns the certificate; the unknown CA is not touched.
+  `loadCA` checks that the certificate belongs to the key, so a service that reads between the two writes keeps what it has and loads the new pair on its next look; the responder reloads within five seconds (`WatchCAs`), the launcher restarts mitmproxy
+  (the connections that are open end, as the devices' trust does).
+- **The key log.** mitmproxy writes the secrets of every connection it handles through `mitmproxy.net.tls.log_master_secret`; the addon replaces that with a sink that attributes each line to the device (`KeylogSink`): the second word of a line is the client random, which is
+  known for the device's connection from `tls_clienthello` and for the proxy's own connection to the server once its handshake is over (lines that arrive before are held for a minute). The lines go to `POST /internal/intercept/keylog` with the device's address.
+  `capturemgr.AppendKeylog` gives them to every running capture whose scope covers the client (`Covers`: a device by its identity or address, a network by its prefixes, a selector by its source, the uplink every client, a WireGuard network of the role management
+  none) and writes them to `keylog.txt` next to the packet files; the first line marks the capture `keylog` and `sensitive` (the record is saved), and the download of the log, and of a capture that holds one, needs the scope `full`. A capture that has ended, or is ending, takes no more lines;
+  nothing is kept when no capture runs (secrets of a connection that no capture saw decrypt nothing); `keylog: false` of the case keeps the secrets of its connections from the captures. The log has the secrets of both sides of the proxy: the device's (decrypting a capture of the device
+  or of the network) and its connection to the server (decrypting a capture of the uplink). A connection that began before the capture did cannot be decrypted (its handshake is not in the capture), so its lines are not needed.
+- **`block_quic`.** `compiler/tls.go` adds one rule per interception case to the chain `tls_redirect`: the UDP packets to port 443 of the case's clients (and its destination) are dropped, in front of the selection, so a client that tries QUIC meets no answer and falls back to TCP.
+  QUIC itself is not intercepted (plan §2.8).
+- **Health and capabilities.** The proxy says who it is when it polls (`consumer=proxy`); the health check lists the component `tls_proxy`: `disabled` while the gateway has never seen it poll and no interception case is in force, `degraded` while a case is in force and it has not polled for 60 s (the connections of the case are reset) or while it has stopped polling, `healthy` otherwise.
+  `tls.intercept` is in the capabilities. `explain` says `service: tls_proxy` when the winning TLS case is an interception (the responder's flows, in the flows API, stay `tls_responder`: the connection mark does not say which case decided).
+- **The upstream.** The proxy verifies the certificates of the servers against mitmproxy's bundle (a device that talks to a server with a private CA gets the proxy's refusal as a failed connection and `server_unreachable` is not what it is: the proxy logs `TLS to the server failed` and reports an exchange with that error);
+  `CHAOSGW_UPSTREAM_CA_FILE` names other CAs and `CHAOSGW_UPSTREAM_INSECURE=1` verifies nothing (`docs/install.md`).
+
+### Decisions
+
+Taken by best practice where the plan leaves room (what needs the maintainer is under "Phase 5 open items" in `open-items.md`):
+
+1. **The responder decides, the proxy follows.** The alternative, a second redirect inside the namespace that sends the interception cases' connections to mitmproxy's transparent mode, would need a way to tell the connections apart there (the marks do not cross the veth pair) and
+   would make the proxy decide by server name by itself. The hand-over reuses everything the responder already has (the decision per connection by server name, the access check, reset on removal, the reports) and needs no change in the kernel's rules; its price is one more hop on the loopback and a CONNECT that carries the device's
+   identity. mitmproxy's transparent mode of the S4 spike is not used.
+2. **The device's identity travels in the CONNECT request.** The alternatives (a SOCKS5 username, a side channel by source port) need more of mitmproxy's internals; the headers of the request arrive in the hook `http_connect`, a documented place, and are the same for every protocol the tunnel carries.
+3. **Delay holds the request, not the response.** The device sees the response that much later in both cases, and a delay before a synthesized answer (`status`, `block`) needs the same code; the server sees the request that much later, too, which a delay of the response alone would not do. The plan says "delay or throttle responses": for the device it is that.
+4. **Throttle is the responder's.** mitmproxy streams through callables that cannot wait, so a pacing inside it would stop every connection; the responder sees the bytes of the connection and owns the pacing, and the proxy asks for it per request: the rate holds for the response to the request the rule matched, the next request sets its own (none when no throttle rule matches it). On a multiplexed HTTP/2 connection the streams share it.
+5. **An abort is a reset made by the responder.** The proxy closing its side would reach the device as an orderly end; the report of the exchange is made before the abort, because the handling of the flow ends with the connection.
+6. **The expectation of an interception case is `any`.** A device that trusts the test CA completes the handshake and one that does not rejects the certificate: both are what the firmware is, not a failure. The case makes the check `tls_accepted` meaningful for a development firmware (it must trust the CA) and `tls_rejected` for a production one.
+7. **The proxy reports its handshakes to the responder's endpoint.** One log, one event type and the same checks; the API counts a connection once (the responder's report). A new endpoint for the same data would have needed a second source for the checks.
+8. **The key log is given to the gateway, not read from a file.** A file in a volume would need a second place the API reads from, and the attribution to a device (a capture of device A must not hold the secrets of device B's connections) is only possible in the addon, which knows the connection. The batches are small and go over the link the addon has anyway.
+9. **No capture, no log.** The gateway does not store secrets that decrypt nothing; the cost is that a capture started after a connection began cannot decrypt it, which it could not anyway.
+10. **The log of the exchanges is in memory.** Like the DNS log and the handshake log: it is for a test in progress; the report of a run keeps what it needs (the counters and the events). A run's check on HTTP exchanges is not part of M22 (the scope names the checks `tls_*` only).
+11. **Bodies are buffered.** mitmproxy reads a body whole to change it; bodies of a size that matters for a device (firmware images) pass, at the cost of memory in the proxy's container. Streaming large bodies (`stream_large_bodies`) would make `response_body_replace` skip them silently, so it is not set.
+12. **The proxy is optional and says so.** Its absence is a health state, `proxy_unavailable` reports and a reset: never a silent pass-through, which would let a device reach a server that a case meant to be between.
+13. **Python only here.** `sidecars/tls-proxy` is the only Python of the project, as plan §3.1 says; the rules are a pure module so that their tests need no mitmproxy, and the rest of the tests start the real one.
+
+### Tests
+
+Level 0, all run here (the tests that need mitmproxy run with an interpreter that has it: `CHAOSGW_MITM_PYTHON`, `/opt/mitm-venv/bin/python` in the testbed image or the one beside a `mitmdump` on the `PATH`; without one they are skipped, and `CHAOSGW_REQUIRE_MITMPROXY=1`, which the level 0 job of CI sets, turns the skip into a failure):
+
+- `tlsresponder/mitm_test.go` runs the real mitmproxy with the addon, the real responder, a fake API (this test) and a Go client that trusts the test CA: modified responses (status, block, the headers and the body, the requests a rule answers do not reach the server), delays (timed, added up, before a terminal action), connection reuse over HTTP/1.1 and HTTP/2
+  (one hand-over, one handshake, an exchange each), the key log (every line of the device's own log is in what the proxy gave, and more), `keylog: false`, a device that does not trust the CA, throttle (paced and then not paced), abort (a reset), a connection that is no HTTP (counted, aborted by a host rule), WebSocket (messages counted, a handshake blocked),
+  plain HTTP on a port of the case, a new test CA (the launcher restarts mitmproxy), a server that is down, a connection without a server name.
+- `tlsresponder/intercept_test.go` with a fake proxy: the CONNECT and its headers, the replay of the first bytes, a connection that is no TLS handed over in one piece, no proxy / a proxy that refuses / one that is not configured / a server that is down, a connection the gateway would not forward, silence, reset on removal, the control interface (pacing, abort, bad requests, ended connections), nothing kept after a connection ends. `ca_test.go`: the regeneration, the pair check, the watcher between the two writes.
+- `sidecars/tls-proxy/tests` (run by `tlsresponder.TestThePythonTestsOfTheSidecarPass` and with `python3 -m unittest discover -s tests -t .`): durations, bit rates, host patterns, the decision for a request and for a stream, the changes, `Alt-Svc`, the classification of mitmproxy's failure text.
+- `compiler/tls_test.go` (the selection and the drop of QUIC, the option off, the destination, the transaction is accepted by nft's parser: `scenarioIntercept`), `domain` (the validation of the rules: the limits, a method, a rate; every action with its field; the profile part), `engine/tls_test.go` (the snapshot, the kernel's chain, the profile, passthrough, `explain`),
+  `run/checks_tls_test.go` (the interception step), `api/intercept_test.go` (the configuration for the proxy and the health, the decision and passthrough, the handshakes as events and their counting, the log with its filters and pages, the event of a rule, validation and the service scope, the CA regeneration, the key log: which captures take it, the scope `full`, a capture that ended; **the key log decrypts the capture of a run, read with tshark**),
+  `capturemgr/keylog_test.go` (which clients a scope covers, the log and the flags), `executor/hardening_test.go` (the container, the addresses the responder and the proxy share, the image's virtualenv, the one mitmproxy version), `tools/ciconfig` (the version in three places, every test of the level 1 lists exists). Web: `lib/faults.test.ts` (the chips of an interception case).
+
+Level 1 (written, vetted with `-tags testbed`, run by CI with `$M22_LEVEL1`, not run here: no KVM, no namespaces): `api/e2e_intercept_test.go`, listed in `.github/level1-tests.env`: modified responses, delays and a reused connection through the real mitmproxy in the service namespace seen by `curl` from a client of the testbed network and in `GET /intercept/flows`;
+`block_quic` on UDP 443 (dropped for the client of the case, not for another client or port, back when the case goes or turns it off); the checks `tls_accepted` and `tls_rejected` of runs with an interception step; the key log with a capture of the real executor read by tshark; the reset when the proxy is not there. The level 0 tests with the real mitmproxy are in the same list (`M22_LEVEL1`) so that a testbed image without mitmproxy cannot skip them.
+The kernel side (the drop of UDP 443, the hand-over inside the namespace, the proxy's connection through `svc0` and the masquerade) is verified by CI only until its run is green.
+
+### Acceptance map (plan M22 "Tests")
+
+| Plan M22 | Test |
+|---|---|
+| A client trusting the CA sees the modified responses | `TestADeviceTrustingTheTestCASeesTheModifiedResponses` (level 0, real mitmproxy), `TestADeviceTrustingTheTestCASeesTheModifiedResponsesAndDelaysOnTheRealKernel` (level 1) |
+| Timing of delayed responses | `TestADelayedResponseArrivesAfterTheDelay`, the `time_total` of the level 1 test |
+| QUIC fallback | `TestBlockQUICDropsUDP443OfTheClientsOfTheCaseOnTheRealKernel` (the drop that forces the fallback), `TestAnInterceptionCaseSelectsItsConnectionsAndDropsQUICOfTheSameClients`, `TestBlockQUICIsOffWhenTheCaseSaysSoAndForTheOtherCases` (the rule), the `Alt-Svc` test in `test_rules.py` |
+| Connection reuse across requests | `TestConnectionReuseAcrossRequestsIsOneHandoverAndManyExchanges` (HTTP/1.1 and HTTP/2), the `num_connects` of the level 1 test |
+| The key log decrypts the run's capture | `TestTheKeyLogDecryptsTheCaptureOfARun` (tshark, level 0), `TestTheKeyLogDecryptsTheCaptureOfARealConnectionOnTheRealKernel` (level 1), `TestTheKeyLogHoldsTheSecretsOfTheDevicesConnection` (the proxy's lines against the device's own) |
+| Scope: mitmproxy sidecar management and control from the core | the launcher and `deploy/compose.tlsproxy.yaml` (`TestTLSProxyContainerHardeningProfile`), `GET /internal/tls/config?consumer=proxy`, the health component `tls_proxy`, the control interface (`TestTheControlInterface...`) |
+| Scope: test CA management (generate, download) | `TestTheTestCAIsReplacedOnRequestAndNothingElseOfTheCAsChanges`, `TestTheTestCAIsReplacedAndTheUnknownCAIsNot`, `TestANewTestCAIsUsedByTheProxyAfterItsFilesChange`; the download is M21's |
+| Scope: HTTP(S)/WebSocket inspection | `TestTheExchangesOfTheProxyAreLoggedListedAndAnnouncedWhenARuleActs`, `TestAWebSocketIsInspectedAndItsHandshakeCanBeBlocked`, `TestAConnectionThatIsNoHTTPIsCountedAndAbortedByAHostRule` |
+| Scope: URL blocking, error codes, delay/throttle, modification, connection abort | the tests of the first row, `TestAThrottleRulePacesTheResponseOfTheRequestItMatches`, `TestAnAbortRuleResetsTheConnectionOfTheDevice` |
+| Scope: key log for captures | `TestTheKeyLogGoesToTheRunningCapturesThatCoverTheDeviceOnly`, `TestACaptureKeepsTheKeyLogItWasGivenWhileItRan` |
+| Scope: block-UDP-443 option | the compiler tests of the QUIC row, the level 1 test |
+| Scope: interception scenario step type | `TestAnInterceptionStepWritesTheOverlayWithItsRulesAndCountsConnections`, `TestAnInterceptionStepOfARunIsSeenByTheTLSChecksOnTheRealKernel` |
 
 ## Generated code
 
@@ -5836,7 +5952,7 @@ their error, and a failure of the tool repeats the three transfers once after th
 
 Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
 tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of packet captures (M17: the AF_PACKET sockets
-need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of the DNS faults and hostname selectors (M20, with the executor's netlink connection), those of the TLS responder (M21), those of Kea's packet socket after a link flap
+need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of the DNS faults and hostname selectors (M20, with the executor's netlink connection), those of the TLS responder (M21), those of the interception proxy (M22, with the real mitmproxy, which the level 0 job installs too and requires), those of Kea's packet socket after a link flap
 (issue #64), the tests against the real Kea (I64-05) and those of the observed state of a device (the acceptance of
 issue #79, issue #92) must each pass, so one that is renamed, skips or is no
 longer built fails the job.

@@ -436,6 +436,8 @@ Certificates are generated for the SNI in the ClientHello. Without SNI, the resp
 
 **Limits:** QUIC/HTTP-3 is not intercepted. The option "block UDP 443" forces most clients back to TCP. Certificate pinning makes interception impossible by design; it then shows up as the expected rejection.
 
+**As built (M22):** the interception case is decided like every other TLS case: the kernel redirects the selected new connections into the service namespace, the TLS responder reads the ClientHello, asks the API for the decision and, for the case `intercept`, hands the connection to the proxy (mitmproxy in `regular` mode, in its own container in the same namespace) with a `CONNECT` request that carries the destination and who the device is; the proxy terminates the device's TLS with a certificate of the test CA, opens its own connection to the server (through the gateway's service path, so, as for a passed-through connection, only if the gateway would have forwarded it, and to the uplink only, P5-M21-02) and applies the HTTP rules in the order written (`block`, `status`, `delay`, `throttle`, `abort`, `modify`). Throttle and abort are carried out by the responder, which holds the connection. The rules that name only a host act on a connection that is no HTTP, whose bytes are counted. What the device did with the proxy's certificate is a handshake report with the case `intercept`, so the events and the checks `tls_accepted` and `tls_rejected` work as for the certificate cases; every exchange is a log entry (`GET /intercept/flows`). The test CA is replaced with `POST /tls/ca/regenerate`. The step type of the interception is the step `tls` with the case `intercept`. `docs/development.md` ("TLS interception and HTTP faults (M22)") has the details and the decisions.
+
 ## 2.9 Profiles
 
 Named fault sets, built-in and user-defined:
@@ -498,6 +500,7 @@ The scenario format is defined normatively as a JSON Schema inside the OpenAPI s
 - PCAP/PCAPNG, ring buffer, size and time limits, disk quota, automatic cleanup.
 - Download (also while the capture is running).
 - TLS key log attached when the proxy was involved.
+  - As built (M22): the proxy gives the gateway the TLS secrets of its connections, attributed to the device; every running capture whose scope covers the device keeps them in `keylog.txt` and is marked `keylog` and `sensitive` (the download of the key log and of such a capture needs the scope `full`). Nothing is kept when no capture runs, and a connection that began before the capture cannot be decrypted by it (its handshake is not in the file). The log holds the secrets of both sides of the proxy: the device's decrypt a capture of the device or the network, the proxy's own connection to the server decrypts a capture of the uplink.
 - Captures are attached to runs automatically when the scenario says so.
 - As built (M17): the capture engine is plain Go (`internal/capture`, AF_PACKET sockets with a classic BPF filter built from the selector, pcap and pcapng writers), run inside the executor, so the image needs no libpcap or `tcpdump`; a capture lives as long as the connection of the API to the executor that opened it; the quota is `settings.retention.captures_quota`, and the oldest stopped captures are deleted first. `docs/development.md` ("Packet captures (M17)") has the details and the decisions.
 
@@ -1041,7 +1044,7 @@ chaos-gateway/
   clients/            generated TypeScript and Python clients
   deploy/             container image (multi-arch), compose files, host setup
   docs/
-  sidecars/tls-proxy/ mitmproxy addon (later)
+  sidecars/tls-proxy/ mitmproxy addon and launcher (M22)
   profiles/  scenarios/  capture/  tlsresponder/ (M21)
 ```
 
@@ -1057,7 +1060,7 @@ chaos-gateway/
 | `dns`, `tls` | `NET_BIND_SERVICE`, joined to `svcns` (`network_mode: service:svcns`), unprivileged user | bind port 53 and the redirect ports inside the service namespace |
 | `kea` | `NET_RAW`, `NET_BIND_SERVICE` | DHCP on raw sockets |
 | `bird` | `NET_ADMIN`, `NET_RAW`, `NET_BIND_SERVICE` | writes routes into Chaos Gateway's tables; OSPF needs raw sockets |
-| `tls-proxy` (optional) | `NET_BIND_SERVICE`, joined to `svcns` | mitmproxy, only when interception is used |
+| `tls-proxy` (optional) | none (its ports are above 1024: every capability is dropped), joined to `svcns` | mitmproxy, only when interception is used; as built (M22) it listens on the loopback of the service namespace, where the TLS responder hands it the connections |
 
 - **Host setup** (a script shipped with the image, run once): installs Docker Engine if missing, loads the kernel modules at boot (`/etc/modules-load.d/chaos-gateway.conf`), sets `net.ipv4.ip_forward=1`, and prints the netplan changes for the test interfaces. For each test interface it names (issue #64, I64-04) it writes the systemd-networkd rule that keeps networkd off it (`/etc/systemd/network/10-chaosgw-<interface>.network`, `Unmanaged=yes`) and checks that no netplan entry, NetworkManager connection or systemd-networkd file configures it; it removes the rule again on request. It never touches the uplink or management configuration, and refuses a test interface with the default route, an IPv4 address or an SSH session of the host (the one it runs in included; `sudo` drops `$SSH_CONNECTION`, so it also asks `ss` for sshd's connections).
 - Docker itself is always present: its FORWARD DROP policy is handled through `DOCKER-USER` (§3.4). Chaos Gateway's networks must not overlap Docker's own address pools.

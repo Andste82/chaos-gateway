@@ -1,4 +1,4 @@
-# the image build needs the Go sources, the web app's sources and the host-setup script
+# the image build needs the Go sources, the web app's sources, the host-setup script and the interception proxy's addon
 *
 !go.mod
 !go.sum
@@ -15,3 +15,6 @@ web/playwright-report/
 !deploy/host-setup.sh
 !deploy/chaosgw-kea-hook
 !deploy/kea-start.sh
+!sidecars/tls-proxy/entry.py
+!sidecars/tls-proxy/chaosgw_tlsproxy/
+**/__pycache__/

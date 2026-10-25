@@ -42,12 +42,21 @@ FROM ubuntu:26.04@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a
 # behaviour underneath the gateway; the version check below fails the build on a mismatch.
 ARG KEA_VERSION=3.0.3-1
 ARG BIRD_VERSION=2.18-1
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+# the interception proxy (plan §2.8, §3.7, M22): mitmproxy in a virtualenv of its own, pinned to the version the tests of the
+# sidecar run against (.devcontainer/Dockerfile has the same pin); the Python of the core is none, it is the sidecar's alone
+ARG MITMPROXY_VERSION=12.2.3
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 python3-venv \
         iproute2 nftables iptables ethtool procps wireguard-tools "bird2=${BIRD_VERSION}" conntrack \
         "kea-dhcp4-server=${KEA_VERSION}" \
     && rm -rf /var/lib/apt/lists/* \
     && kea-dhcp4 -V | head -1 | grep -qF "${KEA_VERSION%%-*}" \
     && bird --version 2>&1 | grep -qF "${BIRD_VERSION%%-*}"
+RUN python3 -m venv /opt/chaosgw/tls-proxy/venv \
+    && /opt/chaosgw/tls-proxy/venv/bin/pip install --no-cache-dir "mitmproxy==${MITMPROXY_VERSION}" \
+    && /opt/chaosgw/tls-proxy/venv/bin/mitmdump --version | head -1 | grep -qF "${MITMPROXY_VERSION}"
+# the addon and its launcher (the container tls-proxy runs `python -m chaosgw_tlsproxy.launcher`, deploy/compose.tlsproxy.yaml)
+COPY sidecars/tls-proxy/entry.py /opt/chaosgw/tls-proxy/entry.py
+COPY sidecars/tls-proxy/chaosgw_tlsproxy /opt/chaosgw/tls-proxy/chaosgw_tlsproxy
 COPY --from=build /out/chaosgw /out/chaosctl /usr/local/bin/
 # run on the host, not in the container: `docker run --rm --entrypoint cat <image> /usr/local/share/chaosgw/host-setup.sh | sudo sh`
 COPY deploy/host-setup.sh /usr/local/share/chaosgw/host-setup.sh

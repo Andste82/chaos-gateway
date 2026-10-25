@@ -60,6 +60,15 @@ describe('fault chips', () => {
     expect(overlayChips({ ...base, tls: { case: 'handshake_reset', destination: { hostname: '*.example.com' } } } as Overlay)).toEqual([
       'TLS handshake reset · *.example.com',
     ]);
+    // the interception says what its settings change
+    expect(overlayChips({ ...base, tls: { case: 'intercept' } } as Overlay)).toEqual(['TLS intercept']);
+    expect(
+      overlayChips({
+        ...base,
+        tls: { case: 'intercept', ports: [443], intercept: { block_quic: false, keylog: false, http_rules: [{ action: 'block' }, { action: 'delay', delay: '1s' }] } },
+      } as Overlay),
+    ).toEqual(['TLS intercept · 443 · 2 HTTP rules · QUIC allowed · no key log']);
+    expect(overlayChips({ ...base, tls: { case: 'intercept', intercept: { http_rules: [{ action: 'abort' }] } } } as Overlay)).toEqual(['TLS intercept · 1 HTTP rule']);
     expect(overlayChips({ ...base } as Overlay)).toEqual(['TLS case']);
   });
 });

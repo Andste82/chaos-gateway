@@ -21,7 +21,7 @@ interface Line {
   link?: string;
 }
 
-const faultTypes = new Set(['overlay_created', 'overlay_updated', 'overlay_expired', 'dns_fault_triggered', 'tls_handshake']);
+const faultTypes = new Set(['overlay_created', 'overlay_updated', 'overlay_expired', 'dns_fault_triggered', 'tls_handshake', 'http_fault_triggered']);
 const blockTypes = new Set(['apply_failed', 'revision_rolled_back', 'safe_mode', 'network_degraded']);
 
 const lines = computed<Line[]>(() => {

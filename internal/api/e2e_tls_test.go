@@ -126,9 +126,13 @@ type tlsBed struct {
 	publicOnly string
 	mu         sync.Mutex
 	seen       []map[string]any
+	// base is the API as the service namespace reaches it, tokenFile the service token, ctx lives as long as the responder
+	base, tokenFile string
+	ctx             context.Context
 }
 
-func newTLSBed(t *testing.T) *tlsBed {
+// newTLSBed makes the gateway of the bed; mods change the options of the responder (M22 gives it the address of the proxy).
+func newTLSBed(t *testing.T, mods ...func(o *tlsresponder.Options, serviceNS string)) *tlsBed {
 	t.Helper()
 	ns := fmt.Sprintf("svc%06x", mrand.Intn(1<<24))
 	t.Cleanup(func() { _ = exec.Command("ip", "netns", "delete", ns).Run() })
@@ -154,7 +158,7 @@ func newTLSBed(t *testing.T) *tlsBed {
 		t.Fatal(err)
 	}
 
-	b := &tlsBed{g: g, top: top, admin: g.token, ns: ns}
+	b := &tlsBed{g: g, top: top, admin: g.token, ns: ns, base: base, tokenFile: token}
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -189,8 +193,13 @@ func newTLSBed(t *testing.T) *tlsBed {
 		t.Fatal(err)
 	}
 	c := &tlsresponder.APIClient{Base: base, TokenFile: token, Dial: testbed.DialerIn(ns), Wait: 3 * time.Second}
-	srv := tlsresponder.New(tlsresponder.Options{Log: testLog(t), Issuer: iss, Resolver: c, Sink: c, Dial: testbed.DialerIn(ns), StallFor: 20 * time.Second})
+	opts := tlsresponder.Options{Log: testLog(t), Issuer: iss, Resolver: c, Sink: c, Dial: testbed.DialerIn(ns), StallFor: 20 * time.Second}
+	for _, mod := range mods {
+		mod(&opts, ns)
+	}
+	srv := tlsresponder.New(opts)
 	ctx, cancel := context.WithCancel(context.Background())
+	b.ctx = ctx
 	done := make(chan struct{}, 3)
 	go func() { srv.Follow(ctx, c, testLog(t)); done <- struct{}{} }()
 	go func() { srv.RunReports(ctx); done <- struct{}{} }()

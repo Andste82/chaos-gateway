@@ -622,6 +622,26 @@ type fakeDHCP struct {
 	mu     sync.Mutex
 	leases []kea.Lease
 	err    error
+	// deleted are the calls of DeleteLeases: the subnet and the MAC addresses
+	deleted []fakeDeletion
+}
+
+type fakeDeletion struct {
+	subnet int
+	macs   []string
+}
+
+func (f *fakeDHCP) DeleteLeases(_ context.Context, subnet int, macs []string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleted = append(f.deleted, fakeDeletion{subnet, macs})
+	return len(f.leases), nil
+}
+
+func (f *fakeDHCP) deletions() []fakeDeletion {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeDeletion(nil), f.deleted...)
 }
 
 func (f *fakeDHCP) Apply(context.Context, *compiler.KeaTarget) error {

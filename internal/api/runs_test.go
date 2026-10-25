@@ -351,12 +351,6 @@ func TestAStoredScenarioIsListedFetchedAsYAMLAndRunByName(t *testing.T) {
 
 func TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit(t *testing.T) {
 	g, _ := readyRuns(t)
-	// the TLS checks and the TLS step are in this build (M21) with the case intercept (M22): the step that has no milestone yet
-	// is the DHCP action
-	dhcpStep := inlineRun("t", iotTarget, step("a", "0s", "dhcp", map[string]any{"action": "silence"}))
-	if r := g.postRun(dhcpStep, ""); r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(string(r.Body), "M23") {
-		t.Errorf("a dhcp step: %d %s", r.Status, r.Body)
-	}
 	bad := inlineRun("b", map[string]any{"device": "nobody"}, step("a", "0s", "fault", map[string]any{"latency": "10ms"}))
 	r := g.postRun(bad, "")
 	if r.Status != 422 || r.code(t) != "validation_failed" || !strings.Contains(string(r.Body), "unknown_reference") {
@@ -384,7 +378,7 @@ func TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit(t *testing.
 	}
 	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
 	steps := strings.Join(toStrings(caps["step_types"].([]any)), ",")
-	if steps != "profile,fault,rule,dns,tls,wireguard,capture,wait,remove,restore" ||
+	if steps != "profile,fault,rule,dns,tls,dhcp,wireguard,capture,wait,remove,restore" ||
 		strings.Join(toStrings(caps["check_types"].([]any)), ",") != "reconnected,no_connection,traffic_seen,traffic_not_seen,dns_query_seen,tls_rejected,tls_accepted" {
 		t.Errorf("capabilities %v", caps)
 	}

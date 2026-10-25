@@ -349,6 +349,23 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 			ov.OverriddenBy = refsOrNil(oc.overriddenBy(domain.LayerOverlay, ov.Id.String(), ov.Target, ov.Tls.Destination, &tcp, &ports, map[string]bool{domain.FamilyTLS: true}, "", sampleName(deref(ov.Tls.Sni))))
 		}
 	}
+	if ov.Kind == model.OverlayKindDhcp {
+		// a DHCP action competes with the other actions of its scope and of the scopes inside it; it is `effective` while
+		// the DHCP server is configured with it (compiler.compileDHCPActions), `overridden` while a newer action of its
+		// scope wins, and `disabled` while nothing could use it: its network has DHCP off, or its device cannot be reached
+		// by the DHCP server (the compiler's warning says which)
+		st := oc.effectOf("overlay", ov.Id.String(), domain.FamilyDHCP)
+		if overridden(st) {
+			// the newer action of its scope: known from the overlays, not from the traffic of the devices, since a device that
+			// was not seen yet is a target as well
+			if w, ok := oc.dhcpWinner(ov.Target); ok && !strings.EqualFold(w.ID, ov.Id.String()) {
+				ov.OverriddenBy = refsOrNil([]model.FaultRef{w.Ref("")})
+			} else {
+				st = model.EffectStateDisabled
+			}
+		}
+		ov.State = &st
+	}
 	if ov.Kind == model.OverlayKindRule {
 		return oc.overlayRule(ov)
 	}
@@ -356,6 +373,14 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 		return oc.overlayWireGuard(ov)
 	}
 	return ov
+}
+
+// dhcpWinner is the DHCP action that wins the scope of a target.
+func (oc overlayContext) dhcpWinner(target *model.Scope) (domain.Candidate, bool) {
+	if target == nil || oc.world == nil {
+		return domain.Candidate{}, false
+	}
+	return oc.world.DHCPWinner(*target)
 }
 
 // overlayWireGuard completes a WireGuard action: effective while it changes something in the kernel (the peer is

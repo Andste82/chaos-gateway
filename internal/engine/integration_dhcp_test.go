@@ -251,7 +251,7 @@ func (b *dhcpBed) udhcpc(ns *testbed.Namespace, tries int) (logFile string) {
 	script := filepath.Join(dir, "udhcpc.sh")
 	// The line is logged after the address is set: waitBound returns on it, and a test that then routes via the gateway
 	// needs the address on the interface (the emulated weekly run once lost that race: "Nexthop has invalid gateway").
-	body := "#!/bin/sh\ncase \"$1\" in\n  bound|renew) ip addr flush dev $interface; ip addr add $ip/24 dev $interface ;;\n  deconfig) ip addr flush dev $interface ;;\nesac\necho \"$1 ip=$ip router=$router dns=$dns\" >> " + logFile + "\n"
+	body := "#!/bin/sh\ncase \"$1\" in\n  bound) ip addr flush dev $interface; ip addr add $ip/24 dev $interface ;;\n  renew) ;;\n  deconfig) ip addr flush dev $interface ;;\nesac\necho \"$1 ip=$ip router=$router dns=$dns lease=$lease domain=$domain\" >> " + logFile + "\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		b.t.Fatal(err)
 	}

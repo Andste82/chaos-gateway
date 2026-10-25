@@ -35,6 +35,9 @@ type fakeDHCP struct {
 	err     error
 	testErr error
 	leases  []kea.Lease
+	// deleted records the deletions of leases (DeleteLeases); deleteErr fails them
+	deleted   []deletion
+	deleteErr error
 	// block, when set, holds Reopen until it is closed (a server that does not answer)
 	block chan struct{}
 }
@@ -68,6 +71,30 @@ func (f *fakeDHCP) Leases(context.Context) ([]kea.Lease, error) {
 	defer f.mu.Unlock()
 	return append([]kea.Lease(nil), f.leases...), nil
 }
+
+// deletion is a call of DeleteLeases.
+type deletion struct {
+	subnet int
+	macs   []string
+}
+
+func (f *fakeDHCP) DeleteLeases(_ context.Context, subnet int, macs []string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.deleteErr != nil {
+		return 0, f.deleteErr
+	}
+	f.deleted = append(f.deleted, deletion{subnet, macs})
+	return len(f.leases), nil
+}
+
+func (f *fakeDHCP) deletions() []deletion {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]deletion(nil), f.deleted...)
+}
+
+func (f *fakeDHCP) setDeleteErr(err error) { f.mu.Lock(); f.deleteErr = err; f.mu.Unlock() }
 
 func (f *fakeDHCP) Test(context.Context, *compiler.KeaTarget) error {
 	f.mu.Lock()

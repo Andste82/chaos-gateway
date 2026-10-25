@@ -45,6 +45,21 @@ func (w *World) DHCPActions() DHCPActions {
 	return out
 }
 
+// DHCPWinner is the action that wins the scope of an overlay's target (the newest of its scope): the overlay's own when it
+// wins itself. The second result is false for a target that is neither a device nor a network.
+func (w *World) DHCPWinner(target model.Scope) (Candidate, bool) {
+	acts := w.DHCPActions()
+	switch {
+	case target.Device != nil:
+		c, ok := acts.Devices[lower(*target.Device)]
+		return c, ok
+	case target.Network != nil:
+		c, ok := acts.Networks[lower(*target.Network)]
+		return c, ok
+	}
+	return Candidate{}, false
+}
+
 // DHCPDeletions are the overlays of the action delete_lease, in the order they were written: each acts once, when
 // it is written, and stays in the list until its time is up.
 func (w *World) DHCPDeletions() []model.Overlay {

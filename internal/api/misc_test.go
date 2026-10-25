@@ -226,14 +226,14 @@ func TestSystemEndpoints(t *testing.T) {
 	g := ready(t)
 	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
 	feats := fmt.Sprint(caps["features"])
-	for _, f := range []string{"networks.wireguard", "routing.bird", "networks.lan", "tls.responder", "tls.cases"} {
+	for _, f := range []string{"networks.wireguard", "routing.bird", "networks.lan", "tls.responder", "tls.cases", "dhcp.actions"} {
 		if !strings.Contains(feats, f) {
 			t.Errorf("capability %s is missing: %v", f, feats)
 		}
 	}
 	// M8a: faults of the impairment family, M11: profile activations, M10: the mtu and tunnel families and the WireGuard actions, M9: access
-	// rules, M20: DNS faults, M21: TLS cases; the other kinds follow with their milestones
-	if fmt.Sprint(caps["overlay_kinds"]) != "[fault profile rule dns tls wireguard]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu dns tls tunnel]" || caps["version"] != "test" {
+	// rules, M20: DNS faults, M21: TLS cases, M23: DHCP actions
+	if fmt.Sprint(caps["overlay_kinds"]) != "[fault profile rule dns tls dhcp wireguard]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu dns tls dhcp tunnel]" || caps["version"] != "test" {
 		t.Errorf("%v", caps)
 	}
 	// the limits of plan §3.3 (P2-AUDIT-15): 4095 fault ids, and the class limit of the architecture

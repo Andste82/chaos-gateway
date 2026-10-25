@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -28,6 +29,9 @@ type DHCP interface {
 	// Test checks a configuration with Kea's own config-test, without applying it, so the preview can
 	// show a rejection (a managed option code, bad option data) before an apply would hit it.
 	Test(ctx context.Context, t *compiler.KeaTarget) error
+	// DeleteLeases deletes the leases of a subnet, or only those of the clients with these MAC addresses (the DHCP
+	// action delete_lease), and returns how many it deleted.
+	DeleteLeases(ctx context.Context, subnetID int, macs []string) (int, error)
 	// Reopen is Apply that sends the configuration even when the server runs it already: Kea detects
 	// its interfaces and opens its sockets only while it is configured (#64).
 	Reopen(ctx context.Context, t *compiler.KeaTarget) error
@@ -136,6 +140,11 @@ func (k *KeaDHCP) Test(ctx context.Context, t *compiler.KeaTarget) error {
 	return k.Client.TestConfig(ctx, doc)
 }
 
+// DeleteLeases deletes leases of one subnet on the running server.
+func (k *KeaDHCP) DeleteLeases(ctx context.Context, subnetID int, macs []string) (int, error) {
+	return k.Client.DeleteLeases(ctx, subnetID, macs)
+}
+
 // dhcpRetry is how often a configuration that Kea did not take is sent again.
 const dhcpRetry = 5 * time.Second
 
@@ -172,8 +181,18 @@ func (e *Engine) dhcpDescribe(err error) string {
 	if err == nil {
 		return ""
 	}
+	var de *leaseDeletionError
+	if errors.As(err, &de) {
+		return fmt.Sprintf("the DHCP server could not delete leases: %v", de.err)
+	}
 	return fmt.Sprintf("the DHCP server could not be configured: %v", err)
 }
+
+// leaseDeletionError is a failed deletion of leases, which is not a failure of the configuration.
+type leaseDeletionError struct{ err error }
+
+func (e *leaseDeletionError) Error() string { return e.err.Error() }
+func (e *leaseDeletionError) Unwrap() error { return e.err }
 
 func parseUUID(s string) (model.Uuid, error) { return uuid.Parse(s) }
 
@@ -195,6 +214,8 @@ type dhcpState struct {
 	came      map[string]bool
 	reopen    chan struct{}
 	scheduled int
+	// deleted are the keys of the lease deletions that were done (compiler.LeaseDeletion): each is done once
+	deleted map[string]bool
 }
 
 func (d *dhcpState) set(t *compiler.KeaTarget, err string) {
@@ -242,6 +263,9 @@ func (e *Engine) syncDHCP(ctx context.Context, t *compiler.Target, after *apply.
 		err = e.cfg.DHCP.Reopen(ctx, t.Kea)
 	} else {
 		err = e.cfg.DHCP.Apply(ctx, t.Kea)
+	}
+	if err == nil {
+		err = e.deleteLeases(ctx, t.Kea)
 	}
 	msg := e.dhcpDescribe(err)
 	e.dhcp.set(t.Kea, msg)
@@ -368,6 +392,9 @@ func (e *Engine) resendDHCP(ctx context.Context, reopen bool) (msg, had string, 
 		err = e.cfg.DHCP.Reopen(ctx, t)
 	} else {
 		err = e.cfg.DHCP.Apply(ctx, t)
+	}
+	if err == nil {
+		err = e.deleteLeases(ctx, t)
 	}
 	msg = e.dhcpDescribe(err)
 	e.dhcp.mu.Lock()

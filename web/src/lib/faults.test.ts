@@ -35,6 +35,18 @@ describe('fault chips', () => {
     expect(overlayChips({ ...base, kind: 'dhcp', dhcp: { action: 'silence' } } as Overlay)).toEqual(['DHCP silence']);
   });
 
+  it('say what a DHCP action does', () => {
+    const base = { id: 'o', owner: { type: 'user', id: 'admin' }, created_at: '', updated_at: '', generation: 1, kind: 'dhcp' } as const;
+    expect(overlayChips({ ...base, dhcp: { action: 'short_lease', lease_time: '7s' } } as Overlay)).toEqual(['DHCP short lease 7s']);
+    expect(overlayChips({ ...base, dhcp: { action: 'delete_lease' } } as Overlay)).toEqual(['DHCP delete lease']);
+    expect(overlayChips({ ...base, dhcp: { action: 'force_new_ip', ip: '10.10.0.200' } } as Overlay)).toEqual(['DHCP new IP 10.10.0.200']);
+    expect(overlayChips({ ...base, dhcp: { action: 'set_options', options: { router: '10.10.0.9', dns_servers: ['1.1.1.1'], custom: [{ code: 224, value: '0a' }] } } } as Overlay)).toEqual([
+      'DHCP options · router, DNS, option 224',
+    ]);
+    expect(overlayChips({ ...base, dhcp: { action: 'silence' } } as Overlay)).toEqual(['DHCP silence']);
+    expect(overlayChips({ ...base } as Overlay)).toEqual(['DHCP action']);
+  });
+
   it('say what a DNS fault does and for which names', () => {
     const base = { id: 'o', owner: { type: 'user', id: 'admin' }, created_at: '', updated_at: '', generation: 1, kind: 'dns' } as const;
     expect(overlayChips({ ...base, dns: { action: 'nxdomain' } } as Overlay)).toEqual(['DNS nxdomain']);

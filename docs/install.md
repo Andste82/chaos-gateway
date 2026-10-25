@@ -128,7 +128,11 @@ gateway's addon, in the service namespace behind the TLS responder. It is not in
 a device that trusts the test CA. Without it the other cases work, and a connection that an interception case selects is
 reset (the health check lists the component `tls_proxy` as degraded while such a case is in force). The proxy checks the
 certificates of the servers it connects to against the bundle of mitmproxy: set `CHAOSGW_UPSTREAM_CA_FILE` (a CA file in a
-volume you mount into the container) for servers with a private CA, or `CHAOSGW_UPSTREAM_INSECURE=1` to verify nothing. The test
+volume you mount into the container) for servers with a private CA, or `CHAOSGW_UPSTREAM_INSECURE=1` to verify nothing. These
+two settings are the installation's default; a case can say otherwise for its own devices with `intercept.upstream`: `verify`
+(the bundle, whatever the installation says), `own_ca` (the CA file of the installation and no other CA; a case that asks for it
+where the installation has none is refused, with the reason in the log of the exchanges) or `insecure` (no check of the server's
+certificate). A server that is refused answers the device with a 502 page over the proxy's certificate. The test
 CA can be replaced (`POST /api/v1/tls/ca/regenerate`, scope `full`); every device that installed the old certificate then has to
 install the new one. Captures that run while a device talks through the proxy get the TLS secrets of its connections as a key log
 (`GET /api/v1/captures/{id}/download?part=keylog`, scope `full`): the capture and its key log together show the traffic in

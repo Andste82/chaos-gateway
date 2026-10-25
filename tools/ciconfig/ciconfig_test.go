@@ -177,3 +177,46 @@ func TestEveryTestOfTheLevel1ListsExists(t *testing.T) {
 		}
 	}
 }
+
+// The container of the interception proxy is started in CI (M22): the job builds the image, runs deploy/smoke-tlsproxy.sh with the tag it built, and the
+// script starts the compose file of the proxy (not a copy of it) and uses the interpreter and the paths the Dockerfile and the compose file give it.
+func TestTheInterceptionProxyContainerIsStartedByASmokeJob(t *testing.T) {
+	ci := read(t, ".github", "workflows", "ci.yml")
+	_, job, ok := strings.Cut(ci, "\n  tlsproxy-image:\n")
+	if !ok {
+		t.Fatal("ci.yml has no job tlsproxy-image")
+	}
+	if next := regexp.MustCompile(`\n  [a-z0-9-]+:\n`).FindStringIndex(job); next != nil {
+		job = job[:next[0]]
+	}
+	for _, want := range []string{"file: deploy/Dockerfile", "load: true", "tags: chaos-gateway:ci", "deploy/smoke-tlsproxy.sh", "CHAOSGW_VERSION: ci"} {
+		if !strings.Contains(job, want) {
+			t.Errorf("the job tlsproxy-image lacks %q", want)
+		}
+	}
+	script := read(t, "deploy", "smoke-tlsproxy.sh")
+	compose := read(t, "deploy", "compose.tlsproxy.yaml")
+	for _, want := range []string{"compose.tlsproxy.yaml", "9444", "/opt/chaosgw/tls-proxy/entry.py"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("deploy/smoke-tlsproxy.sh does not mention %q", want)
+		}
+	}
+	// the interpreter of the script is the virtualenv's, the one the Dockerfile makes and the compose file runs
+	for name, text := range map[string]string{"the Dockerfile": read(t, "deploy", "Dockerfile"), "the compose file": compose} {
+		if !strings.Contains(text, "/opt/chaosgw/tls-proxy/venv") {
+			t.Errorf("%s does not name the virtualenv of the proxy", name)
+		}
+	}
+	if !strings.Contains(script, "py=/opt/chaosgw/tls-proxy/venv/bin/python") {
+		t.Error("the smoke script does not use the virtualenv's interpreter")
+	}
+	// the two directories the compose file mounts are the two the script gives it
+	for _, dir := range []string{"/var/lib/chaosgw/service", "/var/lib/chaosgw/tlsca"} {
+		if !strings.Contains(compose, dir) || !strings.Contains(script, dir) {
+			t.Errorf("%s is not mounted by the compose file and replaced by the smoke script", dir)
+		}
+	}
+	if fi, err := os.Stat(filepath.Join("..", "..", "deploy", "smoke-tlsproxy.sh")); err != nil || fi.Mode()&0o111 == 0 {
+		t.Errorf("deploy/smoke-tlsproxy.sh is not executable: %v", err)
+	}
+}

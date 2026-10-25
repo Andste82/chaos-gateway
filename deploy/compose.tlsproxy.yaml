@@ -13,7 +13,8 @@
 # (the volume is the CAs' alone), and starts mitmproxy again when `POST /tls/ca/regenerate` replaces it. It needs no capability (its
 # ports are above 1024) and keeps its working files in a tmpfs. The certificates of the servers are verified against the bundle of
 # mitmproxy; `CHAOSGW_UPSTREAM_CA_FILE` names other CAs (a file in a volume you mount), `CHAOSGW_UPSTREAM_INSECURE=1` verifies
-# nothing (a lab with private servers).
+# nothing (a lab with private servers). Both are the default of the installation: a case says otherwise for its own devices with
+# `intercept.upstream` (`verify`: the bundle, `own_ca`: the file named here, `insecure`: no check).
 services:
   tls-proxy:
     image: chaos-gateway:${CHAOSGW_VERSION:-latest}
@@ -33,7 +34,8 @@ services:
     security_opt:
       - no-new-privileges:true
     tmpfs:
-      - /tmp:size=64m,mode=0700
+      # owned by the proxy's user: a tmpfs is root's unless it is told otherwise, and mitmproxy's configuration directory is made in it
+      - /tmp:size=64m,mode=0700,uid=65532,gid=65532
     volumes:
       # the token the proxy authenticates with and the API's certificate: nothing else of the service volume
       - type: volume

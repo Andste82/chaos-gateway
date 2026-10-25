@@ -2435,7 +2435,7 @@ found that no later milestone of the plan completes and that need a decision of 
 
 ## Phase 5 open items
 
-Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` (M20 to M23 so far). Items below are what the implementation found that no later milestone of the plan completes and that need a decision of the maintainer.
+Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` (M20 to M23a so far). Items below are what the implementation found that no later milestone of the plan completes and that need a decision of the maintainer.
 
 ### P5-M20-01 A hostname selector of a fault is tried in front of the lookup levels, not at its rank among them
 

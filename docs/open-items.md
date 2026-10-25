@@ -40,7 +40,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   [the remaining points](#phase-4-audit-result-of-the-round-and-remaining-points). The maintainer decided P4-AUDIT-14 to -16 on
   2026-10-19 (option (a) each), see [Phase 4 audit items for the maintainer](#phase-4-audit-items-for-the-maintainer). What the implementation could not settle and
   that no later milestone completes is under [Phase 4 open items](#phase-4-open-items) at the end of the file. P4-M19-01 (the Captures screen has no milestone) was decided on 2026-10-19: option (a), milestone M23a in Phase 5; every Phase 4 open item is closed.
-- **Phase 5** (M20–M23a, branch `phase-5`): not audited yet. The nine open items P5-M20-01 to P5-M23-01 were decided by the maintainer on 2026-10-25, see [Phase 5 open items](#phase-5-open-items) at the end of the file: seven closed (the forms and the interception UI became the milestones M23b and M23c; P5-M21-02 is implemented on the branch `phase-5b`, its level 1 test has not run in CI yet and M21 stays partial until it has), one decided and not implemented (P5-M22-03) and one waiting for H1 (P5-M22-02).
+- **Phase 5** (M20–M23a, branch `phase-5`): not audited yet. The nine open items P5-M20-01 to P5-M23-01 were decided by the maintainer on 2026-10-25, see [Phase 5 open items](#phase-5-open-items) at the end of the file: eight closed (the forms and the interception UI became the milestones M23b and M23c; P5-M21-02 is implemented on the branch `phase-5b`, its level 1 test has not run in CI yet and M21 stays partial until it has; P5-M22-03, the per-case field `upstream`, is implemented on the branch `phase-5b`, M22 stays partial for the same reason) and one waiting for H1 (P5-M22-02).
 
 ## Phase 1 audit result
 
@@ -2439,7 +2439,7 @@ found that no later milestone of the plan completes and that need a decision of 
 Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` (M20 to M23a so far; CI run 40196370688 on `6a0ec5e` green). Items below are what the implementation found that no later milestone of the plan completes and that needed a decision of the maintainer. The maintainer decided all nine on 2026-10-25:
 
 - **Closed:** P5-M20-01 (option (a), the approximation is accepted), P5-M20-02, P5-M21-01 and P5-M23-01 (option (b) each, the forms are the new milestone M23b), P5-M22-01 (option (b), the interception UI is the new milestone M23c), P5-M22-04 (option (a), left for V1) and P5-M21-02 (option (b), implemented: a passed-on connection reaches the test networks and the tunnels; the level 1 test has not run in CI yet, M21 stays partial until it has). The forms and the interception UI are not built yet; they are the work of M23b and M23c.
-- **Decided, not implemented:** P5-M22-03 (option (b), the per-case field `upstream`, "to do" in M22). M22 stays partial until the work is implemented.
+- **Closed, implemented on the branch `phase-5b`:** P5-M22-03 (option (b), the per-case field `upstream`; the level 1 tests and the new CI job have not run in CI yet, M22 stays partial until they have).
 - **Waiting for H1:** P5-M22-02 (the proxy is part of H1; the release notes say that it is not validated on ARM64 until the measurement exists).
 
 ### P5-M20-01 A hostname selector of a fault is tried in front of the lookup levels, not at its rank among them
@@ -2522,7 +2522,7 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` 
 
 ### P5-M22-03 The proxy verifies the servers' certificates against mitmproxy's bundle and the policy is an environment variable
 
-- Status: decided (2026-10-25): option (b); not implemented. A per-case field `upstream` of `InterceptSettings` (verify against the default bundle, verify against the own CA, do not verify), the two environment variables stay as the installation default. The work (the spec field in `api/openapi.yaml`, the proxy addon, tests, the form in the interception UI of M23c) is "to do" in the Scope and Tests of M22 in `docs/plan.md`; M22 stays partial until it is implemented
+- Status: closed (2026-10-25): decided by the maintainer, option (b), and implemented on the branch `phase-5b`: a per-case field `upstream` of `InterceptSettings` (`verify` against the default bundle, `own_ca` against the CA file of the installation, `insecure` for no check), the two environment variables stay as the installation default of a case without the field. The spec field in `api/openapi.yaml`, the proxy addon, the validation and the tests at every level are done (`docs/development.md`, "TLS interception and HTTP faults (M22)", the upstream and decision 14); the form of the field is part of the interception UI, M23c
 - Severity: minor
 - Reason: needs-decision. The proxy opens its own connection to the server a device meant and has to decide whether to verify its certificate. M22 verifies it (a proxy that accepts any certificate would show the device a working connection to a server whose certificate is wrong, and a test of the device's own checks would be a test of the proxy), against the bundle of mitmproxy (`certifi`); a server with a private CA fails the connection, which the proxy logs and reports as an exchange with the error `TLS to the server failed`. Two environment variables of the container change it for all cases at once: `CHAOSGW_UPSTREAM_CA_FILE` (other CAs) and `CHAOSGW_UPSTREAM_INSECURE=1` (verify nothing). The plan names neither. A per-case setting (`intercept.upstream_verify`, or the CAs of a network) would be a field of the API with a UI and a validation, and the choice between "verify", "verify against these CAs" and "do not verify" is a product decision.
 - Evidence: `deploy/compose.tlsproxy.yaml`, `sidecars/tls-proxy/chaosgw_tlsproxy/launcher.py` (`--upstream-ca-file`, `--upstream-insecure`), `docs/install.md`.
@@ -2532,6 +2532,7 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` 
 - Acceptance: the plan states where the policy is set, and a test pins that a server with a certificate that is not valid is refused by default.
 - Needs maintainer: no (decided 2026-10-25: option (b))
 - Effort: S
+- Implemented: the field and its text in `api/openapi.yaml`, `rules.upstream_plan` and `Addon.tls_start_server`, and the tests: `TestAServerWhoseCertificateIsNotValidIsRefusedByDefaultAndServedWithInsecure` pins the refusal by default and the pass with `insecure`, the tests of the other values and of the cases with different policies at once in `internal/tlsresponder/mitm_upstream_test.go`, the level 1 test `TestTheUpstreamPolicyOfACaseDecidesWhetherTheProxyAcceptsTheServersCertificateOnTheRealKernel`. One reading of the decision is recorded in decision 14: "the own CA" is the CA file of the installation (`CHAOSGW_UPSTREAM_CA_FILE`), not the test CA.
 
 ### P5-M22-04 Runs and their reports know nothing of the HTTP exchanges of the proxy
 

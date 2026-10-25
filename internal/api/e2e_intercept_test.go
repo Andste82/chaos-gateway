@@ -5,6 +5,7 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -415,4 +416,254 @@ func TestWithoutTheProxyTheConnectionsOfTheCaseAreResetOnTheRealKernel(t *testin
 	if b.srv.ProxyFailures() == 0 {
 		t.Error("the responder counted no failure")
 	}
+}
+
+// The policy of a case for the certificate of the real server (P5-M22-03), over the API on the real kernel. The proxy of the bed is started
+// with the CA of the real server as its installation default (CHAOSGW_UPSTREAM_CA_FILE), so a case without a policy and one with own_ca are served;
+// the CA is no CA of the bundle of mitmproxy, so a case that says verify is refused with a 502 and the server sees no request, and insecure serves
+// it again. Cases are replaced while the proxy runs: the proxy takes the policy with the next configuration, not with a restart.
+func TestTheUpstreamPolicyOfACaseDecidesWhetherTheProxyAcceptsTheServersCertificateOnTheRealKernel(t *testing.T) {
+	b := newInterceptBed(t)
+	caseWith := func(policy string) string {
+		settings := ""
+		if policy != "" {
+			settings = `,"intercept":{"upstream":"` + policy + `"}`
+		}
+		return `{"target":{"network":"IoT"},"tls":{"case":"intercept","ports":[` + strconv.Itoa(httpsPort) + `]` + settings + `}}`
+	}
+	status := func(path string) string {
+		out, _ := b.curl("-o", "/dev/null", "-w", "%{http_code}", b.url(path))
+		return strings.TrimSpace(out)
+	}
+	id := b.overlay(t, caseWith(""))
+	b.untilIntercepted(t, "/warm")
+	for _, c := range []struct{ policy, want string }{{"verify", "502"}, {"own_ca", "200"}, {"insecure", "200"}, {"verify", "502"}, {"", "200"}} {
+		b.remove(t, id)
+		id = b.overlay(t, caseWith(c.policy))
+		waitFor(t, 60*time.Second, "the case with the policy "+c.policy+" is in force: "+c.want, func() bool { return status("/policy") == c.want })
+	}
+	// what the device is told when the proxy refuses the server, and the exchange that says why
+	b.remove(t, id)
+	id = b.overlay(t, caseWith("verify"))
+	waitFor(t, 60*time.Second, "the case is in force", func() bool { return status("/refused") == "502" })
+	out, err := b.curl(b.url("/refused-body"))
+	if err != nil || !strings.Contains(out, "Certificate verify failed") {
+		t.Errorf("the device is told why: %v %q", err, out)
+	}
+	b.g.token = b.admin
+	waitFor(t, 20*time.Second, "the refusal is in the log of the exchanges", func() bool {
+		r := b.g.do("GET", "/intercept/flows?device="+clientA, nil, nil, nil)
+		if r.Status != 200 {
+			return false
+		}
+		for _, f := range r.json(t)["items"].([]any) {
+			if e, _ := f.(map[string]any)["error"].(string); strings.Contains(e, "TLS to the server failed") {
+				return true
+			}
+		}
+		return false
+	})
+	b.remove(t, id)
+}
+
+// A client that speaks QUIC (a real QUIC stack, aioquic, which mitmproxy brings) tries HTTP/3 to port 443 first, as a browser does that has learned the
+// server's `Alt-Svc`, and goes on with TCP when nothing answers. With an interception case that blocks QUIC the Initial packets never reach the server, the
+// client's own timeout ends the attempt and its TCP connection is the one the proxy intercepts: the client is served the modified response. Without a
+// case the packets arrive (the server sees the client's Initial), which is what makes the first half of the test mean something.
+func TestAQUICClientFallsBackToTCPAndIsInterceptedOnTheRealKernel(t *testing.T) {
+	py, ok := testbed.MitmPython()
+	if !ok {
+		t.Fatal("mitmproxy is not installed (the testbed image has it in /opt/mitm-venv, with aioquic)")
+	}
+	b := newInterceptBed(t)
+	b.top.Server.Start("python3", "-c", udpCountScript, "443")
+	h3First := func() map[string]any {
+		t.Helper()
+		out, err := b.top.A.Run(context.Background(), py, "-c", http3FirstScript, b.srvIP, b.trust, b.url("/via-fallback"), tlsBroker, strconv.Itoa(httpsPort))
+		if err != nil {
+			t.Fatalf("the client: %v %s", err, out)
+		}
+		var res map[string]any
+		for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+			if strings.HasPrefix(l, "{") {
+				if err := json.Unmarshal([]byte(l), &res); err != nil {
+					t.Fatalf("%v %q", err, l)
+				}
+			}
+		}
+		if res == nil {
+			t.Fatalf("the client printed no result: %q", out)
+		}
+		return res
+	}
+	arrived := func() int {
+		t.Helper()
+		time.Sleep(500 * time.Millisecond)
+		out, err := b.top.B.Run(context.Background(), "python3", "-c", fmt.Sprintf(`
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(3)
+s.sendto(b"q", ("%s", 443))
+print(int(s.recvfrom(100)[0]))
+`, b.srvIP))
+		n, perr := strconv.Atoi(strings.TrimSpace(out))
+		if err != nil || perr != nil {
+			t.Fatalf("%v %v %q", err, perr, out)
+		}
+		return n
+	}
+	arrived() // reset the count
+	// no case: the client's QUIC packets reach the server, which never answers, and the client falls back to TCP, which nothing intercepts
+	res := h3First()
+	if res["quic"] != "timeout" || res["tcp"] != "hello from the real server /via-fallback" {
+		t.Fatalf("without a case: %v", res)
+	}
+	if n := arrived(); n == 0 {
+		t.Fatalf("without a case the QUIC packets of the client did not reach the server")
+	}
+
+	b.overlay(t, `{"target":{"device":"`+clientA+`"},"tls":{"case":"intercept","ports":[`+strconv.Itoa(httpsPort)+`],"intercept":{"http_rules":[
+		{"match":{"path_prefix":"/via-fallback"},"action":"modify","modify":{"response_body_replace":[{"search":"real server","replace":"gateway"}]}}]}}}`)
+	b.untilIntercepted(t, "/warm")
+	waitFor(t, 40*time.Second, "UDP 443 of A is dropped", func() bool { h3First(); return arrived() == 0 })
+	res = h3First()
+	if res["quic"] != "timeout" || res["tcp"] != "hello from the gateway /via-fallback" {
+		t.Errorf("with the case: the client was not served by the proxy after its QUIC attempt: %v", res)
+	}
+	if n := arrived(); n != 0 {
+		t.Errorf("%d datagrams of the client's QUIC attempt reached the server while the case was in force", n)
+	}
+}
+
+// http3FirstScript is a client that tries HTTP/3 and falls back: argv are the server's address, the CA file the client trusts, the URL for the fallback, its
+// host name and port. It prints one line of JSON: how the QUIC attempt ended and what the TCP request returned.
+const http3FirstScript = `
+import asyncio, json, ssl, sys, urllib.request
+from aioquic.asyncio import connect
+from aioquic.quic.configuration import QuicConfiguration
+addr, cafile, url, host, port = sys.argv[1:6]
+
+async def quic():
+    cfg = QuicConfiguration(is_client=True, alpn_protocols=["h3"], verify_mode=ssl.CERT_NONE, server_name=host)
+    try:
+        async with asyncio.timeout(3):
+            async with connect(addr, 443, configuration=cfg):
+                return "connected"
+    except TimeoutError:
+        return "timeout"
+
+res = {"quic": asyncio.run(quic())}
+ctx = ssl.create_default_context(cafile=cafile)
+# the name resolves to the server's address, as curl's --resolve does
+import socket
+real = socket.getaddrinfo
+socket.getaddrinfo = lambda h, *a, **k: real(addr if h == host else h, *a, **k)
+with urllib.request.urlopen(url, context=ctx, timeout=20) as r:
+    res["tcp"] = r.read().decode().strip()
+print(json.dumps(res))
+`
+
+// httpsPeerServerScript is httpsServerScript with the address of its peer in a header: the address the server sees.
+var httpsPeerServerScript = strings.Replace(httpsServerScript, `self.send_header("X-Real", "1")`, `self.send_header("X-Real", "1"); self.send_header("X-Peer", self.client_address[0])`, 1)
+
+// An `intercept` case works for a server in another test network and for one behind a WireGuard client (plan M22 "Tests", P5-M21-02): the proxy's own connection
+// takes the path that the responder's pass-through takes (the service namespace's masqueraded connection through the forward chain to the test
+// interfaces and the tunnel), so the device is served by the proxy with the modified response, the server sees the gateway's address in the network it is
+// in and not the device's, and the exchange is in the log with the address the device meant. Where the access matrix refuses the connection, the responder
+// resets it before it reaches the proxy.
+func TestAnInterceptCaseReachesAServerInAnotherTestNetworkAndBehindAWireGuardClientOnTheRealKernel(t *testing.T) {
+	if !strings.Contains(httpsPeerServerScript, "X-Peer") {
+		t.Fatal("the script of the HTTPS server that names its peer does not apply to the real server's script")
+	}
+	b := newInterceptBed(t)
+	const labID = "5d3a8e6f-2b1c-4d7e-9f08-a1b2c3d4e5f6"
+	iotToLab := map[string]any{"from": map[string]any{"network": "IoT"}, "to": map[string]any{"network": "Lab"}, "policy": "allow"}
+	iotToHub := map[string]any{"from": map[string]any{"network": "IoT"}, "to": map[string]any{"network": "lab-hub"}, "policy": "allow"}
+	iotToSite := map[string]any{"from": map[string]any{"network": "IoT"}, "to": map[string]any{"network": "site-b"}, "policy": "allow"}
+	b.g.token = b.admin
+	id := b.g.mustPatch(map[string]any{
+		"networks": map[string]any{
+			labID: map[string]any{"type": "lan", "name": "Lab", "address": testbed.LAN1Gateway + "/24",
+				"interfaces": []any{map[string]any{"name": "lan1", "mac": testbed.GWLan1MAC}}},
+			hubID: map[string]any{"clients": map[string]any{rAID: map[string]any{"reachable": []any{map[string]any{"network": iotID}}}}}},
+		"access_matrix": map[string]any{"entries": []any{iotToHub, iotToSite, iotToLab}}})
+	if r := b.g.apply(id); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	r := b.g.do("GET", "/networks/lab-hub/clients/rA/export", nil, nil, nil)
+	if r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	conf := filepath.Join(t.TempDir(), "wgra.conf")
+	if err := os.WriteFile(conf, r.Body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b.top.RC.Must("wg-quick", "up", conf)
+	waitFor(t, 30*time.Second, "the tunnel carries traffic", func() bool { return pingOK(b.top.RC, "", "10.99.0.1") })
+	b.top.C.Start("python3", "-c", httpsPeerServerScript, b.publicCert, b.publicKey, strconv.Itoa(httpsPort))
+	b.top.RC.Start("python3", "-c", httpsPeerServerScript, b.publicCert, b.publicKey, strconv.Itoa(httpsPort))
+	servers := []struct{ name, addr, sees string }{
+		{"the server in the network Lab", testbed.ClientCAddr, testbed.LAN1Gateway},
+		{"the server behind the WireGuard client", testbed.ClientNetHost, "10.99.0.1"},
+	}
+	get := func(addr, path string) (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		return b.top.A.Run(ctx, "curl", "-sS", "-i", "--max-time", "30", "--cacert", b.trust, "--resolve", fmt.Sprintf("%s:%d:%s", tlsBroker, httpsPort, addr), b.url(path))
+	}
+	// without a case the device reaches both itself, and the server sees the device
+	for _, srv := range servers {
+		waitFor(t, 60*time.Second, srv.name+" answers the device", func() bool {
+			out, err := get(srv.addr, "/direct")
+			return err == nil && strings.Contains(out, "hello from the real server /direct") && strings.Contains(strings.ToLower(out), "x-peer: "+testbed.ClientAAddr)
+		})
+	}
+
+	oid := b.overlay(t, `{"target":{"network":"IoT"},"tls":{"case":"intercept","ports":[`+strconv.Itoa(httpsPort)+`],"intercept":{"http_rules":[
+		{"match":{"path_prefix":"/mod"},"action":"modify","modify":{"response_body_replace":[{"search":"real server","replace":"gateway"}]}}]}}}`)
+	b.untilIntercepted(t, "/warm")
+	for _, srv := range servers {
+		before := b.srv.Intercepted()
+		var out string
+		waitFor(t, 60*time.Second, srv.name+" is served through the proxy", func() bool {
+			var err error
+			out, err = get(srv.addr, "/mod/x")
+			t.Logf("%s: %v %q", srv.name, err, out)
+			return err == nil && strings.Contains(out, "hello from the gateway /mod/x") && b.srv.Intercepted() > before
+		})
+		// the proxy's own connection is what the server sees: the gateway's address in its network, not the device's
+		if want := "x-peer: " + srv.sees; !strings.Contains(strings.ToLower(out), want) {
+			t.Errorf("%s: the server did not see the gateway's address (%s): %q", srv.name, srv.sees, out)
+		}
+	}
+	// the log has the exchanges with the address the device meant
+	b.g.token = b.admin
+	for _, srv := range servers {
+		waitFor(t, 20*time.Second, "the exchange with "+srv.name+" is in the log", func() bool {
+			r := b.g.do("GET", "/intercept/flows?device="+clientA+"&host="+tlsBroker, nil, nil, nil)
+			if r.Status != 200 {
+				return false
+			}
+			for _, f := range r.json(t)["items"].([]any) {
+				m := f.(map[string]any)
+				if m["original_dst"] == fmt.Sprintf("%s:%d", srv.addr, httpsPort) && m["path"] == "/mod/x" && m["status"] == float64(200) {
+					return true
+				}
+			}
+			return false
+		})
+	}
+
+	// the matrix keeps the device from both networks: the responder resets the connections of the case before they reach the proxy
+	if r := b.g.apply(b.g.mustPatch(map[string]any{"access_matrix": map[string]any{"entries": []any{iotToSite}}})); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	for _, srv := range servers {
+		denied := b.srv.Denied()
+		waitFor(t, 40*time.Second, "the matrix keeps the device from "+srv.name+", the proxy included", func() bool {
+			_, err := get(srv.addr, "/refused")
+			return err != nil && b.srv.Denied() > denied
+		})
+	}
+	b.remove(t, oid)
 }

@@ -172,13 +172,14 @@ func TestTheHandshakesOfTheProxyAreEventsAndTheHandOverCountsTheConnectionOnce(t
 		report("10.10.0.32", "intercepted", ""),
 		report("10.10.0.32", "rejected", "unknown_ca"), // a device that does not trust the test CA
 		report("10.10.0.99", "proxy_unavailable", ""),  // the proxy was not there
+		report("10.10.0.31", "server_unreachable", ""), // the proxy could not reach the server
 	}, nil, nil)
 	if r.Status != 204 {
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}
 	var events []engine.Event
 	deadline := time.After(5 * time.Second)
-	for len(events) < 5 {
+	for len(events) < 6 {
 		select {
 		case ev := <-ch:
 			if ev.Type == engine.EventTLSHandshake {
@@ -188,7 +189,7 @@ func TestTheHandshakesOfTheProxyAreEventsAndTheHandOverCountsTheConnectionOnce(t
 			t.Fatalf("%d events", len(events))
 		}
 	}
-	for i, outcome := range []string{"intercepted", "accepted", "intercepted", "rejected", "proxy_unavailable"} {
+	for i, outcome := range []string{"intercepted", "accepted", "intercepted", "rejected", "proxy_unavailable", "server_unreachable"} {
 		d := events[i].Data
 		if d["outcome"] != outcome || d["case"] != "intercept" || d["expected"] != "any" || d["violation"] != false || d["tested"] != false || d["overlay"] != ov["id"] {
 			t.Errorf("event %d: %v", i, d)
@@ -196,12 +197,12 @@ func TestTheHandshakesOfTheProxyAreEventsAndTheHandOverCountsTheConnectionOnce(t
 	}
 	var got map[string]any
 	g.asAdmin(admin, func() { got = g.do("GET", "/overlays/"+ov["id"].(string), nil, nil, nil).json(t) })
-	// three connections were held: two handed over, one that could not be
-	if c, _ := got["counters"].(map[string]any); c == nil || c["packets"] != float64(3) {
+	// four connections were held: two handed over, one that could not be and one to a server that is down
+	if c, _ := got["counters"].(map[string]any); c == nil || c["packets"] != float64(4) {
 		t.Errorf("%v", got)
 	}
 	// the checks read the same log: the device that took the proxy's certificate is an accepted handshake
-	if hs := api.TLSHandshakeOutcomes(g.srv, "10.10.0.31"); strings.Join(hs, ",") != "intercepted,accepted" {
+	if hs := api.TLSHandshakeOutcomes(g.srv, "10.10.0.31"); strings.Join(hs, ",") != "intercepted,accepted,server_unreachable" {
 		t.Errorf("%v", hs)
 	}
 }

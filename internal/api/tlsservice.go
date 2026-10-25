@@ -325,7 +325,11 @@ func countsForTheOverlay(r model.TlsHandshakeReport) bool {
 	if r.Case == nil || *r.Case != string(model.TlsCaseCaseIntercept) {
 		return true
 	}
-	return r.Outcome == model.TlsHandshakeReportOutcomeIntercepted || r.Outcome == model.TlsHandshakeReportOutcomeProxyUnavailable
+	switch r.Outcome {
+	case model.TlsHandshakeReportOutcomeIntercepted, model.TlsHandshakeReportOutcomeProxyUnavailable, model.TlsHandshakeReportOutcomeServerUnreachable:
+		return true
+	}
+	return false
 }
 
 // countTLS counts a handshake of an overlay. Called with logMu held.

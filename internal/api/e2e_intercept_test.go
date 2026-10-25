@@ -133,9 +133,14 @@ func newInterceptBed(t *testing.T) *interceptBed {
 
 // curl runs curl in A with the given arguments and returns its output; the exit code is in the error.
 func (b *interceptBed) curl(args ...string) (string, error) {
+	return b.curlTrusting(b.trust, args...)
+}
+
+// curlTrusting is curl on A with the given file as the only trust anchors.
+func (b *interceptBed) curlTrusting(trust string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	base := []string{"-sS", "--max-time", "30", "--cacert", b.trust, "--resolve", fmt.Sprintf("%s:%d:%s", tlsBroker, httpsPort, b.srvIP)}
+	base := []string{"-sS", "--max-time", "30", "--cacert", trust, "--resolve", fmt.Sprintf("%s:%d:%s", tlsBroker, httpsPort, b.srvIP)}
 	return b.top.A.Run(ctx, "curl", append(base, args...)...)
 }
 
@@ -729,7 +734,13 @@ func TestChaosctlMakesAnInterceptionCaseAndReadsItsExchangesAndTheCAOnTheRealKer
 	if err := os.WriteFile(fresh, append(append([]byte(nil), pub...), []byte(regen.out)...), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := b.curl("--cacert", fresh, "-o", "/dev/null", "-w", "%{http_code}", b.url("/plain")); err != nil || out != "200" {
+	var out string
+	var err error
+	waitFor(t, 30*time.Second, "a device that installed the new certificate is served again", func() bool {
+		out, err = b.curlTrusting(fresh, "-o", "/dev/null", "-w", "%{http_code}", b.url("/plain"))
+		return err == nil && out == "200"
+	})
+	if err != nil || out != "200" {
 		t.Errorf("a device that installed the new certificate is served again: %v %q", err, out)
 	}
 }

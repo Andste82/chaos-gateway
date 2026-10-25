@@ -3713,6 +3713,10 @@ type DeviceView struct {
 // plan §2.4), and the newer overlay wins at the same scope. The overlay is `effective` while
 // the DHCP server is configured with it, `overridden` while another action wins for all its
 // clients and `disabled` while its network has DHCP off or its device has no MAC.
+//
+// The write is refused with `validation_failed` when the DHCP server, asked with its own
+// configuration check, refuses the configuration the action makes (an option it cannot parse,
+// a lease time it does not take); a server that is down does not refuse it.
 type DhcpAction struct {
 	Action DhcpActionAction `json:"action"`
 
@@ -5217,6 +5221,10 @@ type Overlay struct {
 	// plan §2.4), and the newer overlay wins at the same scope. The overlay is `effective` while
 	// the DHCP server is configured with it, `overridden` while another action wins for all its
 	// clients and `disabled` while its network has DHCP off or its device has no MAC.
+	//
+	// The write is refused with `validation_failed` when the DHCP server, asked with its own
+	// configuration check, refuses the configuration the action makes (an option it cannot parse,
+	// a lease time it does not take); a server that is down does not refuse it.
 	Dhcp *DhcpAction `json:"dhcp,omitempty"`
 
 	// Dns DNS family (plan §2.6, M20), implemented by the DNS proxy: an overlay of the kind `dns`, or the `dns` part of an
@@ -5431,6 +5439,10 @@ type OverlayRequest struct {
 	// plan §2.4), and the newer overlay wins at the same scope. The overlay is `effective` while
 	// the DHCP server is configured with it, `overridden` while another action wins for all its
 	// clients and `disabled` while its network has DHCP off or its device has no MAC.
+	//
+	// The write is refused with `validation_failed` when the DHCP server, asked with its own
+	// configuration check, refuses the configuration the action makes (an option it cannot parse,
+	// a lease time it does not take); a server that is down does not refuse it.
 	Dhcp *DhcpAction `json:"dhcp,omitempty"`
 
 	// Dns DNS family (plan §2.6, M20), implemented by the DNS proxy: an overlay of the kind `dns`, or the `dns` part of an
@@ -6722,6 +6734,10 @@ type Step struct {
 	// plan §2.4), and the newer overlay wins at the same scope. The overlay is `effective` while
 	// the DHCP server is configured with it, `overridden` while another action wins for all its
 	// clients and `disabled` while its network has DHCP off or its device has no MAC.
+	//
+	// The write is refused with `validation_failed` when the DHCP server, asked with its own
+	// configuration check, refuses the configuration the action makes (an option it cannot parse,
+	// a lease time it does not take); a server that is down does not refuse it.
 	Dhcp *DhcpAction `json:"dhcp,omitempty"`
 
 	// Dns DNS family (plan §2.6, M20), implemented by the DNS proxy: an overlay of the kind `dns`, or the `dns` part of an

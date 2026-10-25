@@ -3860,6 +3860,10 @@ components:
         plan §2.4), and the newer overlay wins at the same scope. The overlay is `effective` while
         the DHCP server is configured with it, `overridden` while another action wins for all its
         clients and `disabled` while its network has DHCP off or its device has no MAC.
+
+        The write is refused with `validation_failed` when the DHCP server, asked with its own
+        configuration check, refuses the configuration the action makes (an option it cannot parse,
+        a lease time it does not take); a server that is down does not refuse it.
       required: [action]
       properties:
         action:

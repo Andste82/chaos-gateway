@@ -3,6 +3,11 @@ import { CreateOverlayBody } from '../api/generated/zod/overlays/overlays';
 import {
   durationChoices,
   emptyForm,
+  lifetimeOf,
+  overlayLifetime,
+  overlayOnlyFamilies,
+  overlayToForm,
+  untilText,
   faultFormErrors,
   faultToForm,
   keepError,
@@ -17,6 +22,7 @@ import {
   targetOf,
   type FaultForm,
 } from './faultForm';
+import type { Overlay } from '../api/generated/model';
 import { CIDR_CHOICE } from './scopes';
 
 const form = (over: Partial<FaultForm>): FaultForm => ({ ...emptyForm('device:d1'), ...over });
@@ -308,5 +314,103 @@ describe('every fault kind in the dialog (P3-M13-04)', () => {
     expect(fieldOf('/fault/mtu')).toBe('mtuSize');
     expect(fieldOf('/fault/tunnel')).toBe('tunnel');
     expect(fieldOf('/faults/x/destination/network')).toBe('destination');
+  });
+});
+
+// M23b: a DNS fault and a TLS case are kinds of the dialog; each is an overlay of its own kind, never a configured fault.
+describe('the DNS and TLS kinds of the dialog', () => {
+  const overlay = (over: Partial<Overlay>): Overlay => ({
+    id: 'o1',
+    kind: 'dns',
+    owner: { type: 'user', id: 'admin', name: 'admin' },
+    created_at: '2026-10-25T10:00:00Z',
+    updated_at: '2026-10-25T10:00:00Z',
+    generation: 1,
+    ...over,
+  });
+
+  it('a DNS fault is the dns part of the overlay request, with the target and the duration', () => {
+    const f = form({ family: 'dns', duration: '5m', dns: { action: 'nxdomain', names: 'broker.example.com', delay: '2s', answers: '', ttl: '5s' } });
+    expect(faultFormErrors(f)).toEqual({});
+    const req = formToOverlay(f);
+    expect(req).toEqual({ target: { device: 'd1' }, dns: { action: 'nxdomain', names: ['broker.example.com'] }, ttl: '5m' });
+    expect(CreateOverlayBody.safeParse(req).success).toBe(true);
+    // the impairment fields of the form do not leak into it
+    expect(req.fault).toBeUndefined();
+    expect(formToOverlay({ ...f, duration: 'perm' }).ttl).toBeUndefined();
+  });
+
+  it('a TLS case is the tls part of the overlay request', () => {
+    const f = form({ family: 'tls', duration: 'perm', tls: { ...emptyForm().tls, case: 'expired', sni: 'broker.example.com', cutExisting: true } });
+    expect(faultFormErrors(f)).toEqual({});
+    const req = formToOverlay(f);
+    expect(req).toEqual({ target: { device: 'd1' }, tls: { case: 'expired', sni: ['broker.example.com'], cut_existing: true } });
+    expect(CreateOverlayBody.safeParse(req).success).toBe(true);
+    expect(req.fault).toBeUndefined();
+  });
+
+  it('the checks of the kind are the form\'s, with the target; the traffic of the other kinds is not checked', () => {
+    const dns = form({ family: 'dns', dns: { action: 'delay', names: '', delay: '', answers: '', ttl: '' }, traffic: 'custom', ports: '99999' });
+    expect(Object.keys(faultFormErrors(dns))).toEqual(['dnsDelay']);
+    const tls = form({ family: 'tls', tls: { ...emptyForm().tls, sni: 'bad!name' }, latency: '' });
+    expect(Object.keys(faultFormErrors(tls))).toEqual(['tlsSni']);
+    expect(faultFormErrors(form({ family: 'dns', target: '' })).target).toBe('Choose a target.');
+    expect(overlayOnlyFamilies).toEqual(['dns', 'tls']);
+  });
+
+  it('an overlay of either kind is opened with its fields, its target and its remaining time, and sent back unchanged', () => {
+    const expires = new Date(Date.now() + 60_000).toISOString();
+    const dns = overlay({ kind: 'dns', target: { network: 'n1' }, dns: { action: 'wrong_answer', answers: ['10.9.0.1'], names: ['broker.example.com'] }, ttl: '5m', expires_at: expires });
+    const f = overlayToForm(dns);
+    expect(f.family).toBe('dns');
+    expect(f.target).toBe('network:n1');
+    expect(f.duration).toBe('keep');
+    expect(formToOverlay(f)).toMatchObject({ target: { network: 'n1' }, dns: dns.dns, ttl: '5m' });
+    const tls = overlay({ kind: 'tls', target: { device: 'd1' }, tls: { case: 'handshake_reset', ports: [8883] } });
+    const g = overlayToForm(tls);
+    expect(g.family).toBe('tls');
+    expect(g.duration).toBe('perm');
+    expect(formToOverlay(g)).toEqual({ target: { device: 'd1' }, tls: tls.tls });
+    // a fault overlay reads back as before
+    expect(overlayToForm(overlay({ kind: 'fault', target: { device: 'd1' }, fault: { latency: '100ms' } })).family).toBe('impairment');
+  });
+
+  it('says what the fault does in the preview', () => {
+    expect(previewSentence(form({ family: 'dns', duration: '5m', dns: { action: 'nxdomain', names: 'broker.example.com', delay: '', answers: '', ttl: '' } }), 'ESP32-42')).toBe(
+      'ESP32-42 · DNS queries for broker.example.com → NXDOMAIN (no such name) · expires after 5 min',
+    );
+    expect(previewSentence(form({ family: 'dns', duration: 'perm', dns: { action: 'delay', names: '', delay: '2s', answers: '', ttl: '' } }), 'Network IoT')).toBe(
+      'Network IoT · DNS queries for every name → answers delayed by 2s · until removed',
+    );
+    const tls = { ...emptyForm().tls, case: 'expired' as const, traffic: { protocol: 'any' as const, ports: '8883', destKind: 'cidr' as const, destination: '203.0.113.0/24' }, cutExisting: true };
+    expect(previewSentence(form({ family: 'tls', duration: '1m', tls }), 'ESP32-42')).toBe(
+      'ESP32-42 · TLS connections on TCP 8883 to 203.0.113.0/24, existing ones cut → an expired certificate · expires after 1 min',
+    );
+  });
+
+  it("the gateway's pointers of the two kinds", () => {
+    expect(fieldOf('/dns/delay')).toBe('dnsDelay');
+    expect(fieldOf('/dns/names/1')).toBe('dnsNames');
+    expect(fieldOf('/dns/answers/0')).toBe('dnsAnswers');
+    expect(fieldOf('/dns/ttl')).toBe('dnsTtl');
+    expect(fieldOf('/tls/ports/0')).toBe('ports');
+    expect(fieldOf('/tls/sni/0')).toBe('tlsSni');
+    expect(fieldOf('/tls/destination/cidr')).toBe('destination');
+    expect(fieldOf('/tls/cut_existing')).toBe('tlsCut');
+    expect(fieldOf('/target/device')).toBe('target');
+  });
+
+  it('the duration choice is shared: the lifetime of an overlay, its request and its words', () => {
+    const l = overlayLifetime({ ttl: '5m' });
+    expect(l).toEqual({ duration: '5m', keepUntil: '', keepTtl: '5m' });
+    expect(lifetimeOf(l)).toEqual({ ttl: '5m' });
+    expect(untilText(l)).toBe('expires after 5 min');
+    expect(lifetimeOf({ duration: 'perm', keepUntil: '', keepTtl: '' })).toEqual({});
+    const until = new Date(Date.now() + 90_000).toISOString();
+    const kept = overlayLifetime({ ttl: '30m', expires_at: until });
+    expect(kept.duration).toBe('keep');
+    const req = lifetimeOf(kept, new Date());
+    expect(req.ttl).toBe('30m');
+    expect(req.expires_in).toMatch(/^\d+s$/);
   });
 });

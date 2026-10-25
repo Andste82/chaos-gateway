@@ -12,7 +12,8 @@
 // edited, disabled and deleted through the draft as well (`?forward=<id>` opens one for editing, the
 // link of the device detail; `?forward=new&device=<id>` adds one to a device). A test network lists its
 // DHCP reservations with their status and the draft's edits of them (#75); Reserve in its leases makes a
-// lease static.
+// lease static. The DHCP test actions of the network (short lease, delete lease, set options, silence) are made and
+// listed in the card above its leases (M23b).
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { errorMessage } from '../api/fetcher';
@@ -20,6 +21,7 @@ import { useGetUplink } from '../api/generated/hooks/config/config';
 import type { InterfaceRef, LanNetwork, NetworkView, PortForwardEntry, WireGuardNetwork } from '../api/generated/model';
 import PageHeader from '../components/layout/PageHeader.vue';
 import AccessMatrix from '../components/networks/AccessMatrix.vue';
+import DhcpActionsCard from '../components/dhcp/DhcpActionsCard.vue';
 import ClientsCard from '../components/networks/ClientsCard.vue';
 import ForwardDialog from '../components/networks/ForwardDialog.vue';
 import ForwardList from '../components/networks/ForwardList.vue';
@@ -315,6 +317,12 @@ watch(unknownNetwork, async (unknown) => {
     </div>
     <div v-else-if="applied.length" class="grid grid-cols-1 gap-5"><AccessMatrix :networks="applied" /></div>
 
+    <DhcpActionsCard
+      v-if="selected?.config.type === 'lan' && selected.status.state !== 'pending' && marks[selected.id] !== 'DELETED'"
+      :target="{ network: selected.id }"
+      :name="(selected.config as LanNetwork).name"
+      :dhcp-off="(selected.config as LanNetwork).dhcp?.enabled === false"
+    />
     <LeasesCard v-if="selected?.config.type === 'lan' && selected.status.state !== 'pending'" :network="selected" />
     <ReservationsCard v-if="selected?.config.type === 'lan' && marks[selected.id] !== 'DELETED'" :network="selected" />
     <ClientsCard v-if="hub" :network="hub" />

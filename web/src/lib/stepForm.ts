@@ -1,20 +1,24 @@
 // The step editor of the timeline (plan §2.10, §2.17 "Scenarios"; M19): the form of one step — its id, its
 // time on the timeline, whether it narrows the scenario's target, and the fields of its type (a profile, a
-// fault with the fault dialog's fields, an access rule, a WireGuard action, a capture start or stop, a wait,
+// fault with the fault dialog's fields, a DNS fault, a TLS case, a DHCP action (M23b: the fields of the fault dialog
+// and of the DHCP dialog), an access rule, a WireGuard action, a capture start or stop, a wait,
 // the removal of an earlier step's overlay, or the restore) — the checks under the fields, the step it becomes
-// and the field a problem the gateway reported names. A step of a type this build cannot edit (DNS, TLS, DHCP)
-// is kept as it is and edited in the YAML view.
+// and the field a problem the gateway reported names. A step of a type this build cannot edit (none is left; a
+// type a later build adds) is kept as it is and edited in the YAML view.
 import type { AccessAction, RejectType, Scope, Step, WaitCondition, WireGuardAction } from '../api/generated/model';
 import {
   createRunBodyTwoInlineOneStepsItemIdRegExp as stepIdRegExp,
   createRunBodyTwoInlineOneStepsItemAtRegExp as durationRegExp,
 } from '../api/generated/zod/runs/runs';
+import { dhcpErrors, dhcpFieldOf, dhcpBody, dhcpToForm, emptyDhcp, type DhcpField, type DhcpForm } from './dhcpForm';
+import { dnsBody, dnsErrors, dnsFieldOf, dnsToForm, emptyDns, type DnsField, type DnsForm } from './dnsForm';
 import { emptyForm, faultFormErrors, faultToForm, fieldOf as faultFieldOf, formToFault, scopeOf, targetOf, tunnelOf, type FaultField, type FaultForm } from './faultForm';
 import { durationMs } from './format';
 import { resetError } from './rules';
 import { remoteCidrError } from './scopes';
 import { stepType, type StepType } from './scenarios';
-import { createsOverlay, messages, reservedStepId, scopeWithin, startsCapture, tunnelOutsideTarget, type Topology } from './scenarioRules';
+import { createsOverlay, dhcpTargetProblem, messages, reservedStepId, scopeWithin, startsCapture, tunnelOutsideTarget, type Topology } from './scenarioRules';
+import { emptyTls, tlsBody, tlsErrors, tlsFieldOf, tlsToForm, type TlsField, type TlsForm } from './tlsForm';
 import { emptyTraffic, trafficErrors, trafficFieldOf, trafficFromMatch, trafficMatch, type TrafficForm } from './trafficForm';
 import { createOverlayBodyFaultOneDestinationHostnameOneRegExp as hostnameRegExp } from '../api/generated/zod/overlays/overlays';
 
@@ -31,6 +35,10 @@ export interface StepForm {
   /** The profile (its id, or the name of a built-in one). */
   profile: string;
   fault: FaultForm;
+  /** The fields of a `dns` step, a `tls` step and a `dhcp` step. */
+  dns: DnsForm;
+  tls: TlsForm;
+  dhcp: DhcpForm;
   action: AccessAction;
   rejectWith: RejectType | '';
   cutExisting: boolean;
@@ -46,7 +54,7 @@ export interface StepForm {
   name: string;
   /** The step whose overlay is removed. */
   remove: string;
-  /** A step the editor does not make (DNS, TLS, DHCP): kept as it is. */
+  /** A step the editor does not make (a type a later build adds): kept as it is. */
   kept?: Step;
 }
 
@@ -57,6 +65,9 @@ export type StepField =
   | 'type'
   | 'profile'
   | FaultField
+  | DnsField
+  | TlsField
+  | DhcpField
   | 'action'
   | 'rejectWith'
   | 'cutExisting'
@@ -81,6 +92,9 @@ export function emptyStepForm(type: StepType, id: string, at = '0s'): StepForm {
     type,
     profile: '',
     fault,
+    dns: emptyDns(),
+    tls: emptyTls(),
+    dhcp: emptyDhcp(),
     action: 'drop',
     rejectWith: '',
     cutExisting: false,
@@ -95,8 +109,8 @@ export function emptyStepForm(type: StepType, id: string, at = '0s'): StepForm {
   };
 }
 
-/** The step types the editor makes; the others (DNS, TLS, DHCP) arrive with their milestones and are edited as YAML. */
-export const editableTypes: ReadonlySet<StepType> = new Set(['profile', 'fault', 'rule', 'wireguard', 'capture', 'wait', 'remove', 'restore']);
+/** The step types the editor makes; a type it does not (none of the types of this build) is kept as it is and edited as YAML. */
+export const editableTypes: ReadonlySet<StepType> = new Set(['profile', 'fault', 'rule', 'dns', 'tls', 'dhcp', 'wireguard', 'capture', 'wait', 'remove', 'restore']);
 
 /** The form of a step. */
 export function stepToForm(s: Step): StepForm {
@@ -106,6 +120,9 @@ export function stepToForm(s: Step): StepForm {
   if (!editableTypes.has(type)) f.kept = s;
   if (s.profile !== undefined) f.profile = s.profile;
   if (s.fault) f.fault = faultToForm(s.fault, undefined);
+  if (s.dns) f.dns = dnsToForm(s.dns);
+  if (s.tls) f.tls = tlsToForm(s.tls);
+  if (s.dhcp) f.dhcp = dhcpToForm(s.dhcp);
   if (s.rule) {
     f.action = s.rule.action;
     f.rejectWith = s.rule.reject_with ?? '';
@@ -145,6 +162,15 @@ export function formToStep(f: StepForm): Step {
       break;
     case 'fault':
       step.fault = formToFault(f.fault);
+      break;
+    case 'dns':
+      step.dns = dnsBody(f.dns);
+      break;
+    case 'tls':
+      step.tls = tlsBody(f.tls);
+      break;
+    case 'dhcp':
+      step.dhcp = dhcpBody(f.dhcp);
       break;
     case 'rule':
       step.rule = {
@@ -223,6 +249,19 @@ export function stepFormErrors(f: StepForm, ctx: StepContext): Partial<Record<St
       delete e.name;
       if (f.fault.family === 'tunnel' && !e.tunnel && acts && tunnelOutsideTarget(tunnelOf(f.fault.tunnel), acts, ctx.topology)) e.tunnel = messages.tunnel;
       break;
+    case 'dns':
+      Object.assign(e, dnsErrors(f.dns));
+      break;
+    case 'tls':
+      Object.assign(e, tlsErrors(f.tls));
+      break;
+    case 'dhcp': {
+      Object.assign(e, dhcpErrors(f.dhcp));
+      // a step acts on a device or a network (a force of a new IP on a device); where it acts is the step's narrowing or the scenario's target
+      const problem = acts ? dhcpTargetProblem(f.dhcp.action, acts) : undefined;
+      if (problem) e[acts?.network && !acts.device ? 'dhcpAction' : 'narrow'] = problem;
+      break;
+    }
     case 'rule': {
       Object.assign(e, trafficErrors(f.traffic));
       const reset = resetError(f.action, f.traffic.protocol);
@@ -272,6 +311,12 @@ export function stepFieldOf(rest: string, each = false): StepField | undefined {
       return 'profile';
     case 'fault':
       return faultFieldOf(`/${segments.slice(1).join('/')}`, each);
+    case 'dns':
+      return dnsFieldOf(`/${segments.slice(1).join('/')}`);
+    case 'tls':
+      return tlsFieldOf(`/${segments.slice(1).join('/')}`);
+    case 'dhcp':
+      return segments.length === 1 ? 'narrow' : dhcpFieldOf(`/${segments.slice(1).join('/')}`);
     case 'rule': {
       const last = segments[1];
       if (last === 'action') return 'action';

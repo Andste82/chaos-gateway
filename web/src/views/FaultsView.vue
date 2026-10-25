@@ -6,12 +6,15 @@
 // draft (unapplied-changes bar, preview and apply): new and changed ones are marked, a deleted one
 // stays struck through with an undo until the draft is applied or discarded, and one the gateway
 // refused in a candidate is marked with its problems. "Explain" names the winner per family for a
-// device and a destination.
+// device and a destination. A DNS fault and a TLS case are made and edited in the same dialog (overlays
+// only), a DHCP action in the DHCP dialog (M23b; it is made on the device and the network, edited here too),
+// and "Test CA" downloads the certificate the TLS cases are signed with.
 import { useQueryClient } from '@tanstack/vue-query';
-import { computed, ref, useId } from 'vue';
+import { computed, nextTick, ref, useId } from 'vue';
 import { errorMessage } from '../api/fetcher';
 import { deleteOverlay } from '../api/generated/hooks/overlays/overlays';
 import type { ConfigFault, FaultRef, FaultView, Overlay, Scope } from '../api/generated/model';
+import DhcpActionDialog from '../components/dhcp/DhcpActionDialog.vue';
 import ExplainCard from '../components/faults/ExplainCard.vue';
 import FaultDialog from '../components/faults/FaultDialog.vue';
 import PageHeader from '../components/layout/PageHeader.vue';
@@ -21,6 +24,7 @@ import EmptyState from '../components/ui/EmptyState.vue';
 import FaultChip from '../components/ui/FaultChip.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
+import TestCaLink from '../components/ui/TestCaLink.vue';
 import { firstError, useActiveConfig, useConfigFaults, useGatewayState, useNames, useOverlays } from '../composables/gateway';
 import { useNow } from '../composables/useNow';
 import { describeMatch, describeScope, describeTunnel, faultChips, overlayChips } from '../lib/faults';
@@ -194,13 +198,26 @@ function add() {
   editConfig.value = undefined;
   dialogOpen.value = true;
 }
-function edit(r: Row) {
+// a DHCP action is edited in its own dialog
+const dhcpEditing = ref<Overlay>();
+const dhcpOpen = ref(false);
+async function edit(r: Row) {
+  if (r.overlay?.kind === 'dhcp') {
+    // the dialog is made for the action first, so it has it when it opens
+    dhcpEditing.value = r.overlay;
+    await nextTick();
+    dhcpOpen.value = true;
+    return;
+  }
   editOverlay.value = r.overlay;
   editConfig.value = r.config;
   dialogOpen.value = true;
 }
-/** Every fault the dialog makes is edited in it (impairment, MTU, tunnel; P3-M13-04); a profile activation is not a fault. */
-const editable = (r: Row) => r.overlay?.kind === 'fault' || !!r.config;
+/**
+ * Every fault the dialog makes is edited in it (impairment, MTU, tunnel, DNS, TLS; P3-M13-04, M23b) and a DHCP action in the DHCP
+ * dialog; a profile activation and a WireGuard action are not.
+ */
+const editable = (r: Row) => ['fault', 'dns', 'tls', 'dhcp'].includes(r.overlay?.kind ?? '') || !!r.config;
 
 const apiPanel = useApiPanelStore();
 const removing = ref<string>();
@@ -241,6 +258,7 @@ const context = computed(() => `The most specific fault wins · an overlay beats
 <template>
   <PageHeader title="Faults" :context="context">
     <template #actions>
+      <TestCaLink button label="Test CA" />
       <button type="button" class="btn btn-primary" @click="add">Add fault</button>
     </template>
   </PageHeader>
@@ -361,4 +379,5 @@ const context = computed(() => `The most specific fault wins · an overlay beats
   </template>
 
   <FaultDialog v-model:open="dialogOpen" :overlay="editOverlay" :config="editConfig" allow-config />
+  <DhcpActionDialog v-if="dhcpEditing?.target" v-model:open="dhcpOpen" :target="dhcpEditing.target" :overlay="dhcpEditing" />
 </template>

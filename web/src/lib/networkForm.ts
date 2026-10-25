@@ -171,7 +171,7 @@ export function advancedFields(kind: NetworkKind): NetworkField[] {
 }
 
 /** Words or lines, as typed: "a, b c" → ["a", "b", "c"]. */
-function list(text: string): string[] {
+export function list(text: string): string[] {
   return text
     .split(/[\s,]+/)
     .map((x) => x.trim())
@@ -262,7 +262,7 @@ function parseStatic(text: string): { entries: DnsStaticEntry[]; bad?: string } 
 }
 
 /** "66 tftp.lab" per line → the custom DHCP options, or the first line that is none. */
-function parseCustom(text: string): { options: DhcpCustomOption[]; bad?: string } {
+export function parseCustom(text: string): { options: DhcpCustomOption[]; bad?: string } {
   const options: DhcpCustomOption[] = [];
   for (const line of lines(text)) {
     const m = /^(\d+)\s+(.+)$/.exec(line);
@@ -294,7 +294,8 @@ function overlaps(a: Subnet, b: Subnet): boolean {
 }
 
 const isDuration = (s: string) => new RegExp(durationRegExp).test(s);
-const isUnicast = (s: string) => {
+/** A unicast IPv4 address, as the gateway takes one for a router, a DNS or an NTP server. */
+export const isUnicast = (s: string) => {
   const ip = parseIPv4(s);
   return ip !== undefined && ip !== 0 && ip >>> 28 !== 14 && ip !== 0xffffffff;
 };

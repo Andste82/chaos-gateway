@@ -1,19 +1,21 @@
 <script setup lang="ts">
 // The step editor of the timeline (plan §2.10, §2.17 "Scenarios"): a step's id, its time on the timeline, whether
 // it narrows the scenario's target (a device of the target group, never wider), and the fields of its type — a
-// profile, a fault with the fault dialog's fields, an access rule, a WireGuard action, a capture start or
+// profile, a fault with the fault dialog's fields, a DNS fault, a TLS case and a DHCP action (M23b: the fields of
+// the fault dialog and of the DHCP dialog), an access rule, a WireGuard action, a capture start or
 // stop, a wait for the device to be online, a connection or a DNS query (it stops the timeline until the
 // condition holds; the later steps move by the waiting time), the removal of the overlay of an earlier step,
-// or the restore of all. "Add to the changes" puts the scenario with the step into the draft. The types the
-// gateway does not run yet (DNS, TLS, DHCP) are not offered; such a step is edited in the YAML view.
+// or the restore of all. "Add to the changes" puts the scenario with the step into the draft. A type the
+// gateway does not run is not offered; such a step is edited in the YAML view.
 import { computed, ref, useId, watch } from 'vue';
-import type { Scenario, Step } from '../../api/generated/model';
+import type { Scenario, Scope, Step } from '../../api/generated/model';
 import { useCapabilities, useProfiles } from '../../composables/gateway';
 import { useScenarioApi } from '../../composables/draftApi';
 import { useScenarioTargets, useTopology } from '../../composables/scenarioTargets';
 import { durationMs } from '../../lib/format';
 import { accessLabels, rejectLabels } from '../../lib/rules';
 import { describeScope } from '../../lib/faults';
+import { dhcpScopeOf } from '../../lib/dhcpForm';
 import { scopeOf, tunnelOf } from '../../lib/faultForm';
 import { createsOverlay, scopeWithin, tunnelOutsideTarget } from '../../lib/scenarioRules';
 import { freeStepId, stepsBefore, stepTypeLabels, withStep, type StepType, stepTypes } from '../../lib/scenarios';
@@ -31,6 +33,9 @@ import {
 import { tunnelOptions } from '../../lib/scopes';
 import { useDraftStore, type EditOrigin } from '../../stores/draft';
 import { useNames } from '../../composables/gateway';
+import DhcpFields from '../dhcp/DhcpFields.vue';
+import DnsFields from '../faults/DnsFields.vue';
+import TlsFields from '../faults/TlsFields.vue';
 import TrafficFields from '../faults/TrafficFields.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
 import ScopeSelect from '../ui/ScopeSelect.vue';
@@ -53,7 +58,7 @@ const targets = useScenarioTargets();
 const topology = useTopology();
 const profiles = useProfiles();
 const capabilities = useCapabilities();
-const { networks } = useNames();
+const { networks, devices } = useNames();
 
 const form = ref<StepForm>(emptyStepForm('profile', 'step-1'));
 const serverErrors = ref<Partial<Record<StepField, string>>>({});
@@ -138,9 +143,11 @@ const clientErrors = computed(() =>
 function touched(f: string): boolean {
   const was0 = JSON.parse(openedForm || '{}') as Record<string, unknown>;
   const differs = (k: string) => JSON.stringify((form.value as unknown as Record<string, unknown>)[k]) !== JSON.stringify(was0[k]);
-  if (f === 'id' || f === 'at' || f === 'narrow') return differs(f);
+  // the target of a DHCP action is the step's narrowing, but what is wrong with it is shown once the action or the type is chosen
+  if (f === 'narrow') return differs('narrow') || (form.value.type === 'dhcp' && (differs('type') || differs('dhcp')));
+  if (f === 'id' || f === 'at') return differs(f);
   if (f === 'profile') return differs('profile');
-  return differs('fault') || differs('traffic') || differs('action') || differs('cutExisting') || differs('who') || differs('timeout') || differs('name') || differs('remove') || differs('capture') || differs('type');
+  return differs('fault') || differs('dns') || differs('tls') || differs('dhcp') || differs('traffic') || differs('action') || differs('cutExisting') || differs('who') || differs('timeout') || differs('name') || differs('remove') || differs('capture') || differs('type');
 }
 const shownClientErrors = computed(() =>
   tried.value ? clientErrors.value : (Object.fromEntries(Object.entries(clientErrors.value).filter(([f]) => touched(f))) as typeof clientErrors.value),
@@ -157,6 +164,14 @@ const narrowOptions = computed(() => [
   // a step narrows the scenario's target, never widens it
   ...targets.options.value.filter((o) => scopeWithin(scopeOf(o.value), props.scenario.config.target, topology.value)),
 ]);
+/** What the step acts on: its own narrowing, else the scenario's target (a DHCP action takes a device or a network). */
+const actsOn = computed<Scope>(() => (form.value.narrow ? scopeOf(form.value.narrow) : props.scenario.config.target));
+const dhcpScope = computed(() => dhcpScopeOf(actsOn.value));
+/** The device a TLS step acts on, when it acts on one: whether it trusts the test CA decides what a certificate case shows. */
+const trustedDevice = computed(() => {
+  const d = actsOn.value.device ? devices.data.value?.find((x) => x.id === actsOn.value.device) : undefined;
+  return d?.config ? { trust: d.config.trusts_test_ca === true, name: d.name } : undefined;
+});
 const narrowName = computed(() => (form.value.narrow ? describeScope(scopeOf(form.value.narrow), targets.names.value) : ''));
 
 const profileOptions = computed(() => {
@@ -189,6 +204,9 @@ const eid = (f: string) => `${uid}-${f}-error`;
 const typeHints: Record<string, string> = {
   profile: 'Activates a named profile on the target; it replaces the profile or fault of an earlier step with the same key.',
   fault: 'A fault with complete parameters: it replaces the fault of an earlier step on the same target and traffic, it is never merged with it.',
+  dns: 'A DNS fault of the gateway\'s DNS proxy on the target; it replaces the DNS fault of an earlier step for the same names.',
+  tls: 'A TLS case on the target: a certificate the device must reject, or a handshake that fails; it replaces the case of an earlier step with the same selection.',
+  dhcp: 'A DHCP action for a device or a network; it replaces the action of an earlier step with the same action on the same target.',
   rule: 'An access rule that acts on the target until a later step removes it or the run ends.',
   wireguard: 'Takes a WireGuard client or link down, breaks its key or blocks its endpoint; the client or link must lie inside the target.',
   capture: 'Starts or stops a capture of the target, attached to the run.',
@@ -267,6 +285,12 @@ const typeHints: Record<string, string> = {
         </div>
 
         <FaultStepFields v-else-if="form.type === 'fault'" v-model="form.fault" :errors="errors" :tunnels="tunnels" />
+
+        <DnsFields v-else-if="form.type === 'dns'" v-model="form.dns" :errors="errors" />
+
+        <TlsFields v-else-if="form.type === 'tls'" v-model="form.tls" :errors="errors" :trust="trustedDevice?.trust" :device-name="trustedDevice?.name" />
+
+        <DhcpFields v-else-if="form.type === 'dhcp'" v-model="form.dhcp" :errors="errors" :scope="dhcpScope" />
 
         <template v-else-if="form.type === 'rule'">
           <div class="grid grid-cols-3 gap-3">

@@ -2,10 +2,11 @@
 // Device detail (plan §2.17) with the data of Phase 2: identity, DHCP lease, active faults with
 // their parameters, affected packets and remaining TTL, and the counters. "Add fault" starts where
 // the device is (the fault dialog with the device as its fixed target), a fault of the device can
-// be edited, "Apply profile" leads to the profiles with the device as the scope. The panels whose
-// backend comes later (flows view, DNS, captures, DHCP and TLS test actions, diagnostics) arrive
-// with their milestones. The port forwards to the device (M35a) are listed with their status and
-// counter, each with a link to edit it on the networks page, which also adds one to the device.
+// be edited, "Apply profile" leads to the profiles with the device as the scope. The captures of the device
+// are listed with a "Capture" action (M23a). The panels whose backend comes later (flows view, DNS, DHCP
+// and TLS test actions, diagnostics) arrive with their milestones. The port forwards to the device (M35a)
+// are listed with their status and counter, each with a link to edit it on the networks page, which also
+// adds one to the device.
 // A configured device is edited (name, network, fixed IP) in the device dialog (#73); the Network card
 // shows its fixed IP as the draft has it, with what the gateway refused of it. The header shows the
 // name the list shows (a discovered device's host name, #78), the ADOPTED badge of a configured device,
@@ -20,6 +21,7 @@ import type { Overlay } from '../api/generated/model';
 import AdoptDialog from '../components/devices/AdoptDialog.vue';
 import DeviceDialog from '../components/devices/DeviceDialog.vue';
 import RemoveDeviceDialog from '../components/devices/RemoveDeviceDialog.vue';
+import CapturePanel from '../components/captures/CapturePanel.vue';
 import ActiveFaultList from '../components/faults/ActiveFaultList.vue';
 import FaultDialog from '../components/faults/FaultDialog.vue';
 import PageHeader from '../components/layout/PageHeader.vue';
@@ -185,6 +187,7 @@ useApiScreen('this device', () => [
   { method: 'GET', path: `/devices/${props.id}`, note: 'identity, lease, winning faults, counters' },
   { method: 'GET', path: `/overlays?device=${props.id}`, note: "the overlays that act on the device, its network's and groups' included" },
   { method: 'GET', path: '/port-forwards', note: 'the port forwards, those to this device listed' },
+  { method: 'GET', path: '/captures', note: 'the captures, those of this device listed' },
 ]);
 </script>
 
@@ -283,6 +286,8 @@ useApiScreen('this device', () => [
             </dd>
           </dl>
         </SectionCard>
+
+        <CapturePanel :device="{ id: d.id, name: d.name }" />
       </div>
 
       <aside class="flex min-w-0 flex-col gap-5">

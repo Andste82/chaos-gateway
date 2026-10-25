@@ -122,6 +122,34 @@ describe('the event stream', () => {
     expect(t[1]?.detail).toMatch(/not confirmed in time/);
   });
 
+  it('reads the captures and their storage again when a capture starts or ends and when the disk runs low', () => {
+    const { es, invalidate } = setup();
+    for (const t of ['capture_started', 'capture_stopped', 'disk_low']) {
+      es.send(t, { subject: { kind: 'capture', id: 'c1', name: 'bug-12' } });
+      expect(keys(invalidate)).toContainEqual(['captures']);
+      invalidate.mockClear();
+    }
+    es.send('device_online', {});
+    expect(keys(invalidate)).not.toContainEqual(['captures']);
+  });
+
+  it('toasts a capture the quota stopped, one that failed and a low disk, but not an end the user asked for', () => {
+    const { es } = setup();
+    const subject = { kind: 'capture', id: 'c1', name: 'bug-12' };
+    es.send('capture_stopped', { subject, data: { reason: 'user' } });
+    es.send('capture_stopped', { subject, data: { reason: 'duration' } });
+    es.send('capture_stopped', { subject, data: { reason: 'size' } }); // the size limit the user chose has no message
+    expect(useToastStore().toasts).toEqual([]);
+    es.send('capture_stopped', { subject, data: { reason: 'size', message: 'the captures take 5.1 GiB, more than their quota of 5 GiB' } });
+    es.send('capture_stopped', { subject, data: { reason: 'error', message: 'the service restarted' } });
+    es.send('disk_low', { data: { free_percent: 4 } });
+    expect(useToastStore().toasts.map((x) => [x.kind, x.title])).toEqual([
+      ['fault', 'bug-12 stopped: quota reached'],
+      ['error', 'bug-12 failed'],
+      ['error', 'The disk of the captures is low'],
+    ]);
+  });
+
   it('names the revision a rollback restored, at the deadline and on request', () => {
     const { es } = setup();
     es.send('revision_rolled_back', { data: { revision: 43, reason: 'confirmation timeout', restored: 42 } });

@@ -14,6 +14,9 @@ import type {
   AuditEntry,
   BlockingReference,
   Capabilities,
+  Capture,
+  CaptureRequest,
+  CaptureStorage,
   Configuration,
   DhcpLease,
   DomainChange,
@@ -491,6 +494,8 @@ export class MockGateway {
   password = 'correct horse battery staple';
   setup: SetupStatus = { completed: true };
   loggedIn = true;
+  /** The scope of the session (the admin's is `full`). */
+  sessionScope: Session['scope'] = 'full';
   /** Seconds for which POST /auth/login answers 429 rate_limited with Retry-After (the lockout after failed logins). */
   loginLockedFor = 0;
   unreachable = false;
@@ -516,6 +521,13 @@ export class MockGateway {
   reports: Record<string, Partial<RunReport>> = {};
   /** The next POST that starts a run is refused with 422 and these errors. */
   rejectRun?: ValidationError[];
+  /** The captures, oldest first (GET /captures lists them newest first). */
+  captures: Capture[] = [];
+  /** The next POST /captures is refused with 422 and these errors, or, without errors, with this problem. */
+  rejectCapture?: { errors?: ValidationError[]; code?: string; detail?: string; status?: number };
+  /** What GET /captures/storage says besides the sum of the sizes of the captures (the quota, the volume). */
+  captureStorage: Partial<CaptureStorage> = {};
+  private nextCapture = 1;
   /** What the gateway can do (GET /capabilities). */
   capabilities: Capabilities = {
     version: 'test',
@@ -644,8 +656,25 @@ export class MockGateway {
     return m;
   }
 
+  /** GET /captures/storage: the sizes of the captures against a quota of 5 GiB, a volume with 60 % free space, as the test sets it. */
+  storageOfCaptures(): CaptureStorage {
+    const GiB = 1024 ** 3;
+    return {
+      quota_bytes: 5 * GiB,
+      used_bytes: this.captures.reduce((n, c) => n + (c.size_bytes ?? 0), 0),
+      volume_total_bytes: 100 * GiB,
+      volume_free_bytes: 60 * GiB,
+      free_percent: 60,
+      min_free_percent: 10,
+      disk_low: false,
+      running: this.captures.filter((c) => c.status === 'running').length,
+      max_running: 8,
+      ...this.captureStorage,
+    };
+  }
+
   session(): Session {
-    return { kind: 'session', scope: 'full', user: 'admin', csrf_token: 'csrf-1', expires_at: new Date(Date.now() + 3_600_000).toISOString() };
+    return { kind: 'session', scope: this.sessionScope, user: 'admin', csrf_token: 'csrf-1', expires_at: new Date(Date.now() + 3_600_000).toISOString() };
   }
 
   async install(page: Page): Promise<void> {
@@ -838,6 +867,55 @@ export class MockGateway {
       return f ? json(200, f) : problem(404, 'not_found', 'no such port forward');
     }
     if (path === '/capabilities') return json(200, this.capabilities);
+    if (path.startsWith('/captures') && !this.capabilities.features.includes('captures')) return problem(422, 'unsupported_feature', 'this deployment cannot capture: the executor has no capture volume (--captures-dir)');
+    if (path === '/captures' && method === 'GET') {
+      const run = url.searchParams.get('run');
+      return json(200, this.page([...this.captures].reverse().filter((c) => !run || c.run === run), url));
+    }
+    if (path === '/captures/storage' && method === 'GET') return json(200, this.storageOfCaptures());
+    if (path === '/captures' && method === 'POST') {
+      if (this.rejectCapture) {
+        const r = this.rejectCapture;
+        this.rejectCapture = undefined;
+        if (r.errors) return json(422, { type: 'about:blank', title: 'validation_failed', status: 422, code: 'validation_failed', detail: 'the capture request is not valid', errors: r.errors });
+        return problem(r.status ?? 422, r.code ?? 'capacity_exceeded', r.detail ?? 'the volume of the captures has less than 10 % free space: delete captures, or free the disk');
+      }
+      const req = body as CaptureRequest;
+      const id = `ca000000-0000-4000-8000-${String(this.nextCapture++).padStart(12, '0')}`;
+      const capture: Capture = { ...req, id, status: 'running', started_at: new Date(this.now()).toISOString(), size_bytes: 0, packets: 0, dropped: 0 };
+      this.captures.push(capture);
+      return route.fulfill({ status: 201, headers: { ...headers, Location: `/api/v1/captures/${id}` }, contentType: 'application/json', body: JSON.stringify(capture) });
+    }
+    const capOne = /^\/captures\/([^/]+)(?:\/(stop|download))?$/.exec(path);
+    if (capOne) {
+      const cap = this.captures.find((c) => c.id === capOne[1]);
+      if (!cap) return problem(404, 'not_found', 'no such capture (it never existed, or it was deleted)');
+      if (capOne[2] === 'stop' && method === 'POST') {
+        if (cap.status === 'running') {
+          cap.status = 'stopped';
+          cap.stop_reason = 'user';
+          cap.stopped_at = new Date(this.now()).toISOString();
+        }
+        return json(200, cap);
+      }
+      if (capOne[2] === 'download' && method === 'GET') {
+        const keylog = url.searchParams.get('part') === 'keylog';
+        if (keylog && !cap.keylog) return problem(404, 'not_found', 'the capture has no TLS key log');
+        const name = (cap.name ?? `capture-${cap.id.slice(0, 8)}`) + (keylog ? '.keylog.txt' : `.${cap.format ?? 'pcapng'}`);
+        return route.fulfill({
+          status: 200,
+          headers: { ...headers, 'Content-Disposition': `attachment; filename="${name}"` },
+          contentType: keylog ? 'text/plain' : 'application/x-pcapng',
+          body: keylog ? 'CLIENT_RANDOM 00 11\n' : Buffer.from('0a0d0d0a', 'hex'),
+        });
+      }
+      if (method === 'DELETE') {
+        if (cap.status === 'running') return problem(422, 'validation_failed', 'the capture still runs: stop it first');
+        this.captures = this.captures.filter((c) => c.id !== cap.id);
+        return route.fulfill({ status: 204 });
+      }
+      if (!capOne[2] && method === 'GET') return json(200, cap);
+    }
     if (path === '/scenarios' && method === 'GET') return json(200, this.page(this.scenarioList(), url));
     const scn = /^\/scenarios\/([^/]+)$/.exec(path);
     if (scn) {

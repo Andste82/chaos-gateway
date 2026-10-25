@@ -19,6 +19,8 @@ export function objectLink(kind: string | undefined, id: string | undefined): st
       return '/rules';
     case 'profile':
       return '/profiles';
+    case 'capture':
+      return '/captures';
     case 'routing':
       return '/networks/routing';
     case 'uplink':

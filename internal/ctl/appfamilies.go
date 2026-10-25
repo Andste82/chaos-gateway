@@ -165,24 +165,13 @@ func (t *tlsFlags) add(fs *pflag.FlagSet) {
 // body is the TLS case of the case and the flags.
 func (t *tlsFlags) body(c string) (map[string]any, error) {
 	if c == "intercept" {
-		return nil, failf(ExitError, "the case intercept has settings and HTTP rules that this command has no flags for: make it with 'chaosctl overlay create -f <file>' (schema TlsCase)")
+		return nil, failf(ExitError, "the case intercept has settings and HTTP rules: make it with 'chaosctl intercept set', or from a document with 'chaosctl overlay create -f <file>' (schema TlsCase)")
 	}
 	if !oneOf(c, tlsCases...) {
 		return nil, failf(ExitError, "%q is no TLS case: one of %s", c, strings.Join(tlsCases, ", "))
 	}
-	body := map[string]any{"case": c}
-	if len(t.ports) > 0 {
-		body["ports"] = t.ports
-	}
-	if len(t.sni) > 0 {
-		body["sni"] = t.sni
-	}
-	if t.to != "" {
-		body["destination"] = destinationOf(t.to)
-	}
-	if t.cut {
-		body["cut_existing"] = true
-	}
+	body := t.selection()
+	body["case"] = c
 	return body, nil
 }
 
@@ -199,7 +188,7 @@ gateway has verified the change. The case is one of untrusted-ca and self-signed
 not-yet-valid and hostname-mismatch (signed by the test CA: only a device that trusts it can tell them from an unknown
 issuer), and handshake-reset, handshake-close and handshake-stall. Without --port the case selects the connections to the
 ports 443 and 8883; only new connections meet it unless --cut-existing says otherwise. The interception case has its own
-rules and is made with 'overlay create -f'.`,
+rules and is made with 'intercept set'.`,
 		Example: `  chaosctl tls set expired --device esp32-42 --port 8883 --ttl 2m
   chaosctl tls set untrusted-ca --network IoT --sni broker.example.com --cut-existing --ttl 30s`,
 		Args: cobra.ExactArgs(1),
@@ -232,7 +221,7 @@ rules and is made with 'overlay create -f'.`,
 	tf.add(set.Flags())
 	xf.add(set.Flags())
 	lf.add(set.Flags(), "", "the owner must renew the overlay within this time; 'chaosctl with --overlay' renews it")
-	cmd.AddCommand(set)
+	cmd.AddCommand(set, a.tlsCaCmd())
 	return cmd
 }
 

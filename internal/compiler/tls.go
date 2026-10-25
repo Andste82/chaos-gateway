@@ -26,6 +26,11 @@ import (
 //   - what the responder does with a connection (TLSCase): which case decides it depends on what only the connection
 //     knows (the server name of its ClientHello, the names the device resolved), so the responder asks the API for
 //     the decision of each connection, and the compiler only lists the cases with the clients they apply to.
+//
+// The case `intercept` (M22) is selected like every other: the responder hands the connection to the interception
+// proxy instead of answering it. Its option block_quic (on unless the case turns it off) adds one thing to the kernel
+// side: the UDP packets to port 443 of the selected clients are dropped, so that a client that tries QUIC falls back
+// to the TCP connection the proxy can intercept (tlsBlockQUIC).
 
 const (
 	// TLSChain is the prerouting chain that selects the connections for the responder.
@@ -97,17 +102,15 @@ func (t *Target) compileTLS(w *domain.World, sources []domain.Source, identity d
 	}
 }
 
-// tlsSelect adds the rules that select the connections of one case: for a new connection the selection (the
-// conntrack mark and the service mark of the packet), for the later packets the service mark of a connection that is
-// selected. With cut_existing the first rule selects every packet, so a connection that is already there is
-// selected at its next packet.
-func (t *Target) tlsSelect(w *domain.World, identity domain.Identity, c domain.Candidate) {
+// tlsMatch is what selects the traffic of a case by source and destination, without the protocol and the ports; false
+// when nothing of the case's scope has an address yet (the case selects nothing).
+func (t *Target) tlsMatch(w *domain.World, identity domain.Identity, c domain.Candidate) ([]any, bool) {
 	sources, all := w.ScopePrefixes(c.Scope, identity)
 	var sel []any
 	if all {
 		sel = append(sel, eq(ctOriginalIP("saddr"), setRef(classifyNetsName())))
 	} else if len(sources) == 0 {
-		return // nothing of the scope has an address yet
+		return nil, false // nothing of the scope has an address yet
 	} else {
 		sel = append(sel, eq(ctOriginalIP("saddr"), prefixes(domain.CollapsePrefixes(sources))))
 	}
@@ -133,6 +136,18 @@ func (t *Target) tlsSelect(w *domain.World, identity domain.Identity, c domain.C
 			}
 		}
 	}
+	return sel, true
+}
+
+// tlsSelect adds the rules that select the connections of one case: for a new connection the selection (the
+// conntrack mark and the service mark of the packet), for the later packets the service mark of a connection that is
+// selected. With cut_existing the first rule selects every packet, so a connection that is already there is
+// selected at its next packet.
+func (t *Target) tlsSelect(w *domain.World, identity domain.Identity, c domain.Candidate) {
+	sel, ok := t.tlsMatch(w, identity, c)
+	if !ok {
+		return
+	}
 	ports, ranges := domain.TLSPorts(*c.TLS)
 	sel = append(sel, eq(meta("l4proto"), "tcp"), eq(ctOriginal("proto-dst"), portValue(mergePorts(ports, ranges))))
 
@@ -148,6 +163,29 @@ func (t *Target) tlsSelect(w *domain.World, identity domain.Identity, c domain.C
 		later := append(append([]any(nil), sel...), eq(bitAnd(ctKey("mark"), int64(TLSConnMarkBit)), int64(TLSConnMarkBit)))
 		t.tlsRules = append(t.tlsRules, newRule(append(later, serviceMark)...))
 	}
+	if c.TLS.Case == model.TlsCaseCaseIntercept && blockQUIC(c.TLS) {
+		t.tlsBlockQUIC(w, identity, c)
+	}
+}
+
+// blockQUIC says whether an interception case drops QUIC: the option is on unless the case turns it off.
+func blockQUIC(c *model.TlsCase) bool {
+	return c.Intercept == nil || c.Intercept.BlockQuic == nil || *c.Intercept.BlockQuic
+}
+
+// QUICPort is the UDP port QUIC (HTTP/3) is dropped on while an interception case is in force.
+const QUICPort = 443
+
+// tlsBlockQUIC adds the rule that drops the UDP packets to port 443 of the clients (and the destination) an
+// interception case selects: a client that tries QUIC meets no answer and falls back to TCP, which the proxy
+// intercepts. QUIC itself is not intercepted (plan §2.8).
+func (t *Target) tlsBlockQUIC(w *domain.World, identity domain.Identity, c domain.Candidate) {
+	sel, ok := t.tlsMatch(w, identity, c)
+	if !ok {
+		return
+	}
+	sel = append(sel, eq(meta("l4proto"), "udp"), eq(ctOriginal("proto-dst"), QUICPort), verdict("drop"))
+	t.tlsDrops = append(t.tlsDrops, newRule(sel...))
 }
 
 // tlsChain is the chain that selects the connections for the responder; nil when no case selects anything. The
@@ -161,6 +199,7 @@ func (t *Target) tlsChain() *Chain {
 		newRule(iifname(t.Service.HostIf), verdict("return")),
 		newRule(match(ctKey("direction"), "==", "reply"), verdict("return")),
 	}
+	rules = append(rules, t.tlsDrops...)
 	rules = append(rules, t.tlsRules...)
 	return &Chain{Name: TLSChain, Base: &BaseChain{Type: "filter", Hook: "prerouting", Prio: TLSPriority, Policy: "accept"}, Rules: rules}
 }

@@ -99,6 +99,9 @@ type ServerInterface interface {
 	// GetGroup One group
 	// (GET /groups/{groupId})
 	GetGroup(c *gin.Context, groupId Ref, params GetGroupParams)
+	// ListInterceptFlows HTTP, WebSocket and raw-stream exchanges of the interception proxy, newest first
+	// (GET /intercept/flows)
+	ListInterceptFlows(c *gin.Context, params ListInterceptFlowsParams)
 	// PostLeaseEvent Lease event from Kea's run_script hook
 	// (POST /internal/dhcp/lease-events)
 	PostLeaseEvent(c *gin.Context)
@@ -111,6 +114,12 @@ type ServerInterface interface {
 	// PostDnsResolutions Addresses returned for hostname selectors; returns after the address sets are updated
 	// (POST /internal/dns/resolutions)
 	PostDnsResolutions(c *gin.Context)
+	// PostInterceptFlows HTTP, WebSocket and raw-stream exchanges seen by the interception proxy (asynchronous batch)
+	// (POST /internal/intercept/flows)
+	PostInterceptFlows(c *gin.Context)
+	// PostInterceptKeylog TLS secrets of intercepted connections, for the captures that run (asynchronous batch)
+	// (POST /internal/intercept/keylog)
+	PostInterceptKeylog(c *gin.Context)
 	// GetTlsServiceConfig Active TLS cases for the TLS responder and proxy (long poll, as `/internal/dns/config`)
 	// (GET /internal/tls/config)
 	GetTlsServiceConfig(c *gin.Context, params GetTlsServiceConfigParams)
@@ -1200,6 +1209,73 @@ func (siw *ServerInterfaceWrapper) GetGroup(c *gin.Context) {
 	siw.Handler.GetGroup(c, groupId, params)
 }
 
+// ListInterceptFlows operation middleware
+func (siw *ServerInterfaceWrapper) ListInterceptFlows(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListInterceptFlowsParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", c.Request.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter cursor: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "device" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "device", c.Request.URL.Query(), &params.Device, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter device: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "host" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "host", c.Request.URL.Query(), &params.Host, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter host: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "since" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "since", c.Request.URL.Query(), &params.Since, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter since: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "faulted" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "faulted", c.Request.URL.Query(), &params.Faulted, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter faulted: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListInterceptFlows(c, params)
+}
+
 // PostLeaseEvent operation middleware
 func (siw *ServerInterfaceWrapper) PostLeaseEvent(c *gin.Context) {
 
@@ -1266,6 +1342,32 @@ func (siw *ServerInterfaceWrapper) PostDnsResolutions(c *gin.Context) {
 	siw.Handler.PostDnsResolutions(c)
 }
 
+// PostInterceptFlows operation middleware
+func (siw *ServerInterfaceWrapper) PostInterceptFlows(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PostInterceptFlows(c)
+}
+
+// PostInterceptKeylog operation middleware
+func (siw *ServerInterfaceWrapper) PostInterceptKeylog(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PostInterceptKeylog(c)
+}
+
 // GetTlsServiceConfig operation middleware
 func (siw *ServerInterfaceWrapper) GetTlsServiceConfig(c *gin.Context) {
 
@@ -1280,6 +1382,14 @@ func (siw *ServerInterfaceWrapper) GetTlsServiceConfig(c *gin.Context) {
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "after", c.Request.URL.Query(), &params.After, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
 	if err != nil {
 		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter after: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "consumer" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "consumer", c.Request.URL.Query(), &params.Consumer, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter consumer: %w", err), http.StatusBadRequest)
 		return
 	}
 
@@ -3484,6 +3594,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/tls/ca", wrapper.GetTestCa)
 	router.POST(options.BaseURL+"/tls/ca/regenerate", wrapper.RegenerateTestCa)
 	router.GET(options.BaseURL+"/dns/queries", wrapper.ListDnsQueries)
+	router.GET(options.BaseURL+"/intercept/flows", wrapper.ListInterceptFlows)
 	router.GET(options.BaseURL+"/system/certificate", wrapper.GetCertificate)
 	router.PUT(options.BaseURL+"/system/certificate", wrapper.ReplaceCertificate)
 	router.POST(options.BaseURL+"/internal/dhcp/lease-events", wrapper.PostLeaseEvent)
@@ -3493,6 +3604,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/internal/tls/config", wrapper.GetTlsServiceConfig)
 	router.POST(options.BaseURL+"/internal/tls/resolve", wrapper.ResolveTlsConnection)
 	router.POST(options.BaseURL+"/internal/tls/handshakes", wrapper.PostTlsHandshakes)
+	router.POST(options.BaseURL+"/internal/intercept/flows", wrapper.PostInterceptFlows)
+	router.POST(options.BaseURL+"/internal/intercept/keylog", wrapper.PostInterceptKeylog)
 	router.GET(options.BaseURL+"/events", wrapper.StreamEvents)
 	router.GET(options.BaseURL+"/metrics", wrapper.GetMetrics)
 	router.GET(options.BaseURL+"/audit", wrapper.ListAudit)
@@ -4596,6 +4709,45 @@ func (response GetGroupdefaultApplicationProblemPlusJSONResponse) VisitGetGroupR
 	return err
 }
 
+type ListInterceptFlowsRequestObject struct {
+	Params ListInterceptFlowsParams
+}
+
+type ListInterceptFlowsResponseObject interface {
+	VisitListInterceptFlowsResponse(w http.ResponseWriter) error
+}
+
+type ListInterceptFlows200JSONResponse InterceptFlowPage
+
+func (response ListInterceptFlows200JSONResponse) VisitListInterceptFlowsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListInterceptFlowsdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ListInterceptFlowsdefaultApplicationProblemPlusJSONResponse) VisitListInterceptFlowsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type PostLeaseEventRequestObject struct {
 	Body *PostLeaseEventJSONRequestBody
 }
@@ -4731,6 +4883,72 @@ type PostDnsResolutionsdefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response PostDnsResolutionsdefaultApplicationProblemPlusJSONResponse) VisitPostDnsResolutionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PostInterceptFlowsRequestObject struct {
+	Body *PostInterceptFlowsJSONRequestBody
+}
+
+type PostInterceptFlowsResponseObject interface {
+	VisitPostInterceptFlowsResponse(w http.ResponseWriter) error
+}
+
+type PostInterceptFlows204Response struct {
+}
+
+func (response PostInterceptFlows204Response) VisitPostInterceptFlowsResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type PostInterceptFlowsdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response PostInterceptFlowsdefaultApplicationProblemPlusJSONResponse) VisitPostInterceptFlowsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PostInterceptKeylogRequestObject struct {
+	Body *PostInterceptKeylogJSONRequestBody
+}
+
+type PostInterceptKeylogResponseObject interface {
+	VisitPostInterceptKeylogResponse(w http.ResponseWriter) error
+}
+
+type PostInterceptKeylog204Response struct {
+}
+
+func (response PostInterceptKeylog204Response) VisitPostInterceptKeylogResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type PostInterceptKeylogdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response PostInterceptKeylogdefaultApplicationProblemPlusJSONResponse) VisitPostInterceptKeylogResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -7811,6 +8029,9 @@ type StrictServerInterface interface {
 	// GetGroup One group
 	// (GET /groups/{groupId})
 	GetGroup(ctx context.Context, request GetGroupRequestObject) (GetGroupResponseObject, error)
+	// ListInterceptFlows HTTP, WebSocket and raw-stream exchanges of the interception proxy, newest first
+	// (GET /intercept/flows)
+	ListInterceptFlows(ctx context.Context, request ListInterceptFlowsRequestObject) (ListInterceptFlowsResponseObject, error)
 	// PostLeaseEvent Lease event from Kea's run_script hook
 	// (POST /internal/dhcp/lease-events)
 	PostLeaseEvent(ctx context.Context, request PostLeaseEventRequestObject) (PostLeaseEventResponseObject, error)
@@ -7823,6 +8044,12 @@ type StrictServerInterface interface {
 	// PostDnsResolutions Addresses returned for hostname selectors; returns after the address sets are updated
 	// (POST /internal/dns/resolutions)
 	PostDnsResolutions(ctx context.Context, request PostDnsResolutionsRequestObject) (PostDnsResolutionsResponseObject, error)
+	// PostInterceptFlows HTTP, WebSocket and raw-stream exchanges seen by the interception proxy (asynchronous batch)
+	// (POST /internal/intercept/flows)
+	PostInterceptFlows(ctx context.Context, request PostInterceptFlowsRequestObject) (PostInterceptFlowsResponseObject, error)
+	// PostInterceptKeylog TLS secrets of intercepted connections, for the captures that run (asynchronous batch)
+	// (POST /internal/intercept/keylog)
+	PostInterceptKeylog(ctx context.Context, request PostInterceptKeylogRequestObject) (PostInterceptKeylogResponseObject, error)
 	// GetTlsServiceConfig Active TLS cases for the TLS responder and proxy (long poll, as `/internal/dns/config`)
 	// (GET /internal/tls/config)
 	GetTlsServiceConfig(ctx context.Context, request GetTlsServiceConfigRequestObject) (GetTlsServiceConfigResponseObject, error)
@@ -8787,6 +9014,32 @@ func (sh *strictHandler) GetGroup(ctx *gin.Context, groupId Ref, params GetGroup
 	}
 }
 
+// ListInterceptFlows operation middleware
+func (sh *strictHandler) ListInterceptFlows(ctx *gin.Context, params ListInterceptFlowsParams) {
+	var request ListInterceptFlowsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ListInterceptFlows(ctx, request.(ListInterceptFlowsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListInterceptFlows")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(ListInterceptFlowsResponseObject); ok {
+		if err := validResponse.VisitListInterceptFlowsResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // PostLeaseEvent operation middleware
 func (sh *strictHandler) PostLeaseEvent(ctx *gin.Context) {
 	var request PostLeaseEventRequestObject
@@ -8899,6 +9152,68 @@ func (sh *strictHandler) PostDnsResolutions(ctx *gin.Context) {
 		sh.options.HandlerErrorFunc(ctx, err)
 	} else if validResponse, ok := response.(PostDnsResolutionsResponseObject); ok {
 		if err := validResponse.VisitPostDnsResolutionsResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PostInterceptFlows operation middleware
+func (sh *strictHandler) PostInterceptFlows(ctx *gin.Context) {
+	var request PostInterceptFlowsRequestObject
+
+	var body PostInterceptFlowsJSONRequestBody
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(ctx, err)
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.PostInterceptFlows(ctx, request.(PostInterceptFlowsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PostInterceptFlows")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(PostInterceptFlowsResponseObject); ok {
+		if err := validResponse.VisitPostInterceptFlowsResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PostInterceptKeylog operation middleware
+func (sh *strictHandler) PostInterceptKeylog(ctx *gin.Context) {
+	var request PostInterceptKeylogRequestObject
+
+	var body PostInterceptKeylogJSONRequestBody
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(ctx, err)
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.PostInterceptKeylog(ctx, request.(PostInterceptKeylogRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PostInterceptKeylog")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(PostInterceptKeylogResponseObject); ok {
+		if err := validResponse.VisitPostInterceptKeylogResponse(ctx.Writer); err != nil {
 			sh.options.ResponseErrorHandlerFunc(ctx, err)
 		}
 	} else if response != nil {

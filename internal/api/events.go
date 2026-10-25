@@ -69,7 +69,7 @@ var knownTypes = func() map[string]bool {
 		model.EventTypeOverlayExpired, model.EventTypeOverlayOrphaned,
 		model.EventTypeRunQueued, model.EventTypeRunStarted, model.EventTypeRunStep, model.EventTypeRunCheck, model.EventTypeRunFinished,
 		model.EventTypeCaptureStarted, model.EventTypeCaptureStopped, model.EventTypeDiskLow,
-		model.EventTypeDnsFaultTriggered, model.EventTypeDnsSetEpoch, model.EventTypeTlsHandshake,
+		model.EventTypeDnsFaultTriggered, model.EventTypeDnsSetEpoch, model.EventTypeTlsHandshake, model.EventTypeHttpFaultTriggered,
 	} {
 		m[string(t)] = true
 	}
@@ -212,6 +212,13 @@ func describe(ev engine.Event) string {
 			msg += ": the device took a certificate it must reject"
 		}
 		return msg
+	case "http_fault_triggered":
+		who := str("device_name")
+		if who == "" {
+			who = str("client")
+		}
+		acts, _ := ev.Data["actions"].([]string)
+		return "HTTP rule (" + strings.Join(acts, ", ") + ") acted on a request of " + who + " to " + str("host") + str("path")
 	case "dns_set_epoch":
 		return "the DNS-derived set of " + str("pattern") + " was replaced: it starts empty"
 	case "network_degraded":

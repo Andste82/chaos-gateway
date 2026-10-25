@@ -32,7 +32,7 @@ func WaitForCAs(ctx context.Context, clk clock.Clock, dir string, interval time.
 }
 
 // WatchCAs reloads the CAs into the issuer when their files change, until ctx ends: a CA that was made anew (its
-// regeneration comes with M22) is the one the responder signs with from then on, so the certificates it shows chain to
+// regeneration is `POST /tls/ca/regenerate`, M22) is the one the responder signs with from then on, so the certificates it shows chain to
 // what the devices were given.
 func WatchCAs(ctx context.Context, clk clock.Clock, dir string, iss *Issuer, interval time.Duration, log *slog.Logger) {
 	last := stamp(dir)

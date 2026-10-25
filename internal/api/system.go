@@ -273,7 +273,7 @@ func (s *Server) GetCapabilities(c *gin.Context) {
 
 // Features are the feature flags of this build (plan §2.15 capabilities): what the milestones up to
 // M14, M35a (port forwarding), M15 (runs), M20 (DNS faults and hostname selectors) and M21 (the TLS responder: certificate cases) provide.
-var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "dns.faults", "dns.hostname_selectors", "tls.responder", "tls.cases", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards", "runs", "checks"}
+var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "dns.faults", "dns.hostname_selectors", "tls.responder", "tls.cases", "tls.intercept", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards", "runs", "checks"}
 
 // GetSystemInfo implements GET /system/info.
 func (s *Server) GetSystemInfo(c *gin.Context) {
@@ -415,6 +415,26 @@ func (s *Server) GetHealth(c *gin.Context) {
 			worse("degraded")
 		}
 		comps = append(comps, tlsc)
+	}
+	// the interception proxy is optional (plan §3.8): a gateway that never saw it poll and has no interception case in
+	// force reports it disabled, one that has a case but no proxy that polls reports it degraded
+	if snap.Service == nil {
+		comps = append(comps, healthComponent{Name: "tls_proxy", Status: "disabled"})
+	} else {
+		proxy := healthComponent{Name: "tls_proxy", Status: "healthy"}
+		last := s.interceptLastPoll()
+		stale := last.IsZero() || s.clk.Now().Sub(last) > 60*time.Second
+		switch {
+		case stale && hasInterceptCase(snap):
+			proxy.Status, proxy.Detail = "degraded", "a TLS interception case is in force and the interception proxy has not polled for its configuration in the last 60s: the connections of the case are reset"
+			worse("degraded")
+		case last.IsZero():
+			proxy.Status, proxy.Detail = "disabled", "the interception proxy is not deployed: no case of the kind intercept can work"
+		case stale:
+			proxy.Status, proxy.Detail = "degraded", "the interception proxy has not polled for its configuration in the last 60s"
+			worse("degraded")
+		}
+		comps = append(comps, proxy)
 	}
 	if err := s.cfg.Audit.Err(); err != nil {
 		comps[0].Status, comps[0].Detail = "unhealthy", "the audit log cannot be written: "+firstLine(err.Error())

@@ -20,8 +20,9 @@ func TestTheFamiliesOfAProfileAreItsPartsInReportingOrder(t *testing.T) {
 	}
 }
 
-// Plan §2.9: every built-in profile is usable ("DNS broken" since M20, "TLS broken" since M21, P2-M11-01); a
-// custom profile is judged by its parts: only a tls part with the case intercept, which M22 brings, is not.
+// Plan §2.9: every built-in profile is usable ("DNS broken" since M20, "TLS broken" since M21, P2-M11-01) and so is a custom
+// profile with any part: the case intercept came with M22, the last thing a part waited for. The rule that a profile with a part of
+// a family that is not implemented is unavailable is kept (and tested with a family that is named for the test).
 func TestOnlyProfilesWithAPartOfALaterFamilyAreUnavailable(t *testing.T) {
 	for _, b := range BuiltinProfiles() {
 		if parts := UnavailableParts(b.Profile); len(parts) != 0 {
@@ -38,8 +39,18 @@ func TestOnlyProfilesWithAPartOfALaterFamilyAreUnavailable(t *testing.T) {
 		t.Errorf("a certificate case is available since M21: %+v", got)
 	}
 	cases.Parts.Tls = &model.TlsCase{Case: "intercept"}
-	if got := UnavailableParts(cases); len(got) != 1 || got[0] != (UnavailablePart{FamilyTLS, "M22"}) {
-		t.Errorf("the case intercept arrives with M22: %+v", got)
+	if got := UnavailableParts(cases); len(got) != 0 {
+		t.Errorf("the case intercept is available since M22: %+v", got)
+	}
+	// a family this build does not implement makes the profile unavailable as a whole, in the order of the families
+	defer SetUnavailableFamilies(map[string]string{FamilyTLS: "M99", FamilyDNS: "M98"})()
+	if got := UnavailableParts(cases); len(got) != 2 || got[0] != (UnavailablePart{FamilyDNS, "M98"}) || got[1] != (UnavailablePart{FamilyTLS, "M99"}) {
+		t.Errorf("%+v", got)
+	}
+	for _, b := range BuiltinProfiles() {
+		if (b.Profile.Parts.Tls != nil || b.Profile.Parts.Dns != nil) != (len(UnavailableParts(b.Profile)) > 0) {
+			t.Errorf("%s: %+v", b.Profile.Name, UnavailableParts(b.Profile))
+		}
 	}
 }
 

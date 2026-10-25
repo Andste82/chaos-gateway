@@ -401,3 +401,68 @@ func (r resolver) destination(path string, d *model.Destination) (peers, notPeer
 	}
 	return nil, nil, nil
 }
+
+// ---- which clients a scope records
+
+// Covers reports whether the traffic of a client address is part of what a scope records, for the key log of the interception
+// proxy (plan §2.11, M22): a capture gets the TLS secrets of the connections of the clients it records. A selector counts for
+// its source only (its destination and ports are not looked at: the secrets of the other connections of the same device are
+// in the key log too). The uplink records what leaves the gateway, where the proxy's own connections to the servers are, so
+// every client is covered. The clients of a WireGuard network of the role management are never covered: no capture records them.
+func Covers(snap *engine.Snapshot, w *domain.World, scope model.CaptureScope, client netip.Addr) bool {
+	r := resolver{snap: snap}
+	if w != nil {
+		if id, ok := w.NetworkOf(client); ok {
+			for _, wg := range snap.WireGuardInterfaces {
+				if wg.Role == "management" && lower(wg.NetworkID) == lower(id) {
+					return false
+				}
+			}
+		}
+	}
+	ownedBy := func(ds ...engine.DeviceState) bool {
+		owner, ok := snap.Identity.OwnerOf(client)
+		for _, d := range ds {
+			if ok && lower(owner) == lower(d.ID) || slices.Contains(d.Addresses, client) {
+				return true
+			}
+		}
+		return false
+	}
+	inNetwork := func(ref string) bool {
+		id, _, err := r.networkID("", ref)
+		if err != nil || w == nil {
+			return false
+		}
+		n, ok := w.NetworkOf(client)
+		return ok && lower(n) == lower(id)
+	}
+	switch {
+	case scope.Uplink != nil:
+		return true
+	case scope.Network != nil:
+		return inNetwork(*scope.Network)
+	case scope.Device != nil:
+		d, err := r.deviceByRef("", *scope.Device)
+		return err == nil && ownedBy(d)
+	case scope.Selector != nil:
+		src := scope.Selector.Source
+		switch {
+		case src.Device != nil:
+			d, err := r.deviceByRef("", *src.Device)
+			return err == nil && ownedBy(d)
+		case src.Group != nil:
+			ds, err := r.groupDevices("", *src.Group)
+			return err == nil && ownedBy(ds...)
+		case src.Network != nil:
+			return inNetwork(*src.Network)
+		case src.Global != nil:
+			if w == nil {
+				return false
+			}
+			_, ok := w.NetworkOf(client)
+			return ok
+		}
+	}
+	return false
+}

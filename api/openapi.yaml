@@ -1861,7 +1861,9 @@ paths:
       summary: Download the capture (also while running); `keylog` returns the TLS key log
       description: |
         `part=keylog` and captures marked `sensitive` need scope `full`. A capture that has no key log (`keylog:
-        false`, until M22) is `404 not_found` for `part=keylog`. A capture of a ring buffer is one file: the files
+        false`: no intercepted connection of its scope ran while it recorded) is `404 not_found` for `part=keylog`.
+        The key log holds the secrets of the connections the interception proxy handled while the capture ran (M22), in
+        the NSS format that Wireshark reads (`Edit > Preferences > Protocols > TLS > (Pre)-Master-Secret log file`). A capture of a ring buffer is one file: the files
         of the ring joined, oldest first (pcapng files join into a file of several sections, pcap files into one
         file); of a running capture only the complete records are sent.
       x-milestone: M17
@@ -1938,6 +1940,11 @@ paths:
       tags: [config]
       operationId: regenerateTestCa
       summary: Generate a new test CA (devices must install the new certificate)
+      description: |
+        Replaces the test CA (certificate and key) with a new one and returns its certificate. The TLS responder and the
+        interception proxy load it within seconds; every device that installed the old certificate trusts nothing the
+        gateway shows it until it installs the new one. The unknown CA, which is never distributed, is not changed. The
+        request is recorded in the audit log (`tls.ca_regenerate`).
       x-milestone: M22
       x-required-scope: full
       responses:
@@ -1975,6 +1982,41 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/DnsQueryPage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /intercept/flows:
+    get:
+      tags: [devices]
+      operationId: listInterceptFlows
+      summary: HTTP, WebSocket and raw-stream exchanges of the interception proxy, newest first
+      description: |
+        What the proxy saw of the connections the case `intercept` selected (plan §2.8, M22): one entry per HTTP exchange, per
+        WebSocket connection and per connection that is no HTTP, with the rules that acted on it. The gateway keeps the newest
+        20000 in memory; the log is empty after a restart.
+      x-milestone: M22
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: device
+          in: query
+          schema: {$ref: '#/components/schemas/Ref'}
+        - name: host
+          in: query
+          description: Exact host name or `*.suffix`
+          schema: {type: string}
+        - name: since
+          in: query
+          schema: {type: string, format: date-time}
+        - name: faulted
+          in: query
+          description: Only exchanges a rule acted on.
+          schema: {type: boolean}
+      responses:
+        '200':
+          description: Exchanges
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/InterceptFlowPage'}
         default: {$ref: '#/components/responses/Problem'}
   /system/certificate:
     get:
@@ -2097,6 +2139,9 @@ paths:
       tags: [internal]
       operationId: getTlsServiceConfig
       summary: Active TLS cases for the TLS responder and proxy (long poll, as `/internal/dns/config`)
+      description: |
+        The cases of the kind `intercept` carry their `intercept` settings (the HTTP rules the proxy applies). `consumer`
+        says who asks, for the health check: the TLS responder (default) or the interception proxy (M22).
       x-internal: true
       x-milestone: M21
       x-required-scope: service
@@ -2104,6 +2149,9 @@ paths:
         - name: after
           in: query
           schema: {type: integer, format: int64}
+        - name: consumer
+          in: query
+          schema: {type: string, enum: [responder, proxy], default: responder}
       responses:
         '200':
           description: Configuration
@@ -2124,7 +2172,9 @@ paths:
         the same one `explain` shows. `case` is absent when no case decides the connection (the kernel's selection was
         wider than the case, the case went since, or its `sni` does not match): the responder then passes the
         connection through to the destination it was meant for, unchanged, when `passthrough` says the gateway would have
-        forwarded it, and resets it otherwise. `name` is what to put into the
+        forwarded it, and resets it otherwise. The case `intercept` is judged the same way: the proxy's own connection to the
+        destination leaves through the gateway's service path, so `passthrough` is also given with this case and the responder
+        hands the connection over only when it is true. `name` is what to put into the
         certificate when the ClientHello has no SNI: a name the gateway's DNS answered the client for the address
         (the one it answered last), else absent (a certificate for the address).
       x-internal: true
@@ -2158,6 +2208,49 @@ paths:
               type: array
               maxItems: 1000
               items: {$ref: '#/components/schemas/TlsHandshakeReport'}
+      responses:
+        '204': {description: Accepted}
+        default: {$ref: '#/components/responses/Problem'}
+  /internal/intercept/flows:
+    post:
+      tags: [internal]
+      operationId: postInterceptFlows
+      summary: HTTP, WebSocket and raw-stream exchanges seen by the interception proxy (asynchronous batch)
+      x-internal: true
+      x-milestone: M22
+      x-required-scope: service
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              maxItems: 1000
+              items: {$ref: '#/components/schemas/InterceptFlowReport'}
+      responses:
+        '204': {description: Accepted}
+        default: {$ref: '#/components/responses/Problem'}
+  /internal/intercept/keylog:
+    post:
+      tags: [internal]
+      operationId: postInterceptKeylog
+      summary: TLS secrets of intercepted connections, for the captures that run (asynchronous batch)
+      description: |
+        The lines are in the NSS key log format that Wireshark reads. The API adds them to the key log of every running
+        capture whose scope covers the client (`GET /captures/{id}/download?part=keylog`), which marks the capture
+        `sensitive`. Nothing is kept when no capture runs: secrets of a connection that no capture saw are of no use and are not
+        stored.
+      x-internal: true
+      x-milestone: M22
+      x-required-scope: service
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              maxItems: 1000
+              items: {$ref: '#/components/schemas/InterceptKeylogBatch'}
       responses:
         '204': {description: Accepted}
         default: {$ref: '#/components/responses/Problem'}
@@ -3636,8 +3729,11 @@ components:
     TlsCase:
       description: |
         TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
-        (certificate and handshake cases, M21) or the interception proxy (`intercept`, M22).
-        Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
+        (certificate and handshake cases, M21). The case `intercept` (M22) is also decided by the responder, which hands the
+        connection to the interception proxy (mitmproxy sidecar) instead of answering it: the proxy terminates the device's TLS
+        with a certificate of the test CA, opens its own connection to the real server and applies the `http_rules`. It needs a
+        device that trusts the test CA (`GET /tls/ca`); a device that does not rejects the certificate, which the handshake events
+        show. Default ports 443 and 8883; protocol must be `tcp` or omitted. For the specificity
         level (plan §2.4) a TLS case always has a port part, its ports or the default ones, and
         `sni` or a destination count as destination: a case without selectors on a device has
         level 3, with an SNI level 1.
@@ -3664,12 +3760,26 @@ components:
         keylog:
           type: boolean
           default: true
+          description: |
+            Give the TLS secrets of the intercepted connections to the captures that run while the device talks
+            (`GET /captures/{id}/download?part=keylog`), so Wireshark can decrypt the capture. A capture that receives
+            secrets is marked `sensitive`. The proxy writes the log whatever this says; `false` keeps it from the captures.
         block_quic:
           type: boolean
           default: true
-          description: Drop UDP 443 for the selected traffic, forcing TCP.
+          description: |
+            Drop UDP 443 of the selected clients (and destination, when the case names one) while the case is in force, so
+            that a client that tries QUIC / HTTP/3 falls back to TCP, which the proxy can intercept. QUIC itself is not
+            intercepted.
         http_rules:
           type: array
+          description: |
+            Applied in order to every HTTP request of the intercepted connections (HTTP/1.1 and HTTP/2, WebSocket handshakes
+            included) that the rule's `match` selects. Every matching rule applies, in the order written, until one of the
+            terminal actions (`block`, `status`, `abort`) has acted: nothing after it does. `delay` holds the request (and so the
+            response) back, `modify` changes headers and bodies, `throttle` paces the bytes towards the device. A
+            connection that is no HTTP (MQTT over TLS, a raw stream) is matched by the rules that name no `path_prefix` and no
+            `method`: `block` and `abort` close it, `delay` holds it back once, `throttle` paces it.
           items: {$ref: '#/components/schemas/HttpRule'}
     HttpRule:
       type: object
@@ -3678,6 +3788,12 @@ components:
         match: {$ref: '#/components/schemas/HttpMatch'}
         action:
           type: string
+          description: |
+            `block` answers 403 with a short text and never reaches the server; `status` answers with the given status code and an
+            empty body, also without the server; `delay` waits for `delay` before the request goes on; `throttle` paces the bytes
+            sent to the device at `rate`, for the response to the request the rule matches (the next request of the connection
+            sets its own pacing, none when no throttle rule matches it; the streams of one HTTP/2 connection share it); `abort` resets the
+            connection to the device; `modify` changes the request and response as `modify` says.
           enum: [block, status, delay, throttle, abort, modify]
         status:
           type: integer
@@ -3693,10 +3809,11 @@ components:
         modify: {$ref: '#/components/schemas/HttpModify'}
     HttpMatch:
       type: object
+      description: A rule without `match` selects every request. Every given field must match.
       properties:
         host: {$ref: '#/components/schemas/Hostname'}
-        path_prefix: {type: string, maxLength: 512}
-        method: {type: string, maxLength: 16}
+        path_prefix: {type: string, maxLength: 512, description: 'The request path, without the query, starts with it.'}
+        method: {type: string, maxLength: 16, description: 'The request method, compared without regard to case.'}
     HttpModify:
       type: object
       properties:
@@ -5828,6 +5945,7 @@ components:
         - dns_fault_triggered
         - dns_set_epoch
         - tls_handshake
+        - http_fault_triggered
         - wireguard_peer_online
         - wireguard_peer_offline
         - routing_session_changed
@@ -6100,6 +6218,59 @@ components:
           type: array
           items: {$ref: '#/components/schemas/DnsQueryLogEntry'}
         next_cursor: {type: string}
+    InterceptFlowReport:
+      type: object
+      required: [time, client, original_dst, protocol]
+      properties:
+        time: {type: string, format: date-time, description: 'When the request arrived at the proxy (the connection was opened, for a stream).'}
+        client: {$ref: '#/components/schemas/Ipv4'}
+        original_dst:
+          type: string
+          description: '`ip:port` the device meant.'
+        overlay: {$ref: '#/components/schemas/Uuid'}
+        protocol:
+          type: string
+          enum: [http, websocket, tcp]
+          description: '`tcp` is a connection that is no HTTP: its bytes are counted, not read.'
+        method: {type: string, maxLength: 16}
+        host: {type: string, maxLength: 253}
+        path: {type: string, maxLength: 1024, description: 'The request target, cut at 1024 characters.'}
+        status: {type: integer, description: 'The status code the device got, absent when it got none.'}
+        request_bytes: {type: integer, format: int64}
+        response_bytes: {type: integer, format: int64}
+        messages: {type: integer, format: int64, description: 'WebSocket messages, both directions.'}
+        duration_ms: {type: number}
+        actions:
+          type: array
+          description: The actions of the rules that acted on the exchange, in the order they acted.
+          items: {type: string, enum: [block, status, delay, throttle, abort, modify]}
+        error: {type: string, maxLength: 512, description: 'Why the exchange ended without a response (the server did not answer, the device went away).'}
+    InterceptFlow:
+      allOf:
+        - $ref: '#/components/schemas/InterceptFlowReport'
+        - type: object
+          properties:
+            device:
+              allOf: [{$ref: '#/components/schemas/Uuid'}]
+              description: Filled in by the API from the observed state.
+    InterceptFlowPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/InterceptFlow'}
+        next_cursor: {type: string}
+    InterceptKeylogBatch:
+      type: object
+      required: [client, lines]
+      properties:
+        client: {$ref: '#/components/schemas/Ipv4'}
+        overlay: {$ref: '#/components/schemas/Uuid'}
+        lines:
+          type: array
+          maxItems: 1000
+          items: {type: string, maxLength: 512}
     CertificateInfo:
       type: object
       properties:
@@ -6283,7 +6454,7 @@ components:
         passthrough:
           type: boolean
           description: |
-            Only without a `case`: whether the gateway would have forwarded the connection if it had not been selected, judged
+            Without a `case`, and with the case `intercept`: whether the gateway would have forwarded the connection if it had not been selected, judged
             by the access rules and the access matrix on the original destination. The responder passes the connection through
             only when this is true and resets it otherwise: the answer of the gateway must not let a device reach a server that the
             matrix keeps it from.
@@ -6301,14 +6472,18 @@ components:
         case: {type: string}
         outcome:
           type: string
-          enum: [rejected, accepted, client_closed, timeout, reset_sent, close_sent, stalled]
+          enum: [rejected, accepted, client_closed, timeout, reset_sent, close_sent, stalled, intercepted, proxy_unavailable]
           description: |
             `rejected` - the client aborted (an alert, or closing the connection) after it was shown the certificate;
             `accepted` - the handshake completed, the client took the certificate (a security failure for a case that
             must be rejected); `client_closed` - the client went away before it was shown a certificate;
             `timeout` - the handshake did not finish in time; `reset_sent`, `close_sent` and `stalled` - the
             responder answered the ClientHello with a reset (`handshake_reset`), a FIN (`handshake_close`) or nothing
-            (`handshake_stall`).
+            (`handshake_stall`); `intercepted` - the responder handed the connection to the interception proxy (case
+            `intercept`; this is the report that counts the connection for its overlay), `proxy_unavailable` - it could not
+            (the proxy is not running or refused the connection) and reset the connection. The proxy reports what the
+            device did with its certificate as `accepted`, `rejected`, `client_closed` or `timeout`, with the case `intercept`;
+            those reports are not counted again.
         alert:
           type: string
           example: bad_certificate

@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/Andste82/chaos-gateway/internal/domain"
+	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
 // This file is what the TLS responder asks of the engine (plan §2.8, M21): the case that decides a connection it
@@ -33,11 +34,11 @@ type TLSDecision struct {
 	// Device is the device's UUID, empty for an address no device owns; DeviceName its name.
 	Device, DeviceName string
 	TrustsTestCA       bool
-	// Passthrough is only meaningful without a case: whether the gateway would have forwarded the connection if the redirect had
-	// not taken it, judged by the access rules, the gateway's protection and the access matrix on the destination the device meant
-	// (the same judgment `explain` makes). The responder passes a connection on only then: its own connection to the destination
-	// leaves the namespace by the gateway's service path, which the matrix does not see, so a connection the matrix would have
-	// dropped must not get through it.
+	// Passthrough is meaningful without a case and with the case `intercept` (M22): whether the gateway would have forwarded the
+	// connection if the redirect had not taken it, judged by the access rules, the gateway's protection and the access matrix on
+	// the destination the device meant (the same judgment `explain` makes). The responder passes a connection on only then: its
+	// own connection to the destination (or the proxy's) leaves the namespace by the gateway's service path, which the matrix
+	// does not see, so a connection the matrix would have dropped must not get through it.
 	Passthrough bool
 }
 
@@ -102,7 +103,7 @@ func (e *Engine) ResolveTLS(c TLSConnection) (TLSDecision, error) {
 	}
 	q := domain.Query{Source: sub, DestIP: c.Dst.Addr(), DestNames: c.Names, Protocol: "tcp", Port: int(c.Dst.Port()), SNI: strings.ToLower(c.SNI)}
 	dec.Case = domain.Winner(world.Resolve(q), domain.FamilyTLS)
-	if dec.Case == nil && sub.IP.IsValid() {
+	if (dec.Case == nil || (dec.Case.TLS != nil && dec.Case.TLS.Case == model.TlsCaseCaseIntercept)) && sub.IP.IsValid() {
 		dec.Passthrough = world.AccessDecision(q, e.accessFacts(snap)).Verdict == "allow"
 	}
 	return dec, nil

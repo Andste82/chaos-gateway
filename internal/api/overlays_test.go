@@ -167,7 +167,6 @@ func TestAReadOnlyTokenCannotWriteOverlays(t *testing.T) {
 func TestOverlaysOfLaterMilestonesAreRefusedAndInvalidOnesAreExplained(t *testing.T) {
 	g := ready(t)
 	for body, milestone := range map[string]string{
-		`{"target":{"network":"IoT"},"tls":{"case":"intercept"}}`:  "M22",
 		`{"target":{"network":"IoT"},"dhcp":{"action":"silence"}}`: "M23",
 	} {
 		r := g.createOverlay(body)

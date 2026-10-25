@@ -2,7 +2,6 @@ package engine_test
 
 import (
 	"context"
-	"errors"
 	"net/netip"
 	"strings"
 	"sync/atomic"
@@ -71,7 +70,7 @@ func (h *harness) kernelChain(name string) (rules int, ok bool) {
 }
 
 // A TLS overlay is accepted, is a case of the snapshot and of the kernel (the chain that selects its connections for the
-// responder), and takes both away when it goes; the case intercept waits for M22.
+// responder), and takes both away when it goes.
 func TestATLSOverlayIsACaseOfTheSnapshotAndSelectsItsConnectionsInTheKernel(t *testing.T) {
 	h := tlsHarness(t)
 	if _, ok := h.kernelChain(compiler.TLSChain); ok {
@@ -90,12 +89,6 @@ func TestATLSOverlayIsACaseOfTheSnapshotAndSelectsItsConnectionsInTheKernel(t *t
 	}
 	if n, ok := h.kernelChain("forward"); !ok || n == 0 {
 		t.Errorf("forward: %d %v", n, ok)
-	}
-
-	if _, err := h.put(alice, "target: {device: esp32-42}\ntls: {case: intercept}"); err == nil {
-		t.Error("the case intercept was accepted")
-	} else if ue := new(engine.UnsupportedOverlayError); !errors.As(err, &ue) || ue.Milestone != "M22" {
-		t.Errorf("%v", err)
 	}
 
 	if _, err := h.e.DeleteOverlay(context.Background(), res.Overlay.Id, nil, model.Actor{}); err != nil {
@@ -254,5 +247,97 @@ func TestAnOverlayWithoutAServiceNamespaceStaysACaseButRedirectsNothing(t *testi
 	}
 	if !found {
 		t.Errorf("%+v", s.Problems)
+	}
+}
+
+// ---- the case intercept (M22)
+
+// The case intercept is accepted with its settings, is a case of the snapshot (the proxy fetches its rules from it), selects
+// its connections in the kernel and drops UDP 443 of its clients (block_quic), and takes all of it away when it goes.
+func TestAnInterceptionCaseIsACaseOfTheSnapshotAndDropsQUICInTheKernel(t *testing.T) {
+	h := tlsHarness(t)
+	res := h.mustPut(alice, "target: {device: esp32-42}\ntls: {case: intercept, ports: [443], intercept: {http_rules: [{match: {host: api.example.com, path_prefix: /v1}, action: status, status: 503}]}}")
+	s := h.barrier()
+	if len(s.TLSCases) != 1 || s.TLSCases[0].Overlay != res.Overlay.Id.String() || s.TLSCases[0].Case.Case != model.TlsCaseCaseIntercept {
+		t.Fatalf("%+v", s.TLSCases)
+	}
+	rules := s.TLSCases[0].Case.Intercept.HttpRules
+	if rules == nil || len(*rules) != 1 || (*rules)[0].Action != model.HttpRuleActionStatus || *(*rules)[0].Status != 503 {
+		t.Errorf("the rules are in the snapshot: %+v", s.TLSCases[0].Case.Intercept)
+	}
+	// the selection (two rules) and the drop of QUIC
+	if n, ok := h.kernelChain(compiler.TLSChain); !ok || n != 5 {
+		t.Errorf("the kernel's chain: %d rules, there %v", n, ok)
+	}
+	if _, err := h.e.DeleteOverlay(context.Background(), res.Overlay.Id, nil, model.Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	if s := h.barrier(); len(s.TLSCases) != 0 {
+		t.Errorf("%+v", s.TLSCases)
+	}
+	if _, ok := h.kernelChain(compiler.TLSChain); ok {
+		t.Error("the chain stays without a case")
+	}
+}
+
+// A profile with the part intercept activates and its case decides the connections of the network.
+func TestAProfileWithAnInterceptPartActivatesAndItsCaseDecides(t *testing.T) {
+	h := tlsHarness(t)
+	const prof = "1f2e3d4c-5b6a-4798-8a9b-0c1d2e3f4a5b"
+	h.mustApply(h.revision(func(c *model.Configuration) {
+		withDHCPAndDevice(c)
+		d := (*c.Devices)[devID]
+		d.TrustsTestCa = ptr(true)
+		(*c.Devices)[devID] = d
+		c.Profiles = &map[string]model.Profile{prof: {Name: "inspect", Parts: model.ProfileParts{Tls: &model.TlsCase{Case: "intercept"}}}}
+	}))
+	res := h.mustPut(alice, "target: {network: IoT}\nprofile: inspect")
+	dec, err := h.e.ResolveTLS(engine.TLSConnection{Client: netip.MustParseAddr("10.10.0.31"), Dst: netip.MustParseAddrPort("203.0.113.10:443"), SNI: "api.example.com"})
+	if err != nil || dec.Case == nil || dec.Case.ID != res.Overlay.Id.String() || dec.Case.TLS.Case != model.TlsCaseCaseIntercept {
+		t.Fatalf("%+v %v", dec, err)
+	}
+}
+
+// The proxy's own connection to the server leaves through the gateway's service path, so the case intercept is judged like a
+// passed-through connection: the responder hands the connection over only where the gateway would have forwarded it.
+func TestAnInterceptedConnectionIsJudgedByTheAccessMatrixLikeAPassedThroughOne(t *testing.T) {
+	h := tlsHarness(t)
+	h.mustPut(alice, "target: {network: IoT}\ntls: {case: intercept}")
+	ask := func() engine.TLSDecision {
+		t.Helper()
+		dec, err := h.e.ResolveTLS(engine.TLSConnection{Client: netip.MustParseAddr("10.10.0.31"), Dst: netip.MustParseAddrPort("203.0.113.10:443"), SNI: "api.example.com"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return dec
+	}
+	if dec := ask(); dec.Case == nil || !dec.Passthrough {
+		t.Fatalf("a local network reaches the uplink by default: %+v", dec)
+	}
+	h.mustApply(h.revision(func(c *model.Configuration) {
+		withDHCPAndDevice(c)
+		d := (*c.Devices)[devID]
+		d.TrustsTestCa = ptr(true)
+		(*c.Devices)[devID] = d
+		c.AccessMatrix = &model.AccessMatrix{Entries: &[]model.MatrixEntry{{
+			From: model.MatrixEndpoint{Network: ptr(iotID)}, To: model.MatrixEndpoint{Uplink: ptr(model.MatrixEndpointUplink(true))}, Policy: model.MatrixEntryPolicyDeny}}}
+	}))
+	if dec := ask(); dec.Case == nil || dec.Passthrough {
+		t.Errorf("the matrix keeps the network from the uplink, so the proxy must not be the way through: %+v", dec)
+	}
+}
+
+// explain names the proxy as what answers when the winning case is an interception.
+func TestExplainSaysTheProxyAnswersWhenAnInterceptionCaseDecides(t *testing.T) {
+	h := tlsHarness(t)
+	h.mustPut(alice, "target: {device: esp32-42}\ntls: {case: intercept, ports: [443]}")
+	got, err := h.e.Explain(context.Background(), engine.ExplainQuery{Device: "esp32-42", Dst: "203.0.113.10", Protocol: "tcp", Port: 443})
+	if err != nil || got.Service != "tls_proxy" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	// a drop rule in front of the redirect (E11) stops it as it does for the responder
+	h.mustPut(alice, "target: {device: esp32-42}\nrule: {action: drop, protocol: tcp, ports: [443]}")
+	if got, err := h.e.Explain(context.Background(), engine.ExplainQuery{Device: "esp32-42", Dst: "203.0.113.10", Protocol: "tcp", Port: 443}); err != nil || got.Service != "none" {
+		t.Errorf("%+v %v", got, err)
 	}
 }

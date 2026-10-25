@@ -345,8 +345,12 @@ func (e *Engine) Explain(ctx context.Context, q ExplainQuery) (*Explanation, err
 	// a TLS case that decides the connection: it is answered by the TLS responder (plan §2.8), unless something in front
 	// of the redirect stops the connection first: an access rule (E11: access rules before redirects), the gateway's
 	// protection or the guard of the management network. The access matrix is not asked: the answer comes from the gateway.
-	if snap.Service != nil && out.Service == "" && domain.Winner(results, domain.FamilyTLS) != nil && !stoppedBeforeTheRedirect(out.Access) {
+	if w := domain.Winner(results, domain.FamilyTLS); snap.Service != nil && out.Service == "" && w != nil && !stoppedBeforeTheRedirect(out.Access) {
 		out.Service = "tls_responder"
+		if w.TLS != nil && w.TLS.Case == model.TlsCaseCaseIntercept {
+			// the responder hands the connection to the interception proxy (M22)
+			out.Service = "tls_proxy"
+		}
 	}
 	if out.Service == "" {
 		out.Service = "none"

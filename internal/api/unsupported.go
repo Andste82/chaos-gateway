@@ -13,6 +13,5 @@ func (s *Server) CalibrateProbe(c *gin.Context, _ model.Ref)          { s.unsupp
 func (s *Server) GetCertificate(c *gin.Context)                       { s.unsupported(c) }
 func (s *Server) GetMetrics(c *gin.Context)                           { s.unsupported(c) }
 func (s *Server) ListProbes(c *gin.Context, _ model.ListProbesParams) { s.unsupported(c) }
-func (s *Server) RegenerateTestCa(c *gin.Context)                     { s.unsupported(c) }
 func (s *Server) ReplaceCertificate(c *gin.Context)                   { s.unsupported(c) }
 func (s *Server) RunDiagnostic(c *gin.Context)                        { s.unsupported(c) }

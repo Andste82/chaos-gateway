@@ -453,7 +453,6 @@ func TestAnInvalidOverlayIsRefusedWithoutChangingAnything(t *testing.T) {
 func TestOverlaysOfLaterMilestonesAreUnsupported(t *testing.T) {
 	h := startedWithRevision(t)
 	for body, milestone := range map[string]string{
-		"target: {network: IoT}\ntls: {case: intercept}":  "M22",
 		"target: {network: IoT}\ndhcp: {action: silence}": "M23",
 	} {
 		_, err := h.put(alice, body)

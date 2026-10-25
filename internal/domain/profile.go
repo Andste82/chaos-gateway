@@ -2,6 +2,7 @@ package domain
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
@@ -38,24 +39,40 @@ type UnavailablePart struct {
 }
 
 // unavailableFamilies are the families of a profile that arrive with later milestones. Every family a profile
-// has a part for is implemented: the dns family was lifted by M20 and the tls family by M21 (P2-M11-01). What is
-// still missing in the tls family is its case `intercept` (M22), which UnavailableParts reports.
+// has a part for is implemented: the dns family was lifted by M20, the tls family by M21 (P2-M11-01) and its case
+// `intercept` by M22, so the map is empty and a profile with any part can be activated.
 var unavailableFamilies = map[string]string{}
 
-// interceptMilestone is the milestone that brings the TLS case `intercept`: the responder of M21 serves the
-// certificate and handshake cases only.
-const interceptMilestone = "M22"
+// unavailableMu guards unavailableFamilies, which only SetUnavailableFamilies changes.
+var unavailableMu sync.RWMutex
+
+// SetUnavailableFamilies replaces the families of a profile this build does not implement (family -> the milestone that
+// brings it) and returns the function that restores them. Every family is implemented since M22, so the map is empty in
+// the product; the tests of the rules that refuse a profile with a part like that (P2-M11-05: the activation, a revision
+// that gives an activated profile such a part, the rollback that brings one back) name a family with it. Call it before the
+// engine starts, and restore it after the engine has stopped.
+func SetUnavailableFamilies(m map[string]string) (restore func()) {
+	unavailableMu.Lock()
+	old := unavailableFamilies
+	unavailableFamilies = m
+	unavailableMu.Unlock()
+	return func() {
+		unavailableMu.Lock()
+		unavailableFamilies = old
+		unavailableMu.Unlock()
+	}
+}
 
 // UnavailableParts lists the parts of a profile that cannot be activated in this build, in the
 // order of ProfileFamilies. A profile with such a part is stored and shown, but its activation is
 // refused as a whole: activating only the other parts would silently be a different profile.
 func UnavailableParts(p model.Profile) []UnavailablePart {
 	var out []UnavailablePart
+	unavailableMu.RLock()
+	defer unavailableMu.RUnlock()
 	for _, f := range ProfileFamilies(p) {
 		if m, ok := unavailableFamilies[f]; ok {
 			out = append(out, UnavailablePart{Family: f, Milestone: m})
-		} else if f == FamilyTLS && p.Parts.Tls.Case == model.TlsCaseCaseIntercept {
-			out = append(out, UnavailablePart{Family: f, Milestone: interceptMilestone})
 		}
 	}
 	return out

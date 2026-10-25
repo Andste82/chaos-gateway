@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -28,6 +29,9 @@ const (
 	// months before that, and the CA that signed it was valid then.
 	caBackdate = 5 * 365 * 24 * time.Hour
 )
+
+// caMu serializes the writes of the CA files of this process.
+var caMu sync.Mutex
 
 // CA is a certificate authority with its key.
 type CA struct {
@@ -47,11 +51,13 @@ type CAs struct {
 // user that owns the directory). A CA that is there is never replaced. The responder's container mounts the directory
 // read-only.
 func EnsureCAs(dir string, now time.Time) error {
+	caMu.Lock()
+	defer caMu.Unlock()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	for _, c := range []struct{ file, name string }{
-		{testCAFile, "Chaos Gateway Test CA"},
+		{testCAFile, TestCAName},
 		{unknownCAFile, "Chaos Gateway Unknown CA (never distributed)"},
 	} {
 		if _, err := loadCA(dir, c.file); err == nil {
@@ -59,11 +65,28 @@ func EnsureCAs(dir string, now time.Time) error {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("the CA %s in %s: %w", c.file, dir, err)
 		}
-		if err := writeCA(dir, c.file, c.name, now); err != nil {
+		if _, err := writeCA(dir, c.file, c.name, now); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// TestCAName is the subject of the test CA.
+const TestCAName = "Chaos Gateway Test CA"
+
+// RegenerateTestCA replaces the test CA in dir with a new one and returns its certificate (plan §2.8, M22): the devices
+// that installed the old one trust nothing the gateway shows them until they install the new one. The unknown CA is not
+// touched. The key is written first and the certificate second, which is the file the services watch, so a service that
+// reloads on the change finds the pair complete; one that reads in between finds a certificate that does not match the key
+// and keeps what it has (loadCA checks the pair).
+func RegenerateTestCA(dir string, now time.Time) ([]byte, error) {
+	caMu.Lock()
+	defer caMu.Unlock()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	return writeCA(dir, testCAFile, TestCAName, now)
 }
 
 // LoadCAs reads the two CAs from dir.
@@ -91,14 +114,14 @@ func TestCAPEM(dir string) ([]byte, error) {
 	return raw, nil
 }
 
-func writeCA(dir, file, name string, now time.Time) error {
+func writeCA(dir, file, name string, now time.Time) ([]byte, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	serial, err := newSerial()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
@@ -113,17 +136,21 @@ func writeCA(dir, file, name string, now time.Time) error {
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// the key first: a certificate without its key is never left behind for a start to trust
 	if err := writeFileAtomic(filepath.Join(dir, file+".key"), pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
-		return err
+		return nil, err
 	}
-	return writeFileAtomic(filepath.Join(dir, file+".pem"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644)
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	if err := writeFileAtomic(filepath.Join(dir, file+".pem"), certPEM, 0o644); err != nil {
+		return nil, err
+	}
+	return certPEM, nil
 }
 
 func loadCA(dir, file string) (*CA, error) {
@@ -153,6 +180,10 @@ func loadCA(dir, file string) (*CA, error) {
 	}
 	if !cert.IsCA {
 		return nil, fmt.Errorf("%s.pem is not a CA certificate", file)
+	}
+	if pub, ok := cert.PublicKey.(*ecdsa.PublicKey); !ok || !pub.Equal(&key.PublicKey) {
+		// a regeneration writes the key and then the certificate: this is the moment in between
+		return nil, fmt.Errorf("%s.pem does not belong to %s.key", file, file)
 	}
 	return &CA{Cert: cert, Key: key, PEM: certPEM}, nil
 }

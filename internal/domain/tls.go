@@ -36,10 +36,11 @@ func TLSPorts(c model.TlsCase) (ports []int, ranges []model.PortRange) {
 // TLSExpected is what a correct device does with the case (plan §2.8): `reject` for every certificate case, whatever
 // the firmware trusts (a device without the test CA fails them all as "unknown issuer", which is still a rejection:
 // only the reason differs, see TLSTested), `any` for the handshake cases, where no certificate is shown and the
-// device may reset, close or time out as it likes.
+// device may reset, close or time out as it likes, and for `intercept`, where the proxy shows a certificate of the
+// test CA that a device trusting it takes and a device that does not trust it rejects: neither is a failure of the device.
 func TLSExpected(c model.TlsCaseCase) string {
 	switch c {
-	case model.TlsCaseCaseHandshakeReset, model.TlsCaseCaseHandshakeClose, model.TlsCaseCaseHandshakeStall:
+	case model.TlsCaseCaseHandshakeReset, model.TlsCaseCaseHandshakeClose, model.TlsCaseCaseHandshakeStall, model.TlsCaseCaseIntercept:
 		return "any"
 	}
 	return "reject"

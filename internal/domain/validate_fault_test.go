@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -254,6 +255,25 @@ func TestProfileRules(t *testing.T) {
 		{"an http block rule with a delay", func(t *testing.T, d doc) {
 			d.set(t, obj(t, `{"case":"intercept","intercept":{"http_rules":[{"action":"block","delay":"1s"}]}}`), "profiles", idProfile, "parts", "tls")
 		}, pr + "/tls/intercept/http_rules/0/delay", CodeInvalidTLSCase},
+		{"an http delay of zero", func(t *testing.T, d doc) {
+			d.set(t, obj(t, `{"case":"intercept","intercept":{"http_rules":[{"action":"delay","delay":"0s"}]}}`), "profiles", idProfile, "parts", "tls")
+		}, pr + "/tls/intercept/http_rules/0/delay", CodeInvalidDuration},
+		{"an http delay of an hour", func(t *testing.T, d doc) {
+			d.set(t, obj(t, `{"case":"intercept","intercept":{"http_rules":[{"action":"delay","delay":"1h"}]}}`), "profiles", idProfile, "parts", "tls")
+		}, pr + "/tls/intercept/http_rules/0/delay", CodeInvalidDuration},
+		{"an http throttle below a byte per second", func(t *testing.T, d doc) {
+			d.set(t, obj(t, `{"case":"intercept","intercept":{"http_rules":[{"action":"throttle","rate":"4bit"}]}}`), "profiles", idProfile, "parts", "tls")
+		}, pr + "/tls/intercept/http_rules/0/rate", CodeInvalidRate},
+		{"an http rule with a method that is none", func(t *testing.T, d doc) {
+			d.set(t, obj(t, `{"case":"intercept","intercept":{"http_rules":[{"action":"abort","match":{"method":"GE T"}}]}}`), "profiles", idProfile, "parts", "tls")
+		}, pr + "/tls/intercept/http_rules/0/match/method", CodeInvalidTLSCase},
+		{"a modify rule without its changes", func(t *testing.T, d doc) {
+			d.set(t, obj(t, `{"case":"intercept","intercept":{"http_rules":[{"action":"modify"}]}}`), "profiles", idProfile, "parts", "tls")
+		}, pr + "/tls/intercept/http_rules/0/modify", CodeInvalidTLSCase},
+		{"more http rules than a case may have", func(t *testing.T, d doc) {
+			rules := strings.TrimSuffix(strings.Repeat(`{"action":"abort"},`, MaxHTTPRules+1), ",")
+			d.set(t, obj(t, `{"case":"intercept","intercept":{"http_rules":[`+rules+`]}}`), "profiles", idProfile, "parts", "tls")
+		}, pr + "/tls/intercept/http_rules", CodeInvalidTLSCase},
 	})
 }
 
@@ -261,6 +281,20 @@ func TestATlsCaseWithPortsNeedsNoProtocol(t *testing.T) {
 	// TLS runs over TCP: omitting the protocol means tcp
 	d := baseDoc(t)
 	d.set(t, obj(t, `{"case":"expired","ports":[443,8883]}`), "profiles", idProfile, "parts", "tls")
+	wantValid(t, d.validate(t))
+}
+
+// Every action of an HTTP rule is accepted with its own field, a rule without a match selects every request, and the limits are reachable.
+func TestEveryHTTPRuleActionIsAcceptedWithItsField(t *testing.T) {
+	d := baseDoc(t)
+	d.set(t, obj(t, `{"case":"intercept","ports":[80,443],"intercept":{"keylog":false,"block_quic":false,"http_rules":[
+		{"action":"block","match":{"host":"*.example.com","path_prefix":"/admin","method":"POST"}},
+		{"action":"status","status":429},
+		{"action":"delay","delay":"1500ms","match":{"host":"api.example.com"}},
+		{"action":"delay","delay":"10m"},
+		{"action":"throttle","rate":"8bit"},
+		{"action":"abort"},
+		{"action":"modify","modify":{"request_headers":{"User-Agent":""},"response_headers":{"X-Test":"1"},"response_body_replace":[{"search":"a","replace":"b"}]}}]}}`), "profiles", idProfile, "parts", "tls")
 	wantValid(t, d.validate(t))
 }
 

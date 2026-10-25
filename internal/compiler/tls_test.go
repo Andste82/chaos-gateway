@@ -326,3 +326,85 @@ func scenarioTLS(t *testing.T) *Target {
 	}
 	return tg
 }
+
+// ---- the case intercept (M22)
+
+// An interception case selects its connections like every other case; block_quic (on unless the case turns it off) adds
+// the drop of the UDP packets to port 443 of the same clients, in front of the selection, so a client that tries QUIC
+// falls back to the TCP connection the proxy intercepts.
+func TestAnInterceptionCaseSelectsItsConnectionsAndDropsQUICOfTheSameClients(t *testing.T) {
+	w := newFaultWorld(t)
+	w.overlay(`{target: {device: esp32-42}, tls: {case: intercept, ports: [443]}}`, 0)
+	tg := w.compile(withServiceNS)
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	if got := tlsEntries(tg); len(got) != 1 || got[0] != "intercept -> 10.10.0.42/32" {
+		t.Fatalf("%v", got)
+	}
+	want := []string{
+		"meta iifname svc0 return",
+		"ct direction reply return",
+		"ct original ip saddr 10.10.0.42/32 meta l4proto udp ct original proto-dst 443 drop",
+		"ct original ip saddr 10.10.0.42/32 meta l4proto tcp ct original proto-dst 443 ct state new ct mark set ct mark | 0x800000 meta mark set meta mark | 0x100000",
+		"ct original ip saddr 10.10.0.42/32 meta l4proto tcp ct original proto-dst 443 ct mark & 0x800000 0x800000 meta mark set meta mark | 0x100000",
+	}
+	if got := tlsRules(t, tg); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("rules:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// the case is a winner of the TLS family like the others
+	if len(tg.Effective) != 1 || tg.Effective[0].Family != "tls" || tg.Effective[0].Summary != "tls intercept" {
+		t.Errorf("%+v", tg.Effective)
+	}
+}
+
+func TestBlockQUICIsOffWhenTheCaseSaysSoAndForTheOtherCases(t *testing.T) {
+	for name, body := range map[string]string{
+		"block_quic false":   `{target: {device: esp32-42}, tls: {case: intercept, intercept: {block_quic: false}}}`,
+		"a certificate case": `{target: {device: esp32-42}, tls: {case: expired}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newFaultWorld(t)
+			w.overlay(body, 0)
+			tg := w.compile(withServiceNS)
+			for _, r := range tlsRules(t, tg) {
+				if strings.Contains(r, "udp") {
+					t.Errorf("a drop of UDP: %s", r)
+				}
+			}
+		})
+	}
+	// the option is given explicitly as true: the same as the default
+	w := newFaultWorld(t)
+	w.overlay(`{target: {device: esp32-42}, tls: {case: intercept, intercept: {block_quic: true, keylog: false}}}`, 0)
+	if r := tlsRules(t, w.compile(withServiceNS)); len(r) != 5 || !strings.Contains(r[2], "udp ct original proto-dst 443 drop") {
+		t.Errorf("%v", r)
+	}
+}
+
+// The drop names the destination of the case too: a case for one server does not take QUIC from the others.
+func TestTheDropOfQUICKeepsTheDestinationAndTheSourcesOfTheCase(t *testing.T) {
+	w := newFaultWorld(t)
+	w.overlay(`{target: {network: IoT}, tls: {case: intercept, destination: {cidr: 203.0.113.10}}}`, 0)
+	tg := w.compile(withServiceNS)
+	r := tlsRules(t, tg)
+	if len(r) != 5 || !strings.Contains(r[2], "ct original ip saddr { 10.10.0.0/24, 10.30.0.0/24 }") || !strings.Contains(r[2], "ct original ip daddr 203.0.113.10/32") ||
+		!strings.Contains(r[2], "meta l4proto udp ct original proto-dst 443 drop") {
+		t.Fatalf("%v", r)
+	}
+}
+
+// scenarioIntercept is the target of the nftables check of the interception: cases for a device, a network with a
+// hostname and the uplink, one of them without the QUIC drop.
+func scenarioIntercept(t *testing.T) *Target {
+	t.Helper()
+	w := newFaultWorld(t)
+	w.overlay(`{target: {device: esp32-42}, tls: {case: intercept, ports: [443, 8443]}}`, 0)
+	w.overlay(`{target: {network: IoT}, tls: {case: intercept, destination: {hostname: "*.example.com"}, intercept: {http_rules: [{action: status, status: 503}]}}}`, time.Second)
+	w.overlay(`{target: {group: sensors}, tls: {case: intercept, destination: {uplink: true}, intercept: {block_quic: false}}}`, 2*time.Second)
+	tg := w.compile(withServiceNS)
+	if tg.HasErrors() {
+		t.Fatalf("%+v", tg.Problems)
+	}
+	return tg
+}

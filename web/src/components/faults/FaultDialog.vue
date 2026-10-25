@@ -25,7 +25,7 @@ import { computed, ref, useId, watch } from 'vue';
 import { ApiError, errorMessage } from '../../api/fetcher';
 import { createOverlay, deleteOverlay } from '../../api/generated/hooks/overlays/overlays';
 import type { ConfigFault, Overlay, OverlayRequest } from '../../api/generated/model';
-import { useCapabilities, useGatewayState, useGroups, useNames } from '../../composables/gateway';
+import { useCanIntercept, useCapabilities, useGatewayState, useGroups, useNames } from '../../composables/gateway';
 import {
   durationChoices,
   keepError,
@@ -75,6 +75,8 @@ const props = defineProps<{
   config?: { id: string; fault: ConfigFault };
   /** The faults screen offers to save a new fault in the configuration. */
   allowConfig?: boolean;
+  /** A new fault that starts as an interception case (the Interception screen, M23c): the kind TLS with the case `intercept`. */
+  preset?: 'intercept';
 }>();
 const open = defineModel<boolean>('open', { required: true });
 
@@ -120,6 +122,10 @@ watch(open, (o) => {
     form.value = emptyForm(props.fixedTarget ?? 'global');
     form.value.latency = '200';
     form.value.jitter = '50';
+    if (props.preset === 'intercept') {
+      form.value.family = 'tls';
+      form.value.tls.case = 'intercept';
+    }
     layer.value = 'overlay';
   }
   openedForm = JSON.stringify(form.value);
@@ -133,6 +139,7 @@ const owner = computed(() => (props.overlay && props.overlay.owner.type !== 'use
 
 const tunnels = computed(() => tunnelOptions(networks.data.value ?? []));
 const capabilities = useCapabilities();
+const canIntercept = useCanIntercept();
 /**
  * The kinds a new fault can be: a tunnel fault has no target, so not on a device's page; a DNS fault and a TLS case are overlays
  * only, so not while the fault is saved in the configuration, and only when the gateway has them.
@@ -395,7 +402,14 @@ const errId = (f: string) => `${uid}-${f}-error`;
         <p class="m-0 text-[13px] text-text-2" data-testid="mtu-hint">{{ mtuHint }}</p>
       </template>
       <DnsFields v-else-if="form.family === 'dns'" v-model="form.dns" :errors="errors" />
-      <TlsFields v-else-if="form.family === 'tls'" v-model="form.tls" :errors="errors" :trust="trustedDevice?.trust" :device-name="trustedDevice?.name" />
+      <TlsFields
+        v-else-if="form.family === 'tls'"
+        v-model="form.tls"
+        :errors="errors"
+        :trust="trustedDevice?.trust"
+        :device-name="trustedDevice?.name"
+        :interception="canIntercept !== false"
+      />
       <ImpairmentFields v-else v-model="form" :errors="errors" :tunnel="form.family === 'tunnel'" />
 
       <div class="grid grid-cols-3 gap-3">

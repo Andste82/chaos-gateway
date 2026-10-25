@@ -1,18 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { CreateOverlayBody } from '../api/generated/zod/overlays/overlays';
+import { emptyRule } from './interceptForm';
 import { emptyTls, testCaUrl, tlsBody, tlsCases, tlsEffect, tlsErrors, tlsFieldOf, tlsScope, tlsToForm, type TlsForm } from './tlsForm';
 
 // The TLS form (M23b): the cases, the selection, the checks under the fields, the `tls` part of the request it becomes
-// (checked against the spec), the interception settings it keeps and the field a message of the gateway belongs to.
+// (checked against the spec), the interception as the ninth case (M23c; its own form is tested in interceptForm.test.ts) and the
+// field a message of the gateway belongs to.
 
 const form = (over: Partial<TlsForm>): TlsForm => ({ ...emptyTls(), ...over });
 const withTraffic = (t: Partial<TlsForm['traffic']>) => ({ ...emptyTls().traffic, ...t });
 const spec = (tls: unknown) => CreateOverlayBody.safeParse({ target: { device: 'esp32-42' }, tls }).success;
 
 describe('the TLS form', () => {
-  it('offers the eight cases of the responder, the three that need the test CA marked', () => {
-    expect(tlsCases.map((c) => c.value)).toEqual(['untrusted_ca', 'self_signed', 'expired', 'not_yet_valid', 'hostname_mismatch', 'handshake_reset', 'handshake_close', 'handshake_stall']);
-    expect(tlsCases.filter((c) => c.testCa).map((c) => c.value)).toEqual(['expired', 'not_yet_valid', 'hostname_mismatch']);
+  it('offers the eight cases of the responder and the interception, the four that need the test CA marked', () => {
+    expect(tlsCases.map((c) => c.value)).toEqual(['untrusted_ca', 'self_signed', 'expired', 'not_yet_valid', 'hostname_mismatch', 'handshake_reset', 'handshake_close', 'handshake_stall', 'intercept']);
+    expect(tlsCases.filter((c) => c.testCa).map((c) => c.value)).toEqual(['expired', 'not_yet_valid', 'hostname_mismatch', 'intercept']);
+    expect(tlsCases.find((c) => c.value === 'intercept')?.group).toBe('Interception');
   });
 
   it('a case without selectors is the case alone: the responder takes 443 and 8883', () => {
@@ -71,21 +74,37 @@ describe('the TLS form', () => {
     }
   });
 
-  it('keeps the settings and the rules of an interception case as they are', () => {
+  it('reads an interception case back into the form and sends it unchanged', () => {
     const t = { case: 'intercept' as const, ports: [443], intercept: { keylog: false, upstream: 'insecure' as const, http_rules: [{ action: 'status' as const, status: 503, match: { host: 'api.example.com' } }] } };
     const f = tlsToForm(t);
     expect(f.case).toBe('intercept');
     expect(tlsBody(f)).toEqual(t);
     expect(spec(tlsBody(f))).toBe(true);
-    // another case has no interception settings (the gateway refuses them)
+    // another case has no interception settings (the gateway refuses them), and they are back when the case is
     f.case = 'expired';
     expect(tlsBody(f)).toEqual({ case: 'expired', ports: [443] });
+    expect(spec(tlsBody(f))).toBe(true);
+    f.case = 'intercept';
+    expect(tlsBody(f)).toEqual(t);
+    // a case that only watches sends no settings at all; the defaults (key log, QUIC) are not written
+    expect(tlsBody(form({ case: 'intercept' }))).toEqual({ case: 'intercept' });
+  });
+
+  it('checks the rules of an interception case, and only of that case', () => {
+    const f = form({ case: 'intercept' });
+    f.intercept.rules.push({ ...emptyRule(), action: 'status', status: '700' });
+    expect(tlsErrors(f)['rule.0.status']).toMatch(/status code from 100 to 599/);
+    f.case = 'expired';
+    expect(tlsErrors(f)).toEqual({});
   });
 
   it('says in words what the case does', () => {
     expect(tlsEffect('expired')).toBe('an expired certificate');
     expect(tlsEffect('handshake_reset')).toBe('a reset handshake');
     expect(tlsEffect('untrusted_ca')).toBe('a certificate of an unknown CA');
+    expect(tlsEffect('intercept')).toBe('the interception proxy, watching only');
+    expect(tlsEffect('intercept', 1)).toBe('the interception proxy with 1 HTTP rule');
+    expect(tlsEffect('intercept', 3)).toBe('the interception proxy with 3 HTTP rules');
   });
 
   it('puts a problem of the gateway under its field', () => {
@@ -96,7 +115,11 @@ describe('the TLS form', () => {
     expect(tlsFieldOf('/protocol')).toBe('ports');
     expect(tlsFieldOf('/destination/cidr')).toBe('destination');
     expect(tlsFieldOf('/cut_existing')).toBe('tlsCut');
+    // the settings and the rules of an interception case
+    expect(tlsFieldOf('/intercept/upstream')).toBe('interceptUpstream');
+    expect(tlsFieldOf('/intercept/http_rules/2/status')).toBe('rule.2.status');
     expect(tlsFieldOf('/intercept/http_rules/0')).toBeUndefined();
+    expect(tlsFieldOf('/intercept')).toBeUndefined();
   });
 
   it('downloads the test CA from the API', () => {

@@ -401,7 +401,7 @@ export function previewSentence(f: FaultForm, targetName: string, layer: 'overla
   }
   if (f.family === 'tls') {
     const to = f.tls.traffic.destKind === 'any' ? '' : `to ${describeDestination(destinationOf(f.tls.traffic), names)}`;
-    return `${targetName} · ${tlsScope(f.tls, to)} → ${tlsEffect(f.tls.case)} · ${until}`;
+    return `${targetName} · ${tlsScope(f.tls, to)} → ${tlsEffect(f.tls.case, f.tls.case === 'intercept' ? f.tls.intercept.rules.length : 0)} · ${until}`;
   }
   if (f.family === 'mtu') return `${targetName} · ${traffic} → packets above ${f.mtuSize} bytes: ${mode} · ${until}`;
   if (f.family === 'tunnel') return `${targetName} · ${directionText[f.direction]} → ${chips.join(', ')} · ${until}`;

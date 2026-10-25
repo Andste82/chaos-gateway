@@ -17,6 +17,7 @@ const paths: Record<string, string> = {
   profiles: '<path d="M8 2 14 5 8 8 2 5Z"/><path d="M2 8.5 8 11.5 14 8.5M2 11.5 8 14.5 14 11.5"/>',
   scenarios: '<path d="M2 3h4M2 8h7M2 13h5"/><path d="M11 10.5v5l4-2.5Z"/>',
   captures: '<circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="2.5"/>',
+  interception: '<path d="M8 1.5 13.5 4v4c0 3-2.4 5.3-5.5 6.5C4.9 13.3 2.5 11 2.5 8V4Z"/><path d="M5.5 8h5M8.5 6l2 2-2 2"/>',
   diagnostics: '<path d="M1 8h3l2-5 4 10 2-5h3"/>',
   activity: '<path d="M6 3h8M6 8h8M6 13h8"/><circle cx="2.5" cy="3" r="1"/><circle cx="2.5" cy="8" r="1"/><circle cx="2.5" cy="13" r="1"/>',
   search: '<circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/>',

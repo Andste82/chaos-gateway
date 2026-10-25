@@ -190,8 +190,8 @@ test('a TLS case: its selection, the checks, the note about the test CA, the req
   const d = faultDialog(page);
   await kind(page, 'TLS').click();
   await expect(d.getByLabel('Case', { exact: true })).toHaveValue('untrusted_ca');
-  await expect(d.getByLabel('Case', { exact: true }).locator('option')).toHaveText(['Untrusted CA', 'Self-signed', 'Expired', 'Not yet valid', 'Hostname mismatch', 'Handshake reset', 'Handshake closed', 'Handshake stalled']);
-  await expect(d.getByLabel('Case', { exact: true }).locator('optgroup')).toHaveCount(2);
+  await expect(d.getByLabel('Case', { exact: true }).locator('option')).toHaveText(['Untrusted CA', 'Self-signed', 'Expired', 'Not yet valid', 'Hostname mismatch', 'Handshake reset', 'Handshake closed', 'Handshake stalled', 'Interception · read and change HTTP']);
+  await expect(d.getByLabel('Case', { exact: true }).locator('optgroup')).toHaveCount(3);
   // a case that any firmware must reject needs nothing of the device
   await expect(d.getByTestId('tls-trust')).toHaveCount(0);
   await d.getByLabel('Case', { exact: true }).selectOption('expired');
@@ -264,25 +264,6 @@ test('a TLS case: handshake cases, the default ports, a device that trusts the t
   expect(sentOverlays(gw)[1]).toEqual({ target: { network: IOT }, tls: { case: 'self_signed', ports: [443] } });
   expect(gw.overlays.filter((o) => o.kind === 'tls')).toHaveLength(1);
   expect(gw.requests.filter((r) => r.method === 'DELETE')).toHaveLength(1);
-});
-
-test('an interception case is opened with its settings kept as they are', async ({ page }) => {
-  const gw = MockGateway.sample();
-  const settings = { keylog: false, upstream: 'insecure' as const, http_rules: [{ action: 'status' as const, status: 503, match: { path_prefix: '/v1' } }] };
-  gw.overlays.push(overlay('f0000000-0000-4000-8000-0000000000a1', { kind: 'tls', target: { device: ESP }, tls: { case: 'intercept', ports: [443], intercept: settings }, ttl: '1h', expires_at: new Date(Date.now() + 3_000_000).toISOString() }));
-  await gw.install(page);
-  await page.goto('/faults');
-  await page.getByTestId('fault-family-tls').getByRole('button', { name: /^Edit / }).click();
-  const d = faultDialog(page);
-  await expect(d.getByLabel('Case', { exact: true })).toHaveValue('intercept');
-  await expect(d.getByTestId('tls-hint')).toContainText('Its settings and HTTP rules are not edited here');
-  await d.getByLabel('Server names').fill('api.example.com');
-  await d.getByRole('button', { name: 'Apply fault' }).click();
-  await expect(toast(page, 'Fault active on ESP32-42')).toBeVisible();
-  const body = sentOverlays(gw)[0] as { tls: { intercept: unknown; case: string; sni: string[] } };
-  expect(body.tls.case).toBe('intercept');
-  expect(body.tls.intercept).toEqual(settings);
-  expect(body.tls.sni).toEqual(['api.example.com']);
 });
 
 test('the gateway\'s refusal of a TLS case stands under the field it names', async ({ page }) => {

@@ -41,6 +41,8 @@ export const invalidates: Partial<Record<EventType, string[][]>> = {
   capture_started: [['runs'], ['captures']],
   capture_stopped: [['runs'], ['captures']],
   disk_low: [['captures']],
+  // the log of the interception proxy: an exchange a rule acted on (announced at most every 10 s for a device and an overlay)
+  http_fault_triggered: [['intercept']],
   device_discovered: [['devices'], ['networks']],
   device_online: [['devices']],
   device_offline: [['devices']],

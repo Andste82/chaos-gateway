@@ -32,7 +32,7 @@ const waitPoll = 250 * time.Millisecond
 // The step types and check types this build runs (GET /capabilities). The others arrive with the
 // milestones of Unsupported.
 var (
-	SupportedStepTypes  = []string{"profile", "fault", "rule", "dns", "tls", "wireguard", "capture", "wait", "remove", "restore"}
+	SupportedStepTypes  = []string{"profile", "fault", "rule", "dns", "tls", "dhcp", "wireguard", "capture", "wait", "remove", "restore"}
 	SupportedCheckTypes = []string{"reconnected", "no_connection", "traffic_seen", "traffic_not_seen", "dns_query_seen", "tls_rejected", "tls_accepted"}
 )
 

@@ -1,6 +1,6 @@
 // The words and chips for faults, overlays and their targets (plan §2.17: fault chips are mono,
 // orange, and say what happens to the traffic: "↑↓ 200 ms ±50", "5 % loss", "↓ 64 kbit/s").
-import type { DnsFault, FaultBody, ImpairmentParams, NetemParams, Overlay, Owner, Scope, TlsCase, TrafficMatch, TunnelRef } from '../api/generated/model';
+import type { DhcpAction, DnsFault, FaultBody, ImpairmentParams, NetemParams, Overlay, Owner, Scope, TlsCase, TrafficMatch, TunnelRef } from '../api/generated/model';
 import { durationMs, formatDuration } from './format';
 import { profileTitle } from './profileNames';
 
@@ -133,6 +133,31 @@ export function tlsChips(t: TlsCase): string[] {
   return [parts.length ? `${what} · ${parts.join(' · ')}` : what];
 }
 
+/** The chips of a DHCP action: "DHCP short lease 7s", "DHCP new IP 10.10.0.200", "DHCP options · router, DNS", "DHCP silence". */
+export function dhcpChips(d: DhcpAction): string[] {
+  switch (d.action) {
+    case 'short_lease':
+      return [d.lease_time ? `DHCP short lease ${d.lease_time}` : 'DHCP short lease'];
+    case 'delete_lease':
+      return ['DHCP delete lease'];
+    case 'force_new_ip':
+      return [d.ip ? `DHCP new IP ${d.ip}` : 'DHCP new IP'];
+    case 'set_options': {
+      const o = d.options;
+      const named = [
+        o?.router ? 'router' : '',
+        o?.dns_servers?.length ? 'DNS' : '',
+        o?.domain !== undefined ? 'domain' : '',
+        o?.ntp_servers?.length ? 'NTP' : '',
+        ...(o?.custom ?? []).map((c) => `option ${c.code}`),
+      ].filter(Boolean);
+      return [named.length ? `DHCP options · ${named.join(', ')}` : 'DHCP options'];
+    }
+    default:
+      return [`DHCP ${String(d.action).replace(/_/g, ' ')}`.trim()];
+  }
+}
+
 /** The chips of an overlay, whatever its kind. */
 export function overlayChips(o: Overlay, profileName?: (ref: string) => string | undefined): string[] {
   switch (o.kind) {
@@ -147,7 +172,7 @@ export function overlayChips(o: Overlay, profileName?: (ref: string) => string |
     case 'tls':
       return o.tls ? tlsChips(o.tls) : ['TLS case'];
     case 'dhcp':
-      return [`DHCP ${o.dhcp?.action ?? ''}`.trim()];
+      return o.dhcp ? dhcpChips(o.dhcp) : ['DHCP action'];
     case 'wireguard':
       return [`WireGuard ${o.wireguard?.action ?? ''}`.trim()];
     default:

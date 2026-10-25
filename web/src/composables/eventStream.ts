@@ -44,6 +44,7 @@ export const invalidates: Partial<Record<EventType, string[][]>> = {
   device_identity_changed: [['devices'], ['flows'], ['port-forwards']],
   observed_changed: [['devices'], ['flows'], ['networks'], ['port-forwards']],
   dhcp_lease: [['devices'], ['networks'], ['port-forwards']],
+  dhcp_leases_deleted: [['devices'], ['networks']],
   uplink_changed: [['uplink'], ['port-forwards']],
   network_degraded: [['networks'], ['state']],
   network_restored: [['networks'], ['state']],

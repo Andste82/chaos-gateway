@@ -272,8 +272,8 @@ func (s *Server) GetCapabilities(c *gin.Context) {
 }
 
 // Features are the feature flags of this build (plan §2.15 capabilities): what the milestones up to
-// M14, M35a (port forwarding), M15 (runs), M20 (DNS faults and hostname selectors) and M21 (the TLS responder: certificate cases) provide.
-var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "dns.faults", "dns.hostname_selectors", "tls.responder", "tls.cases", "tls.intercept", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards", "runs", "checks"}
+// M14, M35a (port forwarding), M15 (runs), M20 (DNS faults and hostname selectors), M21 (the TLS responder: certificate cases) and M23 (DHCP test actions) provide.
+var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "dns.faults", "dns.hostname_selectors", "tls.responder", "tls.cases", "tls.intercept", "dhcp.actions", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards", "runs", "checks"}
 
 // GetSystemInfo implements GET /system/info.
 func (s *Server) GetSystemInfo(c *gin.Context) {

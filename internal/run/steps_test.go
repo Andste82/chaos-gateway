@@ -646,11 +646,6 @@ name: c
 target: {device: esp32-42}
 steps: [{id: a, at: 0s, capture: start}, {id: b, at: 1s, capture: stop}]
 `, ""},
-		"dhcp step": {`
-name: c
-target: {device: esp32-42}
-steps: [{id: a, at: 0s, dhcp: {action: silence}}]
-`, "M23"},
 	} {
 		sc, err := domain.DecodeScenario([]byte(tc.yaml), domain.FormatYAML)
 		if err != nil {

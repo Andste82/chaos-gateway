@@ -64,7 +64,7 @@ var knownTypes = func() map[string]bool {
 		model.EventTypeNetworkDegraded, model.EventTypeNetworkRestored, model.EventTypeUplinkChanged,
 		model.EventTypeWireguardPeerOnline, model.EventTypeWireguardPeerOffline, model.EventTypeRoutingSessionChanged,
 		model.EventTypeRoutingRoutesChanged, model.EventTypeObservedChanged,
-		model.EventTypeDeviceDiscovered, model.EventTypeDeviceOnline, model.EventTypeDeviceOffline, model.EventTypeDeviceIdentityChanged, model.EventTypeDhcpLease,
+		model.EventTypeDeviceDiscovered, model.EventTypeDeviceOnline, model.EventTypeDeviceOffline, model.EventTypeDeviceIdentityChanged, model.EventTypeDhcpLease, model.EventTypeDhcpLeasesDeleted,
 		model.EventTypeEventsLost, model.EventTypeOverlayCreated, model.EventTypeOverlayUpdated, model.EventTypeOverlayRemoved,
 		model.EventTypeOverlayExpired, model.EventTypeOverlayOrphaned,
 		model.EventTypeRunQueued, model.EventTypeRunStarted, model.EventTypeRunStep, model.EventTypeRunCheck, model.EventTypeRunFinished,
@@ -159,6 +159,8 @@ func describe(ev engine.Event) string {
 		return "device " + str("name") + " has a new address"
 	case "dhcp_lease":
 		return "DHCP " + str("event") + " " + str("ip") + " for " + str("mac")
+	case "dhcp_leases_deleted":
+		return "DHCP leases deleted (" + str("count") + ") by the action " + str("overlay")
 	case "overlay_created":
 		return "overlay " + str("overlay") + " created"
 	case "overlay_updated":

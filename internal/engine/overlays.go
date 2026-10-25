@@ -78,12 +78,12 @@ func (e *CompileError) Error() string {
 
 // SupportedOverlayKinds and SupportedFaultFamilies are what this build implements (GET
 // /capabilities): faults of the impairment, mtu and tunnel families, DNS faults (the kind dns, M20), TLS cases
-// (the kind tls, M21, with the case intercept of M22), profile activations, access rules and WireGuard
-// actions; the kind dhcp (M23) follows with its milestone. A profile is activated as a whole: one with a part
-// this build cannot resolve is refused (checkProfileAvailable); every part of a profile is available since M22.
+// (the kind tls, M21, with the case intercept of M22), DHCP actions (the kind dhcp, M23), profile activations, access
+// rules and WireGuard actions. A profile is activated as a whole: one with a part this build cannot resolve is refused
+// (checkProfileAvailable); every part of a profile is available since M22.
 var (
-	SupportedOverlayKinds  = []model.OverlayKind{model.OverlayKindFault, model.OverlayKindProfile, model.OverlayKindRule, model.OverlayKindDns, model.OverlayKindTls, model.OverlayKindWireguard}
-	SupportedFaultFamilies = []model.FaultFamily{model.FaultFamilyImpairment, model.FaultFamilyMtu, model.FaultFamilyDns, model.FaultFamilyTls, model.FaultFamilyTunnel}
+	SupportedOverlayKinds  = []model.OverlayKind{model.OverlayKindFault, model.OverlayKindProfile, model.OverlayKindRule, model.OverlayKindDns, model.OverlayKindTls, model.OverlayKindDhcp, model.OverlayKindWireguard}
+	SupportedFaultFamilies = []model.FaultFamily{model.FaultFamilyImpairment, model.FaultFamilyMtu, model.FaultFamilyDns, model.FaultFamilyTls, model.FaultFamilyDhcp, model.FaultFamilyTunnel}
 )
 
 // CheckOverlaySupported returns an *UnsupportedOverlayError for an overlay request that needs a
@@ -115,7 +115,7 @@ func CheckOverlaySupported(req *model.OverlayRequest) error {
 	case "tls":
 		return nil // M21, and the case intercept: M22
 	case "dhcp":
-		return &UnsupportedOverlayError{What: "a DHCP action", Milestone: "M23"}
+		return nil // M23
 	}
 	return nil
 }
@@ -472,6 +472,10 @@ func (o *owner) validPut(c cmdOverlayPut) (*model.OverlayRequest, bool) {
 		return nil, false
 	}
 	if err := checkProfileAvailable(cfg, req); err != nil {
+		o.reply(c.reply, OverlayResult{}, err)
+		return nil, false
+	}
+	if err := o.completeDHCPAction(cfg, req); err != nil {
 		o.reply(c.reply, OverlayResult{}, err)
 		return nil, false
 	}

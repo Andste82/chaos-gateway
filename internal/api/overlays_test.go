@@ -164,16 +164,8 @@ func TestAReadOnlyTokenCannotWriteOverlays(t *testing.T) {
 	}
 }
 
-func TestOverlaysOfLaterMilestonesAreRefusedAndInvalidOnesAreExplained(t *testing.T) {
+func TestInvalidOverlaysAreExplained(t *testing.T) {
 	g := ready(t)
-	for body, milestone := range map[string]string{
-		`{"target":{"network":"IoT"},"dhcp":{"action":"silence"}}`: "M23",
-	} {
-		r := g.createOverlay(body)
-		if r.Status != 422 || r.code(t) != "unsupported_feature" || !strings.Contains(r.json(t)["detail"].(string), milestone) {
-			t.Errorf("%s: %d %s", body, r.Status, r.Body)
-		}
-	}
 	// invalid: the pointer is relative to the request
 	r := g.createOverlay(`{"target":{"network":"Nowhere"},"fault":{"latency":"10ms"}}`)
 	if r.Status != 422 || r.code(t) != "validation_failed" {
@@ -306,7 +298,7 @@ func TestAnOverlayThatDoesNotFitTheClassLimitIsRefusedWithCapacityExceeded(t *te
 func TestCapabilitiesNameWhatOverlaysThisBuildTakes(t *testing.T) {
 	g := ready(t)
 	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
-	if fmt.Sprint(caps["overlay_kinds"]) != "[fault profile rule dns tls wireguard]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu dns tls tunnel]" {
+	if fmt.Sprint(caps["overlay_kinds"]) != "[fault profile rule dns tls dhcp wireguard]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu dns tls dhcp tunnel]" {
 		t.Errorf("%v", caps)
 	}
 	if f := fmt.Sprint(caps["features"]); !strings.Contains(f, "overlays") || !strings.Contains(f, "profiles") {

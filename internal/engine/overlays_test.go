@@ -450,19 +450,6 @@ func TestAnInvalidOverlayIsRefusedWithoutChangingAnything(t *testing.T) {
 	}
 }
 
-func TestOverlaysOfLaterMilestonesAreUnsupported(t *testing.T) {
-	h := startedWithRevision(t)
-	for body, milestone := range map[string]string{
-		"target: {network: IoT}\ndhcp: {action: silence}": "M23",
-	} {
-		_, err := h.put(alice, body)
-		var ue *engine.UnsupportedOverlayError
-		if !errors.As(err, &ue) || ue.Milestone != milestone {
-			t.Errorf("%q: got %v, want unsupported until %s", body, err, milestone)
-		}
-	}
-}
-
 func TestAnOverlayThatExceedsTheClassLimitIsRefusedAndNothingChanges(t *testing.T) {
 	h := newHarness(t)
 	h.startWith(engine.Config{ClassLimit: 6})

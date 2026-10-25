@@ -136,5 +136,39 @@ class ModifyTests(unittest.TestCase):
         self.assertEqual(R.strip_h3_from_alt_svc("clear"), "clear")
 
 
+class UpstreamPolicyTests(unittest.TestCase):
+    def test_only_the_three_policies_of_the_api_are_read(self):
+        for p in ("verify", "own_ca", "insecure"):
+            self.assertEqual(R.parse_upstream(p), p)
+        for bad in (None, "", "default", "VERIFY", "trust", True, 1, ["verify"]):
+            self.assertIsNone(R.parse_upstream(bad), msg=repr(bad))
+
+    def test_the_policy_of_the_installation_is_what_mitmproxy_does_with_its_options(self):
+        self.assertEqual(R.installation_policy(False, None), "verify")
+        self.assertEqual(R.installation_policy(False, "/ca.pem"), "own_ca")
+        self.assertEqual(R.installation_policy(True, None), "insecure")
+        self.assertEqual(R.installation_policy(True, "/ca.pem"), "insecure")  # no verification beats a CA file
+
+    def test_a_case_without_a_policy_or_with_the_installations_changes_nothing(self):
+        for insecure, ca in ((False, None), (False, "/ca.pem"), (True, None), (True, "/ca.pem")):
+            self.assertIsNone(R.upstream_plan(None, insecure, ca))
+            self.assertIsNone(R.upstream_plan(R.installation_policy(insecure, ca), insecure, ca))
+
+    def test_a_case_that_asks_for_another_policy_gets_it(self):
+        self.assertEqual(R.upstream_plan("insecure", False, None), R.UpstreamPlan(verify=False))
+        self.assertEqual(R.upstream_plan("insecure", False, "/ca.pem"), R.UpstreamPlan(verify=False))
+        # the bundle, where the installation names a CA file or verifies nothing
+        self.assertEqual(R.upstream_plan("verify", False, "/ca.pem"), R.UpstreamPlan(verify=True))
+        self.assertEqual(R.upstream_plan("verify", True, None), R.UpstreamPlan(verify=True))
+        # the CA file of the installation, where it verifies nothing
+        self.assertEqual(R.upstream_plan("own_ca", True, "/ca.pem"), R.UpstreamPlan(verify=True, ca_file="/ca.pem"))
+
+    def test_own_ca_without_a_ca_file_refuses_every_certificate_and_says_why(self):
+        for insecure in (False, True):
+            plan = R.upstream_plan("own_ca", insecure, None)
+            self.assertTrue(plan.refuse and plan.verify)
+            self.assertIn("CHAOSGW_UPSTREAM_CA_FILE", plan.note)
+
+
 if __name__ == "__main__":
     unittest.main()

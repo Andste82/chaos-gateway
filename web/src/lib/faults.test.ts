@@ -77,9 +77,16 @@ describe('fault chips', () => {
     expect(
       overlayChips({
         ...base,
-        tls: { case: 'intercept', ports: [443], intercept: { block_quic: false, keylog: false, http_rules: [{ action: 'block' }, { action: 'delay', delay: '1s' }] } },
+        tls: { case: 'intercept', ports: [443], intercept: { block_quic: false, keylog: false, upstream: 'insecure', http_rules: [{ action: 'block' }, { action: 'delay', delay: '1s' }] } },
       } as Overlay),
-    ).toEqual(['TLS intercept · 443 · 2 HTTP rules · QUIC allowed · no key log']);
+    ).toEqual(['TLS intercept · 443 · 2 HTTP rules · QUIC allowed · no key log · servers not verified']);
+    // the policy for the servers' certificates, each value; none when the installation decides
+    for (const [upstream, chip] of [
+      ['verify', 'TLS intercept · servers verified (bundle)'],
+      ['own_ca', 'TLS intercept · servers verified (own CA)'],
+    ] as const) {
+      expect(overlayChips({ ...base, tls: { case: 'intercept', intercept: { upstream } } } as Overlay)).toEqual([chip]);
+    }
     expect(overlayChips({ ...base, tls: { case: 'intercept', intercept: { http_rules: [{ action: 'abort' }] } } } as Overlay)).toEqual(['TLS intercept · 1 HTTP rule']);
     expect(overlayChips({ ...base } as Overlay)).toEqual(['TLS case']);
   });

@@ -40,5 +40,20 @@ class ClassifyTests(unittest.TestCase):
         self.assertIsNone(addon.tls_version_name(None))
 
 
+@unittest.skipIf(addon is None, "mitmproxy is not installed")
+class ConfigTests(unittest.TestCase):
+    def test_the_upstream_policy_of_each_case_is_read_by_overlay(self):
+        a = addon.Addon(None, None)
+        a.on_config({"generation": 3, "cases": [
+            {"case": "intercept", "overlay": "A", "intercept": {"upstream": "insecure"}},
+            {"case": "intercept", "overlay": "B", "intercept": {"upstream": "own_ca", "block_quic": False}},
+            {"case": "intercept", "overlay": "C", "intercept": {"upstream": "from the future"}},
+            {"case": "intercept", "overlay": "D"},
+            {"case": "expired", "overlay": "E", "intercept": {"upstream": "insecure"}},
+        ]})
+        self.assertEqual({k: c.upstream for k, c in a.cases.items()}, {"a": "insecure", "b": "own_ca", "c": None, "d": None})
+        self.assertFalse(a.cases["b"].block_quic)
+
+
 if __name__ == "__main__":
     unittest.main()

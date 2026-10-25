@@ -1452,6 +1452,27 @@ func (e InterceptFlowReportProtocol) Valid() bool {
 	}
 }
 
+// Defines values for InterceptSettingsUpstream.
+const (
+	Insecure InterceptSettingsUpstream = "insecure"
+	OwnCa    InterceptSettingsUpstream = "own_ca"
+	Verify   InterceptSettingsUpstream = "verify"
+)
+
+// Valid indicates whether the value is a known member of the InterceptSettingsUpstream enum.
+func (e InterceptSettingsUpstream) Valid() bool {
+	switch e {
+	case Insecure:
+		return true
+	case OwnCa:
+		return true
+	case Verify:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for KeaLeaseEventEvent.
 const (
 	Decline KeaLeaseEventEvent = "decline"
@@ -4897,7 +4918,35 @@ type InterceptSettings struct {
 	// (`GET /captures/{id}/download?part=keylog`), so Wireshark can decrypt the capture. A capture that receives
 	// secrets is marked `sensitive`. The proxy writes the log whatever this says; `false` keeps it from the captures.
 	Keylog *bool `json:"keylog,omitempty"`
+
+	// Upstream How the proxy treats the certificate of the real server it opens its own connection to (P5-M22-03). Omitted: the
+	// installation's default, which is `verify` unless the proxy's container sets `CHAOSGW_UPSTREAM_CA_FILE` (then `own_ca`)
+	// or `CHAOSGW_UPSTREAM_INSECURE=1` (then `insecure`).
+	//
+	// - `verify`: the certificate must be valid for the server name and chain to a CA of the default bundle that the
+	//   proxy ships (mitmproxy's). A server with a private CA, an expired certificate or one for another name is refused:
+	//   the device is answered with a 502 over the proxy's certificate, the server sees no request, and the exchange is logged
+	//   with the error `TLS to the server failed`. A test of the device's own checks is not made a test of the proxy.
+	// - `own_ca`: the certificate must be valid and chain to the CA file the installation gave the proxy
+	//   (`CHAOSGW_UPSTREAM_CA_FILE`, a lab's private CA), and to no other. Without such a file the connection is refused.
+	// - `insecure`: the certificate of the server is not verified (a lab with servers whose certificates are wrong on
+	//   purpose or not yet right). The device is still shown a certificate of the test CA, valid for the name it asked for.
+	Upstream *InterceptSettingsUpstream `json:"upstream,omitempty"`
 }
+
+// InterceptSettingsUpstream How the proxy treats the certificate of the real server it opens its own connection to (P5-M22-03). Omitted: the
+// installation's default, which is `verify` unless the proxy's container sets `CHAOSGW_UPSTREAM_CA_FILE` (then `own_ca`)
+// or `CHAOSGW_UPSTREAM_INSECURE=1` (then `insecure`).
+//
+//   - `verify`: the certificate must be valid for the server name and chain to a CA of the default bundle that the
+//     proxy ships (mitmproxy's). A server with a private CA, an expired certificate or one for another name is refused:
+//     the device is answered with a 502 over the proxy's certificate, the server sees no request, and the exchange is logged
+//     with the error `TLS to the server failed`. A test of the device's own checks is not made a test of the proxy.
+//   - `own_ca`: the certificate must be valid and chain to the CA file the installation gave the proxy
+//     (`CHAOSGW_UPSTREAM_CA_FILE`, a lab's private CA), and to no other. Without such a file the connection is refused.
+//   - `insecure`: the certificate of the server is not verified (a lab with servers whose certificates are wrong on
+//     purpose or not yet right). The device is still shown a certificate of the test CA, valid for the name it asked for.
+type InterceptSettingsUpstream string
 
 // InterfaceRef A host interface, identified by MAC address and/or name (plan §3.4). If both are given, the MAC wins and the name is updated when it changes.
 type InterfaceRef struct {

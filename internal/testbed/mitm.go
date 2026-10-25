@@ -62,6 +62,8 @@ type ProxyOptions struct {
 	CADir string
 	// UpstreamCA is a file of CA certificates that verify the servers the proxy connects to; empty uses the bundle of mitmproxy.
 	UpstreamCA string
+	// UpstreamInsecure is CHAOSGW_UPSTREAM_INSECURE=1: the proxy verifies no certificate of a server unless a case says otherwise.
+	UpstreamInsecure bool
 	// Namespace is the network namespace to start the proxy in; empty for the machine's own.
 	Namespace string
 	// Dir is the proxy's working directory (its configuration directory is made in it); required.
@@ -114,6 +116,9 @@ func StartProxy(python string, o ProxyOptions) (*Proxy, error) {
 	}
 	if o.UpstreamCA != "" {
 		args = append(args, "--upstream-ca-file", o.UpstreamCA)
+	}
+	if o.UpstreamInsecure {
+		args = append(args, "--upstream-insecure")
 	}
 	name, full := python, append([]string{}, args...)
 	if o.Namespace != "" {

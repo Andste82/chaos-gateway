@@ -231,3 +231,45 @@ def _split_alt_svc(value: str) -> list[str]:
     if cur:
         out.append("".join(cur))
     return out
+
+
+UPSTREAM_POLICIES = ("verify", "own_ca", "insecure")
+
+
+def parse_upstream(value: Any) -> str | None:
+    """The `upstream` setting of a case: one of the three policies, or None for the installation's default (also for a value this
+    version does not know: the API validates the field, so it is a newer gateway, and the default is the safe reading)."""
+    return value if isinstance(value, str) and value in UPSTREAM_POLICIES else None
+
+
+@dataclass(frozen=True)
+class UpstreamPlan:
+    """How the proxy's own connection to a server is verified: `verify` the certificate at all, against `ca_file` (None: the bundle of
+    mitmproxy), or `refuse` every certificate (the case asks for a CA the installation has not given the proxy; `note` says why)."""
+
+    verify: bool
+    ca_file: str | None = None
+    refuse: bool = False
+    note: str = ""
+
+
+def installation_policy(insecure: bool, ca_file: str | None) -> str:
+    """The policy of the installation (`CHAOSGW_UPSTREAM_INSECURE`, `CHAOSGW_UPSTREAM_CA_FILE`), which a case without `upstream` has and
+    which mitmproxy itself applies from its options. No verification beats a CA file, as in mitmproxy."""
+    if insecure:
+        return "insecure"
+    return "own_ca" if ca_file else "verify"
+
+
+def upstream_plan(policy: str | None, insecure: bool, ca_file: str | None) -> UpstreamPlan | None:
+    """What a case's policy changes about the verification of the servers' certificates, given the installation's two settings.
+    None when mitmproxy's own handling already is the policy (no policy, or the one the installation has): nothing is replaced."""
+    if policy is None or policy == installation_policy(insecure, ca_file):
+        return None
+    if policy == "insecure":
+        return UpstreamPlan(verify=False)
+    if policy == "verify":
+        return UpstreamPlan(verify=True)
+    if ca_file:
+        return UpstreamPlan(verify=True, ca_file=ca_file)
+    return UpstreamPlan(verify=True, refuse=True, note="the case says own_ca and the installation names no CA file (CHAOSGW_UPSTREAM_CA_FILE)")

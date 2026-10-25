@@ -64,6 +64,9 @@ type fakeGateway struct {
 	rules      []any
 	keylog     *bool
 	blockQUIC  *bool
+	upstream   string            // the policy of the case for the servers' certificates; empty: none given
+	others     map[string]string // more interception cases, by overlay, with their policies (the case above is interceptOverlay)
+	applied    int64             // the newest generation the proxy has asked to be told about, which it has in use then
 	handshakes []model.TlsHandshakeReport
 	flows      []map[string]any
 	keys       []map[string]any
@@ -86,6 +89,9 @@ func newFakeGateway(t *testing.T, token string) *fakeGateway {
 	mux.HandleFunc("GET /api/v1/internal/tls/config", auth(func(w http.ResponseWriter, r *http.Request) {
 		var after int64
 		_, _ = fmt.Sscan(r.URL.Query().Get("after"), &after)
+		g.mu.Lock()
+		g.applied = max(g.applied, after)
+		g.mu.Unlock()
 		if r.URL.Query().Get("consumer") != "proxy" {
 			http.Error(w, "the proxy says who it is", http.StatusBadRequest)
 			return
@@ -159,9 +165,18 @@ func (g *fakeGateway) config() map[string]any {
 	if g.blockQUIC != nil {
 		ic["block_quic"] = *g.blockQUIC
 	}
-	return map[string]any{"generation": g.gen, "cases": []any{map[string]any{
+	if g.upstream != "" {
+		ic["upstream"] = g.upstream
+	}
+	cases := []any{map[string]any{
 		"case": "intercept", "overlay": interceptOverlay, "sources": []string{"127.0.0.1/32"}, "expected": "any", "intercept": ic,
-	}}}
+	}}
+	for overlay, policy := range g.others {
+		cases = append(cases, map[string]any{
+			"case": "intercept", "overlay": overlay, "sources": []string{"127.0.0.1/32"}, "expected": "any", "intercept": map[string]any{"upstream": policy},
+		})
+	}
+	return map[string]any{"generation": g.gen, "cases": cases}
 }
 
 // setRules gives the proxy new rules (a new generation of the configuration).
@@ -173,6 +188,38 @@ func (g *fakeGateway) setRules(rules ...map[string]any) {
 		g.rules = append(g.rules, r)
 	}
 	g.gen++
+}
+
+// setUpstream gives the case a policy for the servers' certificates (a new generation); waitApplied waits until the proxy has it.
+func (g *fakeGateway) setUpstream(policy string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.upstream = policy
+	g.gen++
+}
+
+// setOthers gives the proxy more cases, an overlay each with its policy (a new generation).
+func (g *fakeGateway) setOthers(others map[string]string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.others = others
+	g.gen++
+}
+
+// waitApplied waits until the proxy asks for what comes after the current generation, which it does once it has that one.
+func (g *fakeGateway) waitApplied(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		g.mu.Lock()
+		ok := g.applied >= g.gen
+		g.mu.Unlock()
+		if ok {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("the proxy has not taken the current configuration")
 }
 
 func (g *fakeGateway) snapshot() (hs []model.TlsHandshakeReport, flows, keys []map[string]any) {
@@ -226,6 +273,7 @@ type interceptRig struct {
 	up      *httptest.Server
 	upHits  atomic.Int64
 	caDir   string
+	overlay atomic.Value   // the overlay that decides the connections of the device (a string); interceptOverlay until a test says otherwise
 	roots   *x509.CertPool // what the device trusts: the test CA
 	control string
 }
@@ -235,6 +283,11 @@ type riglOpt struct {
 	mod      func(*Options)
 	h2       bool
 	proxyDir string
+	// upstreamCA says what the installation gives the proxy to verify the servers with (P5-M22-03): "" the certificate of the rig's
+	// server (a lab CA file), "none" nothing (the bundle of mitmproxy), "other" a CA that signed no server. upstreamInsecure is
+	// CHAOSGW_UPSTREAM_INSECURE=1.
+	upstreamCA       string
+	upstreamInsecure bool
 }
 
 // newInterceptRig starts everything. The upstream server is httptest's TLS server (certificate for example.com), which the proxy
@@ -279,8 +332,9 @@ func newInterceptRig(t *testing.T, o riglOpt) *interceptRig {
 	}
 
 	listen := freeAddr(t)
+	ir.overlay.Store(interceptOverlay)
 	ir.rig = newRig(t, func(ConnInfo) Decision {
-		return Decision{Generation: 5, Overlay: interceptOverlay, Device: interceptDevice, Case: &model.TlsCase{Case: model.TlsCaseCaseIntercept}, Expected: "any", Passthrough: true}
+		return Decision{Generation: 5, Overlay: ir.overlay.Load().(string), Device: interceptDevice, Case: &model.TlsCase{Case: model.TlsCaseCaseIntercept}, Expected: "any", Passthrough: true}
 	}, func(opt *Options) {
 		opt.Proxy = listen
 		if o.mod != nil {
@@ -302,7 +356,16 @@ func newInterceptRig(t *testing.T, o riglOpt) *interceptRig {
 	if pdir == "" {
 		pdir = dir
 	}
-	ir.proxy, err = testbed.StartProxy(py, testbed.ProxyOptions{Listen: listen, Control: ir.control, API: ir.gw.srv.URL, TokenFile: tokenFile, CADir: ir.caDir, UpstreamCA: upCA, Dir: pdir})
+	switch o.upstreamCA {
+	case "none":
+		upCA = ""
+	case "other":
+		upCA = filepath.Join(dir, "other-ca.pem")
+		if err := os.WriteFile(upCA, cas.Unknown.PEM, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ir.proxy, err = testbed.StartProxy(py, testbed.ProxyOptions{Listen: listen, Control: ir.control, API: ir.gw.srv.URL, TokenFile: tokenFile, CADir: ir.caDir, UpstreamCA: upCA, UpstreamInsecure: o.upstreamInsecure, Dir: pdir})
 	if err != nil {
 		t.Fatal(err)
 	}

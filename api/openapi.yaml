@@ -3790,6 +3790,22 @@ components:
             Drop UDP 443 of the selected clients (and destination, when the case names one) while the case is in force, so
             that a client that tries QUIC / HTTP/3 falls back to TCP, which the proxy can intercept. QUIC itself is not
             intercepted.
+        upstream:
+          type: string
+          enum: [verify, own_ca, insecure]
+          description: |
+            How the proxy treats the certificate of the real server it opens its own connection to (P5-M22-03). Omitted: the
+            installation's default, which is `verify` unless the proxy's container sets `CHAOSGW_UPSTREAM_CA_FILE` (then `own_ca`)
+            or `CHAOSGW_UPSTREAM_INSECURE=1` (then `insecure`).
+
+            - `verify`: the certificate must be valid for the server name and chain to a CA of the default bundle that the
+              proxy ships (mitmproxy's). A server with a private CA, an expired certificate or one for another name is refused:
+              the device is answered with a 502 over the proxy's certificate, the server sees no request, and the exchange is logged
+              with the error `TLS to the server failed`. A test of the device's own checks is not made a test of the proxy.
+            - `own_ca`: the certificate must be valid and chain to the CA file the installation gave the proxy
+              (`CHAOSGW_UPSTREAM_CA_FILE`, a lab's private CA), and to no other. Without such a file the connection is refused.
+            - `insecure`: the certificate of the server is not verified (a lab with servers whose certificates are wrong on
+              purpose or not yet right). The device is still shown a certificate of the test CA, valid for the name it asked for.
         http_rules:
           type: array
           description: |

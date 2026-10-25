@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -165,6 +166,18 @@ func TestACertificateThatDoesNotBelongToItsKeyIsNotLoaded(t *testing.T) {
 	}
 }
 
+// startedClock tells when a watcher first waits for a tick, which it does after it has looked at the files once.
+type startedClock struct {
+	clock.Clock
+	once    sync.Once
+	started chan struct{}
+}
+
+func (c *startedClock) After(d time.Duration) <-chan time.Time {
+	c.once.Do(func() { close(c.started) })
+	return c.Clock.After(d)
+}
+
 // A service that reloads on a change of the files meets the moment between the two writes of a regeneration (the new certificate, the old key):
 // it keeps the CA it has, and loads the new one when the key is there.
 func TestTheWatcherKeepsTheOldCAWhileTheNewCertificateLacksItsKey(t *testing.T) {
@@ -190,11 +203,13 @@ func TestTheWatcherKeepsTheOldCAWhileTheNewCertificateLacksItsKey(t *testing.T) 
 	before := cert()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
+	clk := &startedClock{Clock: &clock.Real{}, started: make(chan struct{})}
 	go func() {
-		WatchCAs(ctx, &clock.Real{}, dir, iss, 20*time.Millisecond, slog.New(slog.DiscardHandler))
+		WatchCAs(ctx, clk, dir, iss, 20*time.Millisecond, slog.New(slog.DiscardHandler))
 		close(done)
 	}()
 	defer func() { cancel(); <-done }()
+	<-clk.started // the watcher has taken the stamp of the files it compares with
 
 	fresh := t.TempDir()
 	if err := EnsureCAs(fresh, time.Now()); err != nil {

@@ -322,13 +322,31 @@ class Addon:
                 await asyncio.to_thread(self.control.abort, o.connection)
             flow.kill()
 
-    def response(self, flow: http.HTTPFlow) -> None:
+    def responseheaders(self, flow: http.HTTPFlow) -> None:
+        """The headers of the server's response are in: the rules change them now (a streamed response has gone to the device
+        by the time `response` runs), and the body is streamed to the device as it arrives unless a rule replaces text in it,
+        which needs the whole body. A response that never ends (server-sent events, a long poll) so reaches the device."""
+        self._change_response_headers(flow)
         d: R.Decision | None = flow.metadata.get("cg")
-        if d is not None and flow.response is not None:
-            if d.terminal is None or d.terminal[0] != "status":
-                R.apply_headers(flow.response.headers, d.response_headers)
-            if d.body_replace and flow.response.content is not None and d.terminal is None:
-                flow.response.content = R.replace_body(flow.response.content, d.body_replace)
+        res = flow.response
+        if res is None or res.status_code == 101 or (d is not None and d.body_replace):
+            return
+        counted = flow.metadata["cg_streamed"] = [0]
+
+        def count(chunk: bytes) -> bytes:
+            counted[0] += len(chunk)
+            return chunk
+
+        res.stream = count
+
+    def _change_response_headers(self, flow: http.HTTPFlow) -> None:
+        if flow.metadata.get("cg_headers_done") or flow.response is None:
+            return
+        flow.metadata["cg_headers_done"] = True
+        d: R.Decision | None = flow.metadata.get("cg")
+        if d is not None and (d.terminal is None or d.terminal[0] != "status"):
+            R.apply_headers(flow.response.headers, d.response_headers)
+        if d is not None:
             o = self.origin(flow.client_conn)
             case = self.cases.get(o.overlay.lower()) if o and o.overlay else None
             if case is not None and case.block_quic and "alt-svc" in flow.response.headers:
@@ -337,6 +355,13 @@ class Addon:
                     flow.response.headers["alt-svc"] = kept
                 else:
                     del flow.response.headers["alt-svc"]
+
+    def response(self, flow: http.HTTPFlow) -> None:
+        # a response the rules made themselves (`block`, `status`) has no headers event of a server: its headers are changed here
+        self._change_response_headers(flow)
+        d: R.Decision | None = flow.metadata.get("cg")
+        if d is not None and flow.response is not None and d.body_replace and flow.response.content is not None and d.terminal is None:
+            flow.response.content = R.replace_body(flow.response.content, d.body_replace)
         self._report_http(flow)
 
     def error(self, flow: http.HTTPFlow) -> None:
@@ -365,7 +390,8 @@ class Addon:
         }
         if res is not None:
             rep["status"] = res.status_code
-            rep["response_bytes"] = len(res.raw_content or b"")
+            streamed = flow.metadata.get("cg_streamed")
+            rep["response_bytes"] = streamed[0] if streamed is not None else len(res.raw_content or b"")
         if d is not None and d.actions:
             rep["actions"] = list(d.actions)
         if error:

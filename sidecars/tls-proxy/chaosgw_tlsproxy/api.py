@@ -132,9 +132,15 @@ class Follower(threading.Thread):
                 self.on_config(cfg)
 
 
+def is_rejection(e: Exception) -> bool:
+    """Whether the API refused the content of a request (a 4xx other than 408 and 429): sending it again changes nothing."""
+    return isinstance(e, ApiError) and 400 <= e.status < 500 and e.status not in (408, 429)
+
+
 class Batcher(threading.Thread):
-    """Collects reports and posts them in batches, at once when the API is idle. Reports the API does not take are kept
-    and sent again; past `limit` the oldest are dropped."""
+    """Collects reports and posts them in batches, at once when the API is idle. Reports the API cannot take now (it is away,
+    busy or failing) are kept and sent again; past `limit` the oldest are dropped. A batch the API refuses for its content is
+    dropped with a warning: kept, it would stand in front of every report after it for good."""
 
     def __init__(self, name: str, post: Callable[[list[dict]], None], batch: int = 100, retry: float = 2.0, limit: int = 5000):
         super().__init__(name=name, daemon=True)
@@ -143,6 +149,7 @@ class Batcher(threading.Thread):
         self._cv = threading.Condition()
         self._closed = False
         self.dropped = 0
+        self.refused = 0
 
     def add(self, item: dict) -> None:
         with self._cv:
@@ -170,6 +177,16 @@ class Batcher(threading.Thread):
             try:
                 self.post(batch)
             except Exception as e:
+                if isinstance(e, ApiError) and e.status == 413 and len(batch) > 1:
+                    # too big for one request: the same reports go again in smaller batches
+                    self.batch = max(len(batch) // 2, 1)
+                    with self._cv:
+                        self._items = collections.deque([*batch, *self._items])
+                    continue
+                if is_rejection(e):
+                    log.warning("the API refused a batch of %d %s reports, which are dropped: %s", len(batch), self.name, e)
+                    self.refused += len(batch)
+                    continue
                 log.debug("a batch of %s was not accepted: %s", self.name, e)
                 with self._cv:
                     if self._closed:

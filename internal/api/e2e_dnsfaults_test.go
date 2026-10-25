@@ -299,9 +299,8 @@ func TestAHostnameFaultAffectsOnlyTrafficToTheResolvedAddressesOnTheRealKernel(t
 	if med, _ := b.pingMedian(t, testbed.ServerAddr, 4); med > 60*time.Millisecond {
 		t.Fatalf("traffic to the address was delayed (%v) before the device asked for the name", med)
 	}
-	if got := b.addrOf(brokerHost); got != testbed.ServerAddr {
-		t.Fatalf("A resolves %s to %q", brokerHost, got)
-	}
+	// the device asks (again, until the proxy has the host name of the fault); A resolves the name to the server
+	b.waitHostnameSet(t, brokerHost)
 	// the set holds the pair before the first packet
 	if els := b.setElements(brokerHost); len(els) != 1 || els[0] != testbed.ClientAAddr+" . "+testbed.ServerAddr {
 		t.Fatalf("the kernel's set holds %v", els)
@@ -333,13 +332,27 @@ func TestALongLivedConnectionKeepsItsHostnameFaultPastAOneSecondTTLOnTheRealKern
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = l.Close() }()
+	// the connections the echo accepted are closed with the test: the client's FIN may not get through the delay before the bed is gone, and a
+	// connection that nobody closes keeps its goroutine (and the namespace) alive past the test
+	var mu sync.Mutex
+	var accepted []net.Conn
+	defer func() {
+		_ = l.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range accepted {
+			_ = c.Close()
+		}
+	}()
 	go func() {
 		for {
 			c, err := l.Accept()
 			if err != nil {
 				return
 			}
+			mu.Lock()
+			accepted = append(accepted, c)
+			mu.Unlock()
 			go func() {
 				defer func() { _ = c.Close() }()
 				buf := make([]byte, 64)

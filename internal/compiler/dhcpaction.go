@@ -104,6 +104,15 @@ func (t *Target) compileDHCPActions(in Input, idx *domain.Index) {
 		t.warn(CodeDHCPInactive, "", "the DHCP action (%s) of %s has no effect: %s", c.Summary(), describeScope(idx, c.Scope), why)
 	}
 
+	if t.Kea == nil {
+		// no network serves DHCP: no action can reach anybody
+		for _, nid := range sortedStrings(acts.Networks) {
+			inactive(acts.Networks[nid], "no network serves DHCP")
+		}
+		for _, did := range sortedStrings(acts.Devices) {
+			inactive(acts.Devices[did], "no network serves DHCP")
+		}
+	}
 	var cfgNew *kea.Config
 	if t.Kea != nil {
 		c := t.Kea.Config

@@ -63,7 +63,7 @@ test('a DNS fault: made in the Add fault dialog of a device, with its checks und
   await expect(d.getByRole('button', { name: 'Apply fault' })).toBeDisabled();
   await d.getByLabel('Delay', { exact: true }).fill('2s');
   await d.getByLabel('Host names').fill('broker.example.com, not a name!');
-  await expect(d.getByLabel('Host names')).toHaveAccessibleDescription(/!? is no host name|not a name!|is no host name/);
+  await expect(d.getByLabel('Host names')).toHaveAccessibleDescription('name! is no host name: a name like broker.example.com, or *.example.com.');
   await expect(d.getByRole('button', { name: 'Apply fault' })).toBeDisabled();
   await d.getByLabel('Host names').fill('broker.example.com, *.cdn.example.net');
   await d.getByLabel('Duration').selectOption({ label: '5 min' });
@@ -140,6 +140,44 @@ test('the gateway\'s refusal of a DNS fault stands under the field it names', as
   // an edit takes the message away
   await d.getByLabel('Host names').fill('other.example.com');
   await expect(d.getByLabel('Host names')).not.toHaveAccessibleDescription('"broker.example.com" is listed twice');
+});
+
+// ---- the keyboard
+
+test('keyboard: a DNS fault and a DHCP action are made without the mouse, and Escape gives the focus back to the control that opened the dialog', async ({ page }) => {
+  const gw = MockGateway.sample();
+  await gw.install(page);
+  await page.goto(`/devices/${ESP}`);
+
+  // the kind is chosen with the key, a text field's Enter applies the form
+  await page.getByRole('button', { name: 'Add fault' }).first().click();
+  const d = faultDialog(page);
+  await kind(page, 'DNS').focus();
+  await page.keyboard.press('Enter');
+  await expect(d.getByLabel('Action', { exact: true })).toHaveValue('nxdomain');
+  await d.getByLabel('Host names').fill('broker.example.com');
+  await d.getByLabel('Host names').press('Enter');
+  await expect(toast(page, 'Fault active on ESP32-42')).toBeVisible();
+  expect(sentOverlays(gw)[0]).toEqual({ target: { device: ESP }, dns: { action: 'nxdomain', names: ['broker.example.com'] }, ttl: '15m' });
+
+  // a button of the DHCP card opens its dialog, which Enter applies and Escape leaves
+  const card = page.getByTestId('dhcp-card');
+  await card.getByTestId('dhcp-add-short_lease').focus();
+  await page.keyboard.press('Enter');
+  const h = dhcpDialog(page);
+  await expect(h.getByLabel('Lease time')).toBeVisible();
+  await h.getByLabel('Lease time').fill('9s');
+  await h.getByLabel('Lease time').press('Enter');
+  await expect(toast(page, 'DHCP action active on ESP32-42')).toBeVisible();
+  expect(sentOverlays(gw)[1]).toEqual({ target: { device: ESP }, dhcp: { action: 'short_lease', lease_time: '9s' }, ttl: '15m' });
+  const edit = card.getByTestId('dhcp-action').getByRole('button', { name: /^Edit / });
+  await edit.focus();
+  await page.keyboard.press('Enter');
+  await expect(h).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(h).toBeHidden();
+  await expect(edit).toBeFocused();
+  expect(gw.requestsTo('POST', '/overlays')).toHaveLength(2);
 });
 
 // ---- TLS cases
@@ -431,6 +469,18 @@ test('a device without a MAC cannot be moved, and a network without DHCP has not
   await expect(page.getByTestId('dhcp-unavailable')).toHaveText('DHCP is off in this network: an action has nothing to change.');
   await page.goto('/networks');
   for (const a of ['short_lease', 'delete_lease', 'set_options', 'silence']) await expect(page.getByTestId(`dhcp-add-${a}`)).toBeDisabled();
+});
+
+test('a gateway that has no DHCP actions has no card for them', async ({ page }) => {
+  const gw = MockGateway.sample();
+  gw.capabilities.overlay_kinds = gw.capabilities.overlay_kinds.filter((k) => k !== 'dhcp');
+  await gw.install(page);
+  await page.goto(`/devices/${ESP}`);
+  await expect(page.getByRole('heading', { name: 'Port forwards' })).toBeVisible();
+  await expect(page.getByTestId('dhcp-card')).toHaveCount(0);
+  await page.goto('/networks');
+  await expect(page.getByRole('heading', { name: 'DHCP leases' })).toBeVisible();
+  await expect(page.getByTestId('dhcp-card')).toHaveCount(0);
 });
 
 test('the network card: the actions of a network, without a forced new IP, listed and removed there', async ({ page }) => {

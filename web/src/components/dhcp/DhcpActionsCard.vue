@@ -10,7 +10,7 @@ import { computed, ref } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { deleteOverlay } from '../../api/generated/hooks/overlays/overlays';
 import type { Overlay, Scope } from '../../api/generated/model';
-import { firstError, useGatewayState, useOverlays } from '../../composables/gateway';
+import { firstError, useCapabilities, useGatewayState, useOverlays } from '../../composables/gateway';
 import { useNow } from '../../composables/useNow';
 import { dhcpActionsFor, dhcpEffect, type DhcpActionName } from '../../lib/dhcpForm';
 import { dhcpChips } from '../../lib/faults';
@@ -35,6 +35,12 @@ const props = defineProps<{
 }>();
 
 const kind = computed(() => (props.target.device ? 'device' : 'network'));
+// a gateway of an older build has no DHCP actions: the card is left out, as the step type is (the kinds of the dialog follow the same list)
+const capabilities = useCapabilities();
+const supported = computed(() => {
+  const kinds = capabilities.data.value?.overlay_kinds as string[] | undefined;
+  return !kinds || kinds.includes('dhcp');
+});
 const overlays = useOverlays();
 const state = useGatewayState();
 const connection = useConnectionStore();
@@ -94,7 +100,7 @@ function expiry(o: Overlay): string {
 </script>
 
 <template>
-  <SectionCard title="DHCP test actions">
+  <SectionCard v-if="supported" title="DHCP test actions">
     <div class="flex flex-col gap-3" data-testid="dhcp-card">
       <p class="m-0 text-[13px] text-text-2">
         {{

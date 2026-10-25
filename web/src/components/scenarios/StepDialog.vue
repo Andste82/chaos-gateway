@@ -9,7 +9,7 @@
 // gateway does not run is not offered; such a step is edited in the YAML view.
 import { computed, ref, useId, watch } from 'vue';
 import type { Scenario, Scope, Step } from '../../api/generated/model';
-import { useCapabilities, useProfiles } from '../../composables/gateway';
+import { useCanIntercept, useCapabilities, useProfiles } from '../../composables/gateway';
 import { useScenarioApi } from '../../composables/draftApi';
 import { useScenarioTargets, useTopology } from '../../composables/scenarioTargets';
 import { durationMs } from '../../lib/format';
@@ -58,6 +58,7 @@ const targets = useScenarioTargets();
 const topology = useTopology();
 const profiles = useProfiles();
 const capabilities = useCapabilities();
+const canIntercept = useCanIntercept();
 const { networks, devices } = useNames();
 
 const form = ref<StepForm>(emptyStepForm('profile', 'step-1'));
@@ -205,7 +206,7 @@ const typeHints: Record<string, string> = {
   profile: 'Activates a named profile on the target; it replaces the profile or fault of an earlier step with the same key.',
   fault: 'A fault with complete parameters: it replaces the fault of an earlier step on the same target and traffic, it is never merged with it.',
   dns: 'A DNS fault of the gateway\'s DNS proxy on the target; it replaces the DNS fault of an earlier step for the same names.',
-  tls: 'A TLS case on the target: a certificate the device must reject, or a handshake that fails; it replaces the case of an earlier step with the same selection.',
+  tls: 'A TLS case on the target: a certificate the device must reject, a handshake that fails, or the interception proxy with HTTP rules; it replaces the case of an earlier step with the same selection.',
   dhcp: 'A DHCP action for a device or a network; it replaces the action of an earlier step with the same action on the same target.',
   rule: 'An access rule that acts on the target until a later step removes it or the run ends.',
   wireguard: 'Takes a WireGuard client or link down, breaks its key or blocks its endpoint; the client or link must lie inside the target.',
@@ -288,7 +289,14 @@ const typeHints: Record<string, string> = {
 
         <DnsFields v-else-if="form.type === 'dns'" v-model="form.dns" :errors="errors" />
 
-        <TlsFields v-else-if="form.type === 'tls'" v-model="form.tls" :errors="errors" :trust="trustedDevice?.trust" :device-name="trustedDevice?.name" />
+        <TlsFields
+          v-else-if="form.type === 'tls'"
+          v-model="form.tls"
+          :errors="errors"
+          :trust="trustedDevice?.trust"
+          :device-name="trustedDevice?.name"
+          :interception="canIntercept !== false"
+        />
 
         <DhcpFields v-else-if="form.type === 'dhcp'" v-model="form.dhcp" :errors="errors" :scope="dhcpScope" />
 

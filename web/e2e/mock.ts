@@ -28,6 +28,7 @@ import type {
   GroupView,
   Health,
   HostInterface,
+  InterceptFlow,
   LinuxObjectState,
   LinuxState,
   NetworkView,
@@ -528,10 +529,15 @@ export class MockGateway {
   /** What GET /captures/storage says besides the sum of the sizes of the captures (the quota, the volume). */
   captureStorage: Partial<CaptureStorage> = {};
   private nextCapture = 1;
+  /** The exchanges the interception proxy saw, oldest first (GET /intercept/flows lists them newest first). */
+  interceptFlows: InterceptFlow[] = [];
+  /** The next POST /tls/ca/regenerate is refused with this status; the number of replacements so far. */
+  rejectRegenerate?: { status: number; code: string; detail: string };
+  regenerated = 0;
   /** What the gateway can do (GET /capabilities). */
   capabilities: Capabilities = {
     version: 'test',
-    features: ['runs', 'checks', 'captures'],
+    features: ['runs', 'checks', 'captures', 'tls.intercept'],
     overlay_kinds: ['fault', 'profile', 'rule', 'dns', 'tls', 'dhcp', 'wireguard'],
     fault_families: ['impairment', 'mtu', 'dns', 'tls', 'dhcp', 'tunnel'],
     step_types: ['profile', 'fault', 'rule', 'dns', 'tls', 'dhcp', 'wireguard', 'capture', 'wait', 'remove', 'restore'],
@@ -876,6 +882,40 @@ export class MockGateway {
         contentType: 'application/x-pem-file',
         body: '-----BEGIN CERTIFICATE-----\nMIIBtest\n-----END CERTIFICATE-----\n',
       });
+    }
+    if (path === '/tls/ca/regenerate' && method === 'POST') {
+      if (this.rejectRegenerate) {
+        const r = this.rejectRegenerate;
+        this.rejectRegenerate = undefined;
+        return problem(r.status, r.code, r.detail);
+      }
+      this.regenerated++;
+      return route.fulfill({
+        status: 200,
+        headers: { ...headers, 'Content-Disposition': 'attachment; filename="chaos-gateway-test-ca.pem"' },
+        contentType: 'application/x-pem-file',
+        body: `-----BEGIN CERTIFICATE-----\nMIIBnew${this.regenerated}\n-----END CERTIFICATE-----\n`,
+      });
+    }
+    if (path === '/intercept/flows' && method === 'GET') {
+      const device = url.searchParams.get('device');
+      const known = device ? this.devices.find((d) => d.id === device || d.name === device) : undefined;
+      if (device && !known) return problem(404, 'not_found', `no such device: ${device}`);
+      const host = url.searchParams.get('host');
+      const since = url.searchParams.get('since');
+      const faulted = url.searchParams.get('faulted');
+      const hostMatches = (h: string | undefined) => {
+        if (!host) return true;
+        const name = (h ?? '').toLowerCase();
+        return host.startsWith('*.') ? name === host.slice(2).toLowerCase() || name.endsWith(host.slice(1).toLowerCase()) : name === host.toLowerCase();
+      };
+      const list = [...this.interceptFlows]
+        .reverse()
+        .filter((f) => !known || f.device === known.id)
+        .filter((f) => hostMatches(f.host))
+        .filter((f) => !since || new Date(f.time) >= new Date(since))
+        .filter((f) => faulted === null || (faulted === 'true') === ((f.actions ?? []).length > 0));
+      return json(200, this.page(list, url));
     }
     if (path.startsWith('/captures') && !this.capabilities.features.includes('captures')) return problem(422, 'unsupported_feature', 'this deployment cannot capture: the executor has no capture volume (--captures-dir)');
     if (path === '/captures' && method === 'GET') {

@@ -17,6 +17,7 @@ vi.mock('./views/FaultsView.vue', () => ({ default: { name: 'PageStub', render: 
 vi.mock('./views/ProfilesView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
 vi.mock('./views/ScenariosView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
 vi.mock('./views/CapturesView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./views/InterceptView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
 vi.mock('./views/RunView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
 vi.mock('./views/NetworksView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
 vi.mock('./views/RoutingView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
@@ -94,6 +95,9 @@ describe('the router', () => {
     expect(r.currentRoute.value.params.id).toBe('0a1b2c3d');
     await r.push('/captures');
     expect(r.currentRoute.value.name).toBe('captures');
+    await r.push('/interception?device=d1&faulted=1');
+    expect(r.currentRoute.value.name).toBe('interception');
+    expect(r.currentRoute.value.query).toEqual({ device: 'd1', faulted: '1' });
     await r.push('/diagnostics');
     expect(r.currentRoute.value.name).toBe('not-found');
   });

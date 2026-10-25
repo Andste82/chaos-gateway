@@ -4,7 +4,7 @@
 // the invalidation by event type (eventStream.ts) reaches them.
 import { useQueries, useQuery } from '@tanstack/vue-query';
 import { computed, watch } from 'vue';
-import { listDevices, listLeases } from '../api/generated/hooks/devices/devices';
+import { listDevices, listInterceptFlows, listLeases } from '../api/generated/hooks/devices/devices';
 import { listWireGuardClients } from '../api/generated/hooks/wireguard/wireguard';
 import { listAccessRules, listFaults, listGroups, listNetworks, listPortForwards, listProfiles, listScenarios } from '../api/generated/hooks/config/config';
 import { getCaptureStorage, listCaptures } from '../api/generated/hooks/captures/captures';
@@ -12,7 +12,7 @@ import { getRun, listRuns } from '../api/generated/hooks/runs/runs';
 import { listOverlays } from '../api/generated/hooks/overlays/overlays';
 import { getActiveRevision, getGetActiveRevisionQueryKey } from '../api/generated/hooks/revisions/revisions';
 import { getCapabilities, useGetHealth, useGetState, useGetSystemInfo } from '../api/generated/hooks/system/system';
-import type { AccessRuleView, Capture, DeviceView, DhcpLease, FaultView, GroupView, ListRunsParams, NetworkView, Overlay, PortForwardView, ProfileView, Run, ScenarioView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
+import type { AccessRuleView, Capture, DeviceView, InterceptFlowPage, ListInterceptFlowsParams, DhcpLease, FaultView, GroupView, ListRunsParams, NetworkView, Overlay, PortForwardView, ProfileView, Run, ScenarioView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
 import { describeMatch, describeScope, describeTunnel, faultChips, overlayChips, type Names } from '../lib/faults';
 import { scopeLink } from '../lib/links';
 import { isRunOf, mergeRuns } from '../lib/runs';
@@ -236,6 +236,37 @@ export function useCanCapture() {
   return computed<boolean | undefined>(() => {
     if (caps.data.value) return caps.data.value.features.includes('captures');
     return caps.error.value ? true : undefined;
+  });
+}
+
+/**
+ * Whether this gateway has the interception (M22): its features list `tls.intercept`. Undefined until the capabilities are known;
+ * capabilities that cannot be read do not take the interception away (the gateway answers `unsupported_feature` itself).
+ */
+export function useCanIntercept() {
+  const caps = useCapabilities();
+  return computed<boolean | undefined>(() => {
+    if (caps.data.value) return caps.data.value.features.includes('tls.intercept');
+    return caps.error.value ? true : undefined;
+  });
+}
+
+/**
+ * The newest exchanges of the interception proxy that the parameters select (M23c). Exchanges that no rule acted on come without an
+ * event, so the table is read every 3 s while `live` is on (the table that is not live holds what it has), and at once on the event
+ * `http_fault_triggered`. A page is a window onto the newest exchanges: asking for more keeps the page that is shown.
+ */
+export function useInterceptFlows(params: () => ListInterceptFlowsParams, enabled: () => boolean = () => true, live: () => boolean = () => true) {
+  return useQuery<InterceptFlowPage>({
+    queryKey: computed(() => ['intercept', 'flows', params()]),
+    queryFn: ({ signal }) => listInterceptFlows(params(), { signal }),
+    enabled: computed(enabled),
+    placeholderData: (prev, prevQuery) => {
+      const { limit: _a, ...before } = (prevQuery?.queryKey[2] ?? {}) as ListInterceptFlowsParams;
+      const { limit: _b, ...now } = params();
+      return JSON.stringify(before) === JSON.stringify(now) ? prev : undefined;
+    },
+    refetchInterval: computed(() => (live() ? 3_000 : false)),
   });
 }
 

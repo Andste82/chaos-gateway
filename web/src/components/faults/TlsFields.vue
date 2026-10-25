@@ -2,11 +2,13 @@
 // The fields of a TLS case (plan §2.8, §2.17 "Add fault", M23b): the case the TLS responder plays (a certificate the
 // device must reject, or a handshake that fails), the connections it selects (ports, a destination, the server names of the
 // ClientHello) and whether it cuts connections that exist, with what each case needs on the device (the test CA) and the
-// download of that CA. The "Add fault" dialog and the `tls` step of the step dialog share them. Each message stands under
-// its field (`errors` by field name).
+// download of that CA. The interception (M23c) is the last case, in a group of its own, and shows the proxy's settings and the
+// list of HTTP rules below the common fields. The "Add fault" dialog and the `tls` step of the step dialog share them. Each message
+// stands under its field (`errors` by field name).
 import { computed, useId } from 'vue';
-import { interceptLabel, tlsCases, type TlsForm } from '../../lib/tlsForm';
+import { tlsCases, tlsGroups, type TlsForm } from '../../lib/tlsForm';
 import TestCaLink from '../ui/TestCaLink.vue';
+import InterceptFields from './InterceptFields.vue';
 import TrafficFields from './TrafficFields.vue';
 
 const props = defineProps<{
@@ -15,6 +17,8 @@ const props = defineProps<{
   trust?: boolean;
   /** The device's name, for the note about the test CA. */
   deviceName?: string;
+  /** Whether the gateway has the interception (`tls.intercept`): without it the case is not offered for a new case. */
+  interception?: boolean;
 }>();
 const form = defineModel<TlsForm>({ required: true });
 const uid = useId();
@@ -23,11 +27,18 @@ const intercept = computed(() => form.value.case === 'intercept');
 /** What the case needs of the device, in the words of plan §2.8. */
 const trustNote = computed(() => {
   if (!info.value?.testCa) return undefined;
+  const who = props.deviceName ?? 'The device';
+  if (intercept.value) {
+    if (props.trust === true) return `${who} trusts the test CA: the proxy can read its HTTPS.`;
+    if (props.trust === false) return `${who} does not trust the test CA: it rejects the proxy's certificate in the handshake and no request reaches the proxy. Install the test CA on it first.`;
+    return 'The device must trust the test CA (a development firmware): any other rejects the proxy\'s certificate in the handshake, and the proxy sees none of its requests.';
+  }
   if (props.trust === true) return `${props.deviceName ?? 'The device'} trusts the test CA: it must reject this certificate with the specific error.`;
   if (props.trust === false) return `${props.deviceName ?? 'The device'} does not trust the test CA: it rejects this certificate as an unknown issuer, like every other case.`;
   return 'Only a device that trusts the test CA (a development firmware) can tell this case from an unknown issuer; any other rejects it as such.';
 });
-const groups = ['Certificate', 'Handshake'] as const;
+/** The cases offered: the interception only where the gateway has it, or where it is the case being edited. */
+const offered = computed(() => tlsCases.filter((c) => c.value !== 'intercept' || props.interception !== false || intercept.value));
 const fid = (f: string) => `${uid}-${f}`;
 const eid = (f: string) => `${uid}-${f}-error`;
 </script>
@@ -43,17 +54,15 @@ const eid = (f: string) => `${uid}-${f}-error`;
         :aria-invalid="!!errors.tlsCase"
         :aria-describedby="errors.tlsCase ? eid('case') : fid('hint')"
       >
-        <optgroup v-for="g in groups" :key="g" :label="g">
-          <option v-for="c in tlsCases.filter((x) => x.group === g)" :key="c.value" :value="c.value">{{ c.label }}</option>
-        </optgroup>
-        <option v-if="intercept" value="intercept">{{ interceptLabel }}</option>
+        <template v-for="g in tlsGroups" :key="g">
+          <optgroup v-if="offered.some((x) => x.group === g)" :label="g">
+            <option v-for="c in offered.filter((x) => x.group === g)" :key="c.value" :value="c.value">{{ c.label }}</option>
+          </optgroup>
+        </template>
       </select>
       <p v-if="errors.tlsCase" :id="eid('case')" class="field-error">{{ errors.tlsCase }}</p>
       <div v-else :id="fid('hint')" class="mt-1 flex flex-col gap-1 text-[13px] text-text-2">
         <p v-if="info" class="m-0" data-testid="tls-hint">{{ info.hint }}</p>
-        <p v-else-if="intercept" class="m-0" data-testid="tls-hint">
-          The interception proxy answers instead of the server. Its settings and HTTP rules are not edited here: saving keeps them as they are.
-        </p>
         <p v-if="trustNote" class="m-0" data-testid="tls-trust">{{ trustNote }}</p>
       </div>
       <p class="m-0 mt-1 text-[13px]"><TestCaLink /></p>
@@ -85,5 +94,7 @@ const eid = (f: string) => `${uid}-${f}-error`;
       </span>
     </label>
     <p v-if="errors.tlsCut" class="field-error m-0">{{ errors.tlsCut }}</p>
+
+    <InterceptFields v-if="intercept" v-model="form.intercept" :errors="errors" />
   </div>
 </template>

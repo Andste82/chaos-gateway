@@ -6,7 +6,8 @@
 // are listed with a "Capture" action (M23a). The DHCP test actions (short lease, delete lease, force a new
 // IP, set options, silence) are made and listed in the DHCP card beside the lease (M23b); a DNS fault or a TLS
 // case of the device is made in the fault dialog and edited where it is listed. The panels whose backend comes
-// later (flows view, diagnostics) arrive with their milestones. The port forwards to the device (M35a)
+// later (flows view, diagnostics) arrive with their milestones; the HTTP exchanges of an interception case that acts on the device are listed in
+// a panel (M23c). The port forwards to the device (M35a)
 // are listed with their status and counter, each with a link to edit it on the networks page, which also
 // adds one to the device.
 // A configured device is edited (name, network, fixed IP) in the device dialog (#73); the Network card
@@ -24,6 +25,7 @@ import AdoptDialog from '../components/devices/AdoptDialog.vue';
 import DeviceDialog from '../components/devices/DeviceDialog.vue';
 import RemoveDeviceDialog from '../components/devices/RemoveDeviceDialog.vue';
 import CapturePanel from '../components/captures/CapturePanel.vue';
+import DeviceExchanges from '../components/intercept/DeviceExchanges.vue';
 import DhcpActionsCard from '../components/dhcp/DhcpActionsCard.vue';
 import ActiveFaultList from '../components/faults/ActiveFaultList.vue';
 import FaultDialog from '../components/faults/FaultDialog.vue';
@@ -93,6 +95,9 @@ const identity = computed(() => {
     .filter(Boolean)
     .join(' · ');
 });
+
+/** An interception case acts on the device (its own or a wider scope's): its exchanges get a panel (M23c). */
+const intercepted = computed(() => (overlays.data.value ?? []).some((o) => o.kind === 'tls' && o.tls?.case === 'intercept'));
 
 const faults = computed<ActiveFault[]>(() => {
   const n = names.value;
@@ -294,6 +299,8 @@ useApiScreen('this device', () => [
             </dd>
           </dl>
         </SectionCard>
+
+        <DeviceExchanges :device="{ id: d.id, name: d.name }" :active="intercepted" />
 
         <CapturePanel :device="{ id: d.id, name: d.name }" />
       </div>

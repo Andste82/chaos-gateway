@@ -388,6 +388,26 @@ describe('the DNS and TLS kinds of the dialog', () => {
     );
   });
 
+  it('an interception case is the tls part with its settings and rules, opened and sent back unchanged (M23c)', () => {
+    const intercept = { keylog: false, upstream: 'verify' as const, http_rules: [{ action: 'status' as const, status: 503, match: { host: 'api.example.com' } }, { action: 'delay' as const, delay: '250ms' }] };
+    const o = overlay({ kind: 'tls', target: { device: 'd1' }, tls: { case: 'intercept', ports: [443], intercept }, ttl: '5m', expires_at: new Date(Date.now() + 60_000).toISOString() });
+    const f = overlayToForm(o);
+    expect(f.family).toBe('tls');
+    expect(f.tls.case).toBe('intercept');
+    expect(f.tls.intercept.rules).toHaveLength(2);
+    const req = formToOverlay(f);
+    expect(req).toMatchObject({ target: { device: 'd1' }, tls: o.tls, ttl: '5m' });
+    expect(CreateOverlayBody.safeParse(req).success).toBe(true);
+    expect(faultFormErrors(f)).toEqual({});
+    // the preview counts the rules, and a problem of a rule keeps the dialog from applying
+    expect(previewSentence({ ...f, duration: '5m' }, 'ESP32-42')).toBe('ESP32-42 · TLS connections on TCP 443 → the interception proxy with 2 HTTP rules · expires after 5 min');
+    f.tls.intercept.rules[1]!.delay = '0s';
+    expect(Object.keys(faultFormErrors(f))).toEqual(['rule.1.delay']);
+    // the pointers of the gateway reach the field of the rule
+    expect(fieldOf('/tls/intercept/http_rules/1/delay')).toBe('rule.1.delay');
+    expect(fieldOf('/tls/intercept/upstream')).toBe('interceptUpstream');
+  });
+
   it("the gateway's pointers of the two kinds", () => {
     expect(fieldOf('/dns/delay')).toBe('dnsDelay');
     expect(fieldOf('/dns/names/1')).toBe('dnsNames');

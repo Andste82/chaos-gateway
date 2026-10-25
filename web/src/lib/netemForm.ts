@@ -110,7 +110,8 @@ export function parseRate(text: string): string | undefined {
   return `${m[1]}${unit}`;
 }
 
-function rateBits(rate: string): number {
+/** A rate in bits per second; 0 for text that is no rate. */
+export function rateBits(rate: string): number {
   const m = /^([0-9.]+)(bit|kbit|Mbit|Gbit)$/.exec(rate);
   if (!m) return 0;
   return Number(m[1]) * { bit: 1, kbit: 1e3, Mbit: 1e6, Gbit: 1e9 }[m[2] as 'bit']!;

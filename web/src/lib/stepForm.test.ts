@@ -37,9 +37,14 @@ describe('the step form', () => {
     // the editor makes every type of this build: nothing is kept as it was
     for (const s of steps) expect(stepToForm(s).kept).toBeUndefined();
     for (const t of ['dns', 'tls', 'dhcp'] as const) expect(editableTypes.has(t)).toBe(true);
-    // the settings and the rules of an interception case are not edited, and come back as they were
+    // the settings and the rules of an interception case are edited (M23c), and come back as they were
     const intercept: Step = { id: 'l', at: '12s', tls: { case: 'intercept', ports: [443], intercept: { keylog: false, http_rules: [{ action: 'status', status: 503, match: { path_prefix: '/v1' } }] } } };
     expect(formToStep(stepToForm(intercept))).toEqual(intercept);
+    // and a rule of it is checked in the step like in the dialog, with the pointer of the gateway under the rule's field
+    const bad = stepToForm(intercept);
+    bad.tls.intercept.rules[0]!.status = '700';
+    expect(stepFormErrors(bad, { others: [], earlier: [] })['rule.0.status']).toMatch(/status code from 100 to 599/);
+    expect(stepFieldOf('tls/intercept/http_rules/0/status')).toBe('rule.0.status');
     // a case written with its protocol keeps it
     const tcp: Step = { id: 'm', at: '13s', tls: { case: 'expired', protocol: 'tcp', ports: [8883], sni: ['broker.example.com'], cut_existing: true } };
     expect(formToStep(stepToForm(tcp))).toEqual(tcp);

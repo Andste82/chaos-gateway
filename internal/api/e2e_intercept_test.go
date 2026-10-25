@@ -671,3 +671,65 @@ func TestAnInterceptCaseReachesAServerInAnotherTestNetworkAndBehindAWireGuardCli
 	}
 	b.remove(t, oid)
 }
+
+// M23c: chaosctl against the API on the real kernel with the real proxy. `intercept set` makes a case with rules from its flags and the device A,
+// which trusts the test CA, is served what the rules say; `intercept flows` lists the exchanges with the device by its name and the rules that
+// acted on them (the table and the JSON of the API); `tls ca` is the certificate that A trusts, and after `tls ca regenerate --yes` a device with
+// the old certificate is refused by the proxy and one that installs the printed certificate is served again.
+func TestChaosctlMakesAnInterceptionCaseAndReadsItsExchangesAndTheCAOnTheRealKernel(t *testing.T) {
+	b := newInterceptBed(t)
+	b.g.token = b.admin
+	r := b.g.ctl("intercept", "set", "--device", clientA, "--port", strconv.Itoa(httpsPort),
+		"--rule", "path=/fail;status=503",
+		"--rule", "path=/mod;response-header=X-Chaos: yes;replace=real server=>chaos")
+	if r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	b.untilIntercepted(t, "/plain")
+	if out, err := b.curl("-o", "/dev/null", "-w", "%{http_code}", b.url("/fail/x")); err != nil || out != "503" {
+		t.Errorf("the status rule of the flags: %v %q", err, out)
+	}
+	if out, err := b.curl("-i", b.url("/mod/x")); err != nil || !strings.Contains(out, "hello from the chaos /mod/x") || !strings.Contains(strings.ToLower(out), "x-chaos: yes") {
+		t.Errorf("the modify rule of the flags: %v %q", err, out)
+	}
+	waitFor(t, 20*time.Second, "the exchanges are in the log", func() bool {
+		r := b.g.ctl("intercept", "flows", "--device", clientA, "--faulted", "--json")
+		var page struct {
+			Items []map[string]any `json:"items"`
+		}
+		return r.code == 0 && json.Unmarshal([]byte(r.out), &page) == nil && len(page.Items) == 2
+	})
+	table := b.g.ctl("intercept", "flows", "--device", clientA, "--faulted")
+	if table.code != 0 || !strings.Contains(table.out, clientA) || !strings.Contains(table.out, "GET "+tlsBroker+"/fail/x") || !strings.Contains(table.out, "503") ||
+		!strings.Contains(table.out, "status") || !strings.Contains(table.out, "modify") {
+		t.Errorf("the table: %+v", table)
+	}
+	if got := b.g.ctl("intercept", "flows", "--host", "no-such-host.example.org"); got.code != 0 || strings.Count(strings.TrimSpace(got.out), "\n") != 0 {
+		t.Errorf("a host filter that matches nothing lists nothing: %+v", got)
+	}
+
+	// the test CA: the certificate the device trusts, and its replacement
+	old := b.g.ctl("tls", "ca")
+	if old.code != 0 || !strings.Contains(old.out, "BEGIN CERTIFICATE") {
+		t.Fatalf("%+v", old)
+	}
+	if trust, _ := os.ReadFile(b.trust); !strings.Contains(string(trust), strings.TrimSpace(old.out)) {
+		t.Error("the downloaded certificate is not the one the device trusts")
+	}
+	regen := b.g.ctl("tls", "ca", "regenerate", "--yes")
+	if regen.code != 0 || regen.out == old.out || !strings.Contains(regen.out, "BEGIN CERTIFICATE") {
+		t.Fatalf("%+v", regen)
+	}
+	waitFor(t, 60*time.Second, "the proxy shows the new certificate: a device with the old one refuses it", func() bool {
+		_, err := b.curl("-o", "/dev/null", b.url("/plain"))
+		return err != nil
+	})
+	fresh := filepath.Join(t.TempDir(), "trust-new.pem")
+	pub, _ := os.ReadFile(b.publicOnly)
+	if err := os.WriteFile(fresh, append(append([]byte(nil), pub...), []byte(regen.out)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := b.curl("--cacert", fresh, "-o", "/dev/null", "-w", "%{http_code}", b.url("/plain")); err != nil || out != "200" {
+		t.Errorf("a device that installed the new certificate is served again: %v %q", err, out)
+	}
+}

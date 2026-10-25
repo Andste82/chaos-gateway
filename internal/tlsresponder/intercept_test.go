@@ -253,7 +253,7 @@ func TestAConnectionThatIsNoTLSIsHandedOverWithItsFirstBytesInOnePiece(t *testin
 func TestWithoutAProxyThatAnswersTheConnectionIsResetAndReported(t *testing.T) {
 	dead := freeAddr(t)
 	refusing := newFakeProxy(t)
-	refusing.status = 502
+	refusing.status = 403
 	for name, proxy := range map[string]string{"nothing listens": dead, "the proxy refuses": refusing.addr(), "no proxy configured": ""} {
 		t.Run(name, func(t *testing.T) {
 			r := newRig(t, interceptDecision(true), func(o *Options) { o.Proxy = proxy })
@@ -584,4 +584,28 @@ func TestNothingOfAHandedOverConnectionIsKeptAfterItEnds(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Error("a connection that ended is still held")
+}
+
+// A proxy that answers that it cannot reach the server (mitmproxy answers a CONNECT with 502 when its connection to the destination fails) is a proxy
+// that works: the device is reset, as a connection to a server that is down is, the outcome is `server_unreachable` and it is no failure of the proxy.
+func TestAServerTheProxyCannotReachIsReportedAsSuchAndIsNoFailureOfTheProxy(t *testing.T) {
+	p := newFakeProxy(t)
+	r := newInterceptResponder(t, p, true, netip.MustParseAddrPort(freeAddr(t))) // nothing listens there
+	c, err := net.Dial("tcp", r.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = io.WriteString(c, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+	if _, err := io.ReadAll(c); err == nil || !strings.Contains(err.Error(), "reset") {
+		t.Errorf("the connection was not reset: %v", err)
+	}
+	rep := r.sink.wait(t, 1)[0]
+	if rep.Outcome != model.TlsHandshakeReportOutcomeServerUnreachable || rep.Case == nil || *rep.Case != "intercept" {
+		t.Errorf("%+v", rep)
+	}
+	if r.srv.ProxyFailures() != 0 || r.srv.Intercepted() != 0 {
+		t.Errorf("failed %d, intercepted %d", r.srv.ProxyFailures(), r.srv.Intercepted())
+	}
 }

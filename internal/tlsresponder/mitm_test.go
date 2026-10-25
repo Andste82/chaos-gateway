@@ -936,3 +936,64 @@ func TestANewTestCAIsUsedByTheProxyAfterItsFilesChange(t *testing.T) {
 		t.Error("a device that trusts the old CA took the certificate of the new one")
 	}
 }
+
+// With the real proxy: a server that is down is a reset for the device and `server_unreachable` for the gateway, and the proxy is no less
+// healthy for it: the next connection to a server that is up is served.
+func TestAServerThatIsDownIsAResetForTheDeviceAndReportedAsUnreachable(t *testing.T) {
+	ir := newInterceptRig(t, riglOpt{})
+	time.Sleep(300 * time.Millisecond)
+	up := ir.rig.dst
+	ir.rig.dst = netip.MustParseAddrPort(freeAddr(t))
+	dev := ir.device(ir.roots, nil)
+	if _, _, err := ir.get(dev, "/down"); err == nil {
+		t.Fatal("a request to a server that is down was answered")
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	var got bool
+	for time.Now().Before(deadline) && !got {
+		for _, r := range ir.rig.sink.wait(t, 1) {
+			got = got || r.Outcome == model.TlsHandshakeReportOutcomeServerUnreachable
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !got {
+		t.Errorf("no report of an unreachable server: %+v", ir.rig.sink.reports)
+	}
+	if ir.rig.srv.ProxyFailures() != 0 {
+		t.Errorf("the proxy is counted as failed: %d", ir.rig.srv.ProxyFailures())
+	}
+	ir.rig.dst = up
+	if _, body, err := ir.get(ir.device(ir.roots, nil), "/up"); err != nil || body != "hello from upstream /up" {
+		t.Errorf("%v %q", err, body)
+	}
+}
+
+// A device that connects to an address and sends no server name is served with a certificate for the address (the proxy takes the names of the
+// real server's certificate, which here has the address), and the exchange is reported with the address as its host.
+func TestAConnectionWithoutAServerNameIsInterceptedForTheAddress(t *testing.T) {
+	ir := newInterceptRig(t, riglOpt{})
+	time.Sleep(300 * time.Millisecond)
+	host := ir.rig.dst.Addr().String()
+	tr := &http.Transport{
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, ir.rig.addr)
+		},
+		TLSClientConfig: &tls.Config{RootCAs: ir.roots},
+	}
+	t.Cleanup(tr.CloseIdleConnections)
+	resp, err := (&http.Client{Transport: tr, Timeout: 20 * time.Second}).Get("https://" + host + ":" + fmt.Sprint(ir.rig.dst.Port()) + "/by-address")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 || resp.TLS == nil || resp.TLS.PeerCertificates[0].Issuer.CommonName != TestCAName {
+		t.Errorf("%d %+v", resp.StatusCode, resp.TLS)
+	}
+	flows := ir.gw.waitFlows(t, 1)
+	if flows[0]["host"] != host || flows[0]["path"] != "/by-address" {
+		t.Errorf("%v", flows[0])
+	}
+	if hs := ir.gw.waitHandshakes(t, 1, "accepted"); hs[0].Sni != nil {
+		t.Errorf("a connection without a server name has none in its report: %+v", hs[0])
+	}
+}

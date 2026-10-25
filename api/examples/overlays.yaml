@@ -30,6 +30,17 @@
 - # TLS case
   target: {device: esp32-42}
   tls: {case: expired, ports: [8883], cut_existing: true}
+- # TLS interception (M22): the HTTP(S) traffic of a device that trusts the test CA, a server that answers 503, a slow one, a changed header
+  target: {device: esp32-42}
+  tls:
+    case: intercept
+    ports: [443]
+    intercept:
+      http_rules:
+        - {match: {host: api.example.com, path_prefix: /v1/telemetry}, action: status, status: 503}
+        - {match: {host: ota.example.com}, action: delay, delay: 2s}
+        - {match: {host: ota.example.com}, action: modify, modify: {response_headers: {Cache-Control: no-store}}}
+  ttl: 10m
 - # DHCP action
   target: {device: esp32-42}
   dhcp: {action: force_new_ip}

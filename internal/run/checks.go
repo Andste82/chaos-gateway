@@ -777,7 +777,7 @@ func (c *liveCheck) tlsFailure(window string) string {
 		return fmt.Sprintf("no device of the target %s with the TLS responder for %s in %s: the responder saw no handshake of it (is a TLS case selecting this connection?)", want, c.what, window)
 	}
 	var seen []string
-	for _, o := range []string{"accepted", "rejected", "client_closed", "timeout", "reset_sent", "close_sent", "stalled", "intercepted", "proxy_unavailable"} {
+	for _, o := range []string{"accepted", "rejected", "client_closed", "timeout", "reset_sent", "close_sent", "stalled", "intercepted", "proxy_unavailable", "server_unreachable"} {
 		if n := c.tlsSeen[o]; n > 0 {
 			seen = append(seen, fmt.Sprintf("%d %s", n, strings.ReplaceAll(o, "_", " ")))
 		}

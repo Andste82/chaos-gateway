@@ -2345,15 +2345,16 @@ func (e TlsCaseCase) Valid() bool {
 
 // Defines values for TlsHandshakeReportOutcome.
 const (
-	TlsHandshakeReportOutcomeAccepted         TlsHandshakeReportOutcome = "accepted"
-	TlsHandshakeReportOutcomeClientClosed     TlsHandshakeReportOutcome = "client_closed"
-	TlsHandshakeReportOutcomeCloseSent        TlsHandshakeReportOutcome = "close_sent"
-	TlsHandshakeReportOutcomeIntercepted      TlsHandshakeReportOutcome = "intercepted"
-	TlsHandshakeReportOutcomeProxyUnavailable TlsHandshakeReportOutcome = "proxy_unavailable"
-	TlsHandshakeReportOutcomeRejected         TlsHandshakeReportOutcome = "rejected"
-	TlsHandshakeReportOutcomeResetSent        TlsHandshakeReportOutcome = "reset_sent"
-	TlsHandshakeReportOutcomeStalled          TlsHandshakeReportOutcome = "stalled"
-	TlsHandshakeReportOutcomeTimeout          TlsHandshakeReportOutcome = "timeout"
+	TlsHandshakeReportOutcomeAccepted          TlsHandshakeReportOutcome = "accepted"
+	TlsHandshakeReportOutcomeClientClosed      TlsHandshakeReportOutcome = "client_closed"
+	TlsHandshakeReportOutcomeCloseSent         TlsHandshakeReportOutcome = "close_sent"
+	TlsHandshakeReportOutcomeIntercepted       TlsHandshakeReportOutcome = "intercepted"
+	TlsHandshakeReportOutcomeProxyUnavailable  TlsHandshakeReportOutcome = "proxy_unavailable"
+	TlsHandshakeReportOutcomeRejected          TlsHandshakeReportOutcome = "rejected"
+	TlsHandshakeReportOutcomeResetSent         TlsHandshakeReportOutcome = "reset_sent"
+	TlsHandshakeReportOutcomeServerUnreachable TlsHandshakeReportOutcome = "server_unreachable"
+	TlsHandshakeReportOutcomeStalled           TlsHandshakeReportOutcome = "stalled"
+	TlsHandshakeReportOutcomeTimeout           TlsHandshakeReportOutcome = "timeout"
 )
 
 // Valid indicates whether the value is a known member of the TlsHandshakeReportOutcome enum.
@@ -2372,6 +2373,8 @@ func (e TlsHandshakeReportOutcome) Valid() bool {
 	case TlsHandshakeReportOutcomeRejected:
 		return true
 	case TlsHandshakeReportOutcomeResetSent:
+		return true
+	case TlsHandshakeReportOutcomeServerUnreachable:
 		return true
 	case TlsHandshakeReportOutcomeStalled:
 		return true
@@ -6829,7 +6832,8 @@ type TlsHandshakeReport struct {
 	// responder answered the ClientHello with a reset (`handshake_reset`), a FIN (`handshake_close`) or nothing
 	// (`handshake_stall`); `intercepted` - the responder handed the connection to the interception proxy (case
 	// `intercept`; this is the report that counts the connection for its overlay), `proxy_unavailable` - it could not
-	// (the proxy is not running or refused the connection) and reset the connection. The proxy reports what the
+	// (the proxy is not running or refused the connection) and reset the connection, `server_unreachable` - the proxy
+	// answered that it cannot reach the server the device meant, and the responder reset the connection. The proxy reports what the
 	// device did with its certificate as `accepted`, `rejected`, `client_closed` or `timeout`, with the case `intercept`;
 	// those reports are not counted again.
 	Outcome    TlsHandshakeReportOutcome `json:"outcome"`
@@ -6846,7 +6850,8 @@ type TlsHandshakeReport struct {
 // responder answered the ClientHello with a reset (`handshake_reset`), a FIN (`handshake_close`) or nothing
 // (`handshake_stall`); `intercepted` - the responder handed the connection to the interception proxy (case
 // `intercept`; this is the report that counts the connection for its overlay), `proxy_unavailable` - it could not
-// (the proxy is not running or refused the connection) and reset the connection. The proxy reports what the
+// (the proxy is not running or refused the connection) and reset the connection, `server_unreachable` - the proxy
+// answered that it cannot reach the server the device meant, and the responder reset the connection. The proxy reports what the
 // device did with its certificate as `accepted`, `rejected`, `client_closed` or `timeout`, with the case `intercept`;
 // those reports are not counted again.
 type TlsHandshakeReportOutcome string

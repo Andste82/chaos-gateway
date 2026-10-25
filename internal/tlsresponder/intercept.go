@@ -67,6 +67,14 @@ func (s *Server) intercept(ctx context.Context, c net.Conn, hello []byte, herr e
 	id := newConnID()
 	up, br, err := s.connectProxy(ctx, id, info, dec)
 	if err != nil {
+		var unreachable *serverUnreachableError
+		if errors.As(err, &unreachable) {
+			// the proxy is there, the server is not: the device meets what a failed connection to the server looks like
+			s.opt.Log.Debug("the proxy cannot reach the server of an intercepted connection: it is reset", "client", info.Client, "dst", info.Dst, "error", err)
+			finish(model.TlsHandshakeReportOutcomeServerUnreachable, "")
+			reset(c)
+			return
+		}
 		s.proxyFailures.Add(1)
 		s.opt.Log.Warn("cannot hand a connection to the interception proxy: it is reset", "client", info.Client, "dst", info.Dst, "error", err)
 		finish(model.TlsHandshakeReportOutcomeProxyUnavailable, "")
@@ -161,6 +169,11 @@ func (s *Server) connectProxy(ctx context.Context, id string, info ConnInfo, dec
 			break
 		}
 	}
+	if len(parts) >= 2 && (parts[1] == "502" || parts[1] == "504") {
+		// what mitmproxy answers a CONNECT when its own connection to the destination fails
+		_ = up.Close()
+		return nil, nil, &serverUnreachableError{status: strings.TrimSpace(line)}
+	}
 	if len(parts) < 2 || parts[1] != "200" {
 		_ = up.Close()
 		return nil, nil, fmt.Errorf("the proxy refused the connection: %s", strings.TrimSpace(line))
@@ -182,6 +195,13 @@ func (s *Server) firstBytes(c net.Conn) []byte {
 
 // firstBytesWait is how long firstBytes waits for the rest of the first segment of the device.
 const firstBytesWait = 100 * time.Millisecond
+
+// serverUnreachableError is the answer of the proxy that it cannot reach the server.
+type serverUnreachableError struct{ status string }
+
+func (e *serverUnreachableError) Error() string {
+	return "the proxy cannot reach the server: " + e.status
+}
 
 // proxyAnswerTimeout is how long the proxy may take to answer the CONNECT request: it connects to the destination first.
 const proxyAnswerTimeout = 15 * time.Second

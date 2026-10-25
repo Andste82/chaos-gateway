@@ -169,3 +169,32 @@ func TestACaptureKeepsTheKeyLogItWasGivenWhileItRan(t *testing.T) {
 	}
 	m.Close(context.Background())
 }
+
+// The key log of a capture is bounded: it is not part of the quota, so what passes 16 MiB is dropped (the first batch that does not fit
+// ends it), and what the capture holds stays what it was.
+func TestTheKeyLogOfACaptureIsBounded(t *testing.T) {
+	dir := t.TempDir()
+	m, _, _ := newManager(t, dir)
+	ref := func(s string) *model.Ref { return &s }
+	c, err := m.Start(context.Background(), capturemgr.StartRequest{CaptureRequest: model.CaptureRequest{Scope: model.CaptureScope{Device: ref("with-mac")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := netip.MustParseAddr("10.10.0.5")
+	batch := make([]string, 1000)
+	for i := range batch {
+		batch[i] = strings.Repeat("s", 999)
+	}
+	for i := 0; i < 20; i++ {
+		m.AppendKeylog(client, batch)
+	}
+	m.AppendKeylog(client, []string{"CLIENT_RANDOM late late"})
+	fi, err := os.Stat(filepath.Join(dir, c.Id.String(), "keylog.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() != 16*1000*1000 {
+		t.Errorf("the key log is %d bytes: sixteen batches of a million fit in 16 MiB, the seventeenth and everything after it do not", fi.Size())
+	}
+	m.Close(context.Background())
+}

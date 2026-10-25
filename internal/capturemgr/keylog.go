@@ -21,6 +21,12 @@ import (
 
 const keylogName = "keylog.txt"
 
+// maxKeylogBytes is the most a capture keeps of the key log. The key log is not part of the quota (the quota counts the packet
+// files the executor reports), so a capture that runs for days beside a device that reconnects all the time could otherwise fill
+// the volume with secrets. 16 MiB are the secrets of about ten thousand connections; what comes after is dropped, and the
+// capture says so in the log of the gateway once.
+const maxKeylogBytes = 16 << 20
+
 // keylogState is the memo of the world of a snapshot, so a batch of key lines does not rebuild it for every capture.
 type keylogState struct {
 	mu    sync.Mutex
@@ -74,6 +80,9 @@ func (m *Manager) AppendKeylog(client netip.Addr, lines []string) {
 func (m *Manager) appendKeylog(c *capState, lines []string) {
 	c.keyMu.Lock()
 	defer c.keyMu.Unlock()
+	if c.keyFull {
+		return
+	}
 	f, err := os.OpenFile(filepath.Join(c.dir, keylogName), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o640)
 	if err != nil {
 		m.log.Warn("cannot open the key log of a capture", "capture", c.id, "error", err)
@@ -83,6 +92,12 @@ func (m *Manager) appendKeylog(c *capState, lines []string) {
 	for _, l := range lines {
 		buf = append(buf, l...)
 		buf = append(buf, '\n')
+	}
+	if fi, err := f.Stat(); err == nil && fi.Size()+int64(len(buf)) > maxKeylogBytes {
+		_ = f.Close()
+		c.keyFull = true
+		m.log.Warn("the key log of a capture is full: the secrets of later connections are dropped", "capture", c.id, "limit", maxKeylogBytes)
+		return
 	}
 	_, werr := f.Write(buf)
 	if cerr := f.Close(); werr == nil {

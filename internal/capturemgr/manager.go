@@ -152,6 +152,8 @@ type capState struct {
 	// Manager.mu), and keyMu serializes the writes to and the download of the key log
 	ending bool
 	keyMu  sync.Mutex
+	// keyFull says that the key log reached maxKeylogBytes and the warning was given (guarded by keyMu)
+	keyFull bool
 }
 
 type pendingStop struct {

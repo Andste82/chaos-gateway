@@ -5624,14 +5624,14 @@ checks, waits and captures that name a host use the same addresses.
 
 ### Decisions
 
-Taken by best practice where the plan leaves room (the one that needs the maintainer is `P5-M20-01` in `open-items.md`):
+Taken by best practice where the plan leaves room (the one that needed the maintainer is `P5-M20-01` in `open-items.md`, decided 2026-10-25: the limit of decision 2 is accepted):
 
 1. **One set per selector, keyed on the device and the address, not one set per rule or per device.** Rules and faults of several scopes that name the same host share the set, the key
    keeps the devices apart, and the compiler keeps the clients of each use (`DNSSet.Sources`) so the proxy reports what something looks up and nothing else.
 2. **Hostname faults stand in front of the lookup levels, strongest first.** The plan says "ordered rules against the per-device DNS-derived sets, placed at their level"; the levels of the maps are shapes
    of keys, not ranks, so the exact place of a rule would have to be between the elements of the maps. M20 puts them first, orders them among themselves by §2.4 (`RankOrder`), and removes from a source the hostname
    faults a stronger fault of the whole source covers (`rankHostnames`). A stronger fault with a destination or ports loses to the hostname rule on the traffic both select; the three ways to be exact
-   are in the open item.
+   are in the open item. The limit is accepted by decision of the maintainer (2026-10-25, `P5-M20-01`, closed): the lookup tables are split by rank only when a real scenario shows a wrong result.
 3. **Overlays only for DNS faults.** §2.6: "DNS faults are overlays; the proxy keeps no state". A configured fault does not have the DNS family (`faultFamily` only knows impairment and MTU for the configuration).
 4. **Lifetime max(TTL, 10 minutes), refreshed from the connection table at half of it.** The refresh needs no timer of its own: it runs after every read of the connections, which the watch triggers on changes
    and the poll repeats. An element a flow keeps alive is written about every five minutes.
@@ -5742,7 +5742,7 @@ the TLS responder, which shows a deliberately broken certificate (or breaks the 
 
 ### Decisions
 
-Taken by best practice where the plan leaves room (what needs the maintainer is `P5-M21-01` and `P5-M21-02` in `open-items.md`):
+Taken by best practice where the plan leaves room (what needed the maintainer is `P5-M21-01` and `P5-M21-02` in `open-items.md`, decided 2026-10-25: the forms are M23b, and a passed-through connection will reach the test networks and the tunnels too, "to do" in M21):
 
 1. **The responder asks the API for the decision of each connection.** The plan's configuration shape (`cases` with `sources` and `expected`, "the service looks up a connection by client address and original destination")
    cannot express what a case selects: networks, the uplink and host names are known to the compiler and the engine only, and the server name only to the connection. One local HTTPS call per connection (a kept-alive connection to the
@@ -5972,7 +5972,7 @@ and risk 11), so every test of an action that a client notices at its renewal us
 
 ### Decisions
 
-Taken by best practice where the plan leaves room (the one that needs the maintainer is `P5-M23-01` in `open-items.md`):
+Taken by best practice where the plan leaves room (the one that needed the maintainer is `P5-M23-01` in `open-items.md`, decided 2026-10-25: the form is M23b):
 
 1. **The actions compete, they do not combine.** The overlay key of a DHCP action is its `action` (§2.15), so a short lease and a silence of one device are two overlays, and the domain's precedence (a device beats its network, the
    newer wins at one scope; `TestDHCPActionsOnADeviceBeatThoseOnTheNetwork` is the test of the resolution from Phase 2) says one of them is in force for a device. Layering them as Kea does by itself would make a state that the resolution (`explain`,

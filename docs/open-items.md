@@ -40,6 +40,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   [the remaining points](#phase-4-audit-result-of-the-round-and-remaining-points). The maintainer decided P4-AUDIT-14 to -16 on
   2026-10-19 (option (a) each), see [Phase 4 audit items for the maintainer](#phase-4-audit-items-for-the-maintainer). What the implementation could not settle and
   that no later milestone completes is under [Phase 4 open items](#phase-4-open-items) at the end of the file. P4-M19-01 (the Captures screen has no milestone) was decided on 2026-10-19: option (a), milestone M23a in Phase 5; every Phase 4 open item is closed.
+- **Phase 5** (M20–M23a, branch `phase-5`): not audited yet. The nine open items P5-M20-01 to P5-M23-01 were decided by the maintainer on 2026-10-25, see [Phase 5 open items](#phase-5-open-items) at the end of the file: six closed (the forms and the interception UI became the milestones M23b and M23c), two decided and not implemented (P5-M21-02, P5-M22-03) and one waiting for H1 (P5-M22-02).
 
 ## Phase 1 audit result
 
@@ -2435,11 +2436,15 @@ found that no later milestone of the plan completes and that need a decision of 
 
 ## Phase 5 open items
 
-Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` (M20 to M23a so far). Items below are what the implementation found that no later milestone of the plan completes and that need a decision of the maintainer.
+Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` (M20 to M23a so far; CI run 40196370688 on `6a0ec5e` green). Items below are what the implementation found that no later milestone of the plan completes and that needed a decision of the maintainer. The maintainer decided all nine on 2026-10-25:
+
+- **Closed:** P5-M20-01 (option (a), the approximation is accepted), P5-M20-02, P5-M21-01 and P5-M23-01 (option (b) each, the forms are the new milestone M23b), P5-M22-01 (option (b), the interception UI is the new milestone M23c) and P5-M22-04 (option (a), left for V1). The forms and the interception UI are not built yet; they are the work of M23b and M23c.
+- **Decided, not implemented:** P5-M21-02 (option (b), pass-through also towards the test networks and the tunnels, "to do" in M21 and M22) and P5-M22-03 (option (b), the per-case field `upstream`, "to do" in M22). M21 and M22 stay partial until the work is implemented.
+- **Waiting for H1:** P5-M22-02 (the proxy is part of H1; the release notes say that it is not validated on ARM64 until the measurement exists).
 
 ### P5-M20-01 A hostname selector of a fault is tried in front of the lookup levels, not at its rank among them
 
-- Status: open
+- Status: closed (2026-10-25): decided by the maintainer, option (a): the approximation is accepted for now and the limit stays documented (`docs/development.md`, "DNS faults and hostname selectors (M20)", decision 2); the lookup tables are split by rank (option (b)) only when a real scenario shows a wrong result
 - Severity: minor
 - Reason: needs-decision. Plan §3.3 says "hostname selectors are ordered rules against the per-device DNS-derived sets, placed at their level"; §2.4 resolves faults by a total precedence (overlay before configuration, then ten levels of specificity, then the newer). The addresses of a hostname selector are known at run time only, so the compiler cannot put it into the interval maps whose elements are the resolved winners (the table of `domain.Table`). M20 puts the rules of the hostname faults in front of the four lookup levels, strongest first among themselves (overlay before configuration, level, newer), and takes out of a source's rules every hostname fault that a fault of a higher rank without destination and ports (the whole device, group, network or global scope) covers for all of its traffic. What it does not do: a fault of a higher rank that names a destination or ports (an overlay "device A → port 8883" against a configured "device A + host X", or a device fault of one destination against a group fault of a host name) loses to the hostname rule for the traffic both select, where §2.4 would give it to the stronger one. The exact resolution needs one of the alternatives below, each with a cost the plan did not weigh.
 - Evidence: `docs/development.md` "DNS faults and hostname selectors (M20)", decision 2; `domain.rankHostnames` (`internal/domain/table.go`), `compiler.hostFaultRules` (`internal/compiler/hostnames.go`); `TestHostnameFaultsAreTriedStrongestFirstAndAFaultOfTheWholeSourceOfAHigherRankTakesThemOut`.
@@ -2447,12 +2452,12 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` 
 - Options: (a) accept it and keep the documentation of the limit (what M20 does); (b) split the lookup tables by rank: the static candidates between two hostname candidates form a segment with its own four maps, and the chain alternates segment, hostname rules, segment (exact, costs four maps per distinct rank of a hostname fault and a table build per segment); (c) let the engine write, at every resolution, the winner for (device, address) into a verdict map of its own at level 2 (exact for traffic without a port selector, needs a port-aware second map for the others and a rebuild when a fault changes).
 - Recommendation: (a) until a scenario shows a wrong result; (b) when it does.
 - Acceptance: the plan states which of the three holds, and the tests of §2.4 (E1 to E12) have a case with a hostname selector if (b) or (c) is chosen.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-25: option (a))
 - Effort: L
 
 ### P5-M20-02 DNS faults cannot be made in the web UI or with `chaosctl`
 
-- Status: open
+- Status: closed (2026-10-25): decided by the maintainer, option (b): one form for the DNS, TLS and DHCP kinds, designed once, in the new milestone M23b (Forms for the application-layer kinds, M) in Phase 5 of `docs/plan.md`; not built yet, the work belongs to M23b
 - Severity: minor
 - Reason: needs-decision. M20 delivers the DNS family in the API (an overlay of the kind `dns`, the `dns` part of profiles, the step type `dns`) and the UI labels and lists them (the chips of a DNS fault, the "DNS broken" profile card, a `dns` step in a scenario). The plan names no UI work for it: §2.17 lists the kinds of the "Add fault" dialog as impairment, MTU/PMTUD and tunnel, the step dialog of M19 edits the step types of M15 to M17, and `chaosctl` (M18) has flags for impairment faults and profiles only. No later milestone of the plan adds a DNS form (M21 to M23a are TLS, DHCP and the Captures screen). A DNS fault is made today with the API or the generated clients, in the YAML of a scenario (the step list keeps a `dns` step it does not edit), or by activating a profile with a `dns` part.
 - Evidence: `web/src/lib/stepForm.ts` (`editableTypes` has no `dns`), `web/src/lib/faultForm.ts` (the fault kinds), `internal/ctl/overlays.go` (the flags of `chaosctl fault`); `docs/development.md` "DNS faults and hostname selectors (M20)".
@@ -2460,12 +2465,12 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` 
 - Options: (a) leave it: the API, the clients and scenario files are the way to make DNS faults, the UI shows them; (b) a DNS kind in the "Add fault" dialog and the step dialog, with Playwright tests, and `chaosctl dns` flags (one form for DNS, TLS and DHCP kinds would share the work of M21 and M23, which have the same gap).
 - Recommendation: (b) together with the TLS form of M21, so the dialog gets its application-layer kinds once.
 - Acceptance: the plan has the milestone (or the decision to leave it out) and the dialog's design in §2.17.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-25: option (b), M23b)
 - Effort: M
 
 ### P5-M21-01 TLS cases cannot be made in the web UI or with `chaosctl`
 
-- Status: open
+- Status: closed (2026-10-25): decided by the maintainer, option (b): one form for the DNS, TLS and DHCP kinds, designed once, in the new milestone M23b (Forms for the application-layer kinds, M) in Phase 5 of `docs/plan.md`; not built yet, the work belongs to M23b; the download button for the test CA is part of it
 - Severity: minor
 - Reason: needs-decision. M21 delivers the TLS family in the API (an overlay of the kind `tls`, the `tls` part of profiles, the step type `tls`, the check types `tls_rejected` and `tls_accepted`) and the UI labels and lists them (the chips of a TLS case, the "TLS broken" profile card that activates, a TLS check in the check editor, a `tls` step in a scenario). The plan names no UI work for it: §2.17 lists the kinds of the "Add fault" dialog as impairment, MTU/PMTUD and tunnel, the step dialog of M19 edits the step types of M15 to M17, and `chaosctl` (M18) has flags for impairment faults and profiles only (`chaosctl overlay create` takes a request document of any kind, a TLS case included). No later milestone of the plan adds a TLS form (M22 is interception, M23 DHCP, M23a the Captures screen). A TLS case is made today with the API or the generated clients, with `chaosctl overlay create` and a document, in the YAML of a scenario (the step list keeps a `tls` step it does not edit), or by activating a profile with a `tls` part. It is the same gap as P5-M20-02 for the DNS family.
 - Evidence: `web/src/lib/stepForm.ts` (`editableTypes` has no `tls`), `web/src/lib/faultForm.ts` (the fault kinds), `internal/ctl/overlays.go` (the flags of `chaosctl fault`); `docs/development.md` "TLS responder: certificate cases (M21)".
@@ -2473,12 +2478,12 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` 
 - Options: (a) leave it: the API, the clients and scenario files are the way to make TLS cases, the UI shows them; (b) a TLS kind in the "Add fault" dialog and the step dialog, a "Download the test CA" button, with Playwright tests, and `chaosctl tls` flags (one form for the DNS, TLS and DHCP kinds, as P5-M20-02 recommends, so the dialog gets its application-layer kinds once).
 - Recommendation: (b), together with the DNS form of P5-M20-02.
 - Acceptance: the plan has the milestone (or the decision to leave it out) and the dialog's design in §2.17.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-25: option (b), M23b)
 - Effort: M
 
 ### P5-M21-02 A connection that no TLS case decides reaches only servers behind the uplink
 
-- Status: open
+- Status: decided (2026-10-25): option (b); not implemented. The service namespace's path towards the test networks and the WireGuard tunnels is accepted as well, the server sees the namespace's address (not the device's); the same holds for the interception proxy's upstream connection (M22). The work is "to do" in the Scope and the Tests of M21 and in the note of M22 in `docs/plan.md`, with a level 1 test (a server in another test network and one behind a WireGuard client are reachable through a TLS-handled path); M21 stays partial until it is implemented
 - Severity: minor
 - Reason: needs-decision. Plan §2.8: a connection that the kernel selected and no case decides (a server name no case names, a shared CDN address) is passed on to its destination unchanged, and only if the gateway would have forwarded it. The responder terminates the connection, so the pass-through is a second connection that starts in the service namespace and leaves it through `svc0`; the forward chain accepts that path towards the uplink only (`serviceForward`, `internal/compiler/service.go`) and the namespace is masqueraded there, as for the DNS proxy's upstream queries. A server in another test network or behind a WireGuard link is not reached: the device sees a reset, where the gateway would have forwarded the connection. It matters when a case selects traffic that is wider than its server names (no destination, so every server on port 443 or 8883) and a device talks to a server of that kind inside the test setup. Reaching those servers means accepting the namespace's connections towards the test networks and tunnels in the forward chain (after the access rules and the matrix, which judge the original connection as for the uplink, `AccessDecision`) and a decision on the source address the server sees (the namespace's, which the server answers through the gateway because the gateway routes `169.254.100.0/30`, or the device's, which needs a TPROXY-like path); the plan weighed neither. M21 resets what it cannot pass on instead of choosing one. **M22:** the interception proxy's own connection to the server takes the same path (`svc0`, the uplink only), so a case `intercept` that selects traffic to a server inside the test setup resets it too; the decision of the item covers both.
 - Evidence: `docs/development.md` "TLS responder: certificate cases (M21)", decision 4; `compiler.Target.serviceForward`; `engine.TLSDecision.Passthrough`; `TestAConnectionNoCaseDecidesAndTheGatewayWouldNotForwardIsResetNotPassedThrough`.
@@ -2486,12 +2491,12 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` 
 - Options: (a) leave it: pass-through reaches the uplink only, a case with a destination or with the server's network in it does not touch other servers; (b) accept the namespace towards the test networks and the tunnels, the server sees the namespace's address; (c) (b) with the device's address as the source, which needs a transparent path from the namespace and a level 1 test of it.
 - Recommendation: (a) for V1, (b) when a user needs a case with a wide selection next to servers inside the test setup.
 - Acceptance: the plan states which destinations a pass-through reaches, and a level 1 test pins it.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-25: option (b))
 - Effort: M
 
 ### P5-M22-01 The interception cannot be made, watched or administered in the web UI or with `chaosctl`
 
-- Status: open
+- Status: closed (2026-10-25): decided by the maintainer, option (b), built in full (the form of the HTTP rules, the table of the exchanges from `GET /intercept/flows`, the CA buttons, the `chaosctl` commands): the new milestone M23c (Interception UI, M) in Phase 5 of `docs/plan.md`, beside M23b so that M23b stays at size M; not built yet, the work belongs to M23c
 - Severity: minor
 - Reason: needs-decision. M22 delivers the interception in the API (the case `intercept` of the overlay kind `tls`, of a profile part and of the step `tls`, `GET /intercept/flows`, `POST /tls/ca/regenerate`, the key log of a capture) and the UI shows what exists (the chips of an interception case with the number of its rules). The plan names no UI work for it: M22's scope and tests are about the proxy, §2.17 lists no interception screen, and no later milestone adds one (M23 is DHCP, M23a the Captures screen, whose download of the key log is for scope `full` as the API says). The form of an interception case has more fields than any other (ports, server names, destination, and a list of HTTP rules with a match, an action and the fields of the action) and the log of the exchanges wants a table with filters (device, host, rule acted) and a live update from `http_fault_triggered`, so it is a design, not a variant of the DNS and TLS forms of P5-M20-02 and P5-M21-01. Today an interception is made with the API or the generated clients, with `chaosctl overlay create` and a document, in the YAML of a scenario or by activating a profile with a `tls` part of the case `intercept`; the exchanges are read with `GET /intercept/flows`; the test CA is downloaded with `GET /tls/ca` and replaced with `POST /tls/ca/regenerate`.
 - Evidence: `web/src/lib/stepForm.ts` (`editableTypes`), `web/src/lib/faultForm.ts`, `internal/ctl/overlays.go`; `docs/development.md` "TLS interception and HTTP faults (M22)".
@@ -2499,12 +2504,12 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` 
 - Options: (a) leave it: the API, the clients, scenario files and profiles are the way to use the interception, the UI shows its cases; (b) the form of the rules in the "Add fault" dialog and the step dialog, the table of the exchanges, the CA buttons and the `chaosctl` commands, with Playwright tests (with the TLS and DNS forms of P5-M21-01 and P5-M20-02, so the dialog gets its application-layer kinds once).
 - Recommendation: (a) for V1 (the interception is optional for V1 and a scenario file is the natural way to write a list of rules); (b) after the DNS and TLS forms, when users of the interception ask for it.
 - Acceptance: the plan has the milestone (or the decision to leave it out) and the design of the form and of the exchange table in §2.17.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-25: option (b), M23c)
 - Effort: L
 
 ### P5-M22-02 mitmproxy has not been measured on small hardware, and bodies are buffered
 
-- Status: open
+- Status: decided (2026-10-25): the proxy is added to H1 (Scope and Tests of H1 in `docs/plan.md`: the memory and the CPU of mitmproxy with buffered bodies on a Raspberry Pi 4 and 5, and a target for §3.10 once measured); until then the release notes say that the proxy is not validated on ARM64. The measurement itself waits for H1 (env-limit)
 - Severity: minor
 - Reason: hardware limit. Plan risk 19: "mitmproxy throughput and resource use on small hardware: TLS proxy limits throughput; only selected traffic is proxied; targets in §3.10". §3.10 names no target for the proxy and H1 (hardware validation) lists none; the tests of M22 ran on x86. The proxy streams responses and buffers a body only to change it (`response_body_replace`, decision 11 of "TLS interception and HTTP faults (M22)") and the body of a request, so a device that uploads a large body through an interception case costs its size in the memory of the proxy's container, and mitmproxy's CPU use per connection on a Raspberry Pi is not known. Nothing in the gateway limits either (the container has no memory limit in `deploy/compose.tlsproxy.yaml` either, because no limit was measured to be safe).
 - Evidence: `docs/development.md` "TLS interception and HTTP faults (M22)", decision 11; `sidecars/tls-proxy/chaosgw_tlsproxy/addon.py` (`responseheaders`, `response`), `deploy/compose.tlsproxy.yaml`.
@@ -2512,12 +2517,12 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` 
 - Options: (a) leave it: the interception is for test setups with a few devices, the release notes say that the proxy is unvalidated on ARM64 as the other targets are; (b) add the proxy to H1 and act on its results.
 - Recommendation: (b) with H1, (a) until then.
 - Acceptance: H1's tests include the proxy and §3.10 states its target.
-- Needs maintainer: yes (the hardware)
+- Needs maintainer: no (decided 2026-10-25: option (b)); the hardware is still needed for the measurement
 - Effort: S
 
 ### P5-M22-03 The proxy verifies the servers' certificates against mitmproxy's bundle and the policy is an environment variable
 
-- Status: open
+- Status: decided (2026-10-25): option (b); not implemented. A per-case field `upstream` of `InterceptSettings` (verify against the default bundle, verify against the own CA, do not verify), the two environment variables stay as the installation default. The work (the spec field in `api/openapi.yaml`, the proxy addon, tests, the form in the interception UI of M23c) is "to do" in the Scope and Tests of M22 in `docs/plan.md`; M22 stays partial until it is implemented
 - Severity: minor
 - Reason: needs-decision. The proxy opens its own connection to the server a device meant and has to decide whether to verify its certificate. M22 verifies it (a proxy that accepts any certificate would show the device a working connection to a server whose certificate is wrong, and a test of the device's own checks would be a test of the proxy), against the bundle of mitmproxy (`certifi`); a server with a private CA fails the connection, which the proxy logs and reports as an exchange with the error `TLS to the server failed`. Two environment variables of the container change it for all cases at once: `CHAOSGW_UPSTREAM_CA_FILE` (other CAs) and `CHAOSGW_UPSTREAM_INSECURE=1` (verify nothing). The plan names neither. A per-case setting (`intercept.upstream_verify`, or the CAs of a network) would be a field of the API with a UI and a validation, and the choice between "verify", "verify against these CAs" and "do not verify" is a product decision.
 - Evidence: `deploy/compose.tlsproxy.yaml`, `sidecars/tls-proxy/chaosgw_tlsproxy/launcher.py` (`--upstream-ca-file`, `--upstream-insecure`), `docs/install.md`.
@@ -2525,12 +2530,12 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` 
 - Options: (a) leave it: the two variables of the container, set once for the installation; (b) a field `upstream` of `InterceptSettings` (`verify` default, `insecure`, and the CAs by a name in the configuration's settings), applied by the addon per connection.
 - Recommendation: (a) until a user needs different policies for different devices at the same time.
 - Acceptance: the plan states where the policy is set, and a test pins that a server with a certificate that is not valid is refused by default.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-25: option (b))
 - Effort: S
 
 ### P5-M22-04 Runs and their reports know nothing of the HTTP exchanges of the proxy
 
-- Status: open
+- Status: closed (2026-10-25): decided by the maintainer, option (a): left for V1, a test reads `GET /intercept/flows` itself
 - Severity: minor
 - Reason: needs-decision. The exchanges the proxy reports are kept in memory (the newest 20000) and read with `GET /intercept/flows`; a run's check can look at the TLS handshakes of the proxy (`tls_accepted`, `tls_rejected`) and its counters count connections, but there is no check on what the device asked or got ("the device requested `/v1/telemetry` within 30 s after the restore", "no request got a 5xx") and the report of a run has no list of the exchanges. The plan's M22 scope and tests name the proxy, its rules and the key log only; the check types of M16 are connection, traffic, DNS and TLS checks. Adding a check type is a change of the scenario schema and of the checks' evidence, and the report would need the log to be kept per run (a size and retention decision).
 - Evidence: `internal/run/checks.go` (the check types), `api/openapi.yaml` (`Check`), `docs/development.md` "TLS interception and HTTP faults (M22)", decision 10.
@@ -2538,12 +2543,12 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` 
 - Options: (a) leave it: a test reads `GET /intercept/flows` itself (`chaosctl` or the client library) after the run, the run's captures with the key log are the evidence; (b) a check type `http_exchange` (host, path prefix, method, status, with the window of the others) and a log of the run's exchanges as an artifact (`kind: http_exchanges`, a JSONL file kept with the run).
 - Recommendation: (a) for V1; (b) after a user needs a pass or a fail of a run by what the device asked.
 - Acceptance: the plan has the check type (or the decision to leave it out) and the artifact.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-25: option (a))
 - Effort: M
 
 ### P5-M23-01 DHCP test actions cannot be made in the web UI or with `chaosctl`
 
-- Status: open
+- Status: closed (2026-10-25): decided by the maintainer, option (b): one form for the DNS, TLS and DHCP kinds, designed once, in the new milestone M23b (Forms for the application-layer kinds, M) in Phase 5 of `docs/plan.md`; not built yet, the work belongs to M23b (the actions on the device detail and the network card as §2.17 names them, a `dhcp` step in the step dialog, `chaosctl` flags)
 - Severity: minor
 - Reason: needs-decision. M23 delivers the DHCP family in the API (an overlay of the kind `dhcp` with the actions `short_lease`, `delete_lease`, `force_new_ip`, `set_options` and `silence`, the step type `dhcp`, the event `dhcp_leases_deleted`) and the UI labels and lists them (the chips of a DHCP action, a `dhcp` step in a scenario). §2.17 lists "DHCP lease and DHCP test actions" among the contents of the device detail, and §2.7 says the UI shows DHCP inside the network and device views, but the milestones that build those views (M12 to M14) deliver the lease and no actions, and M23's scope names the scenario step type, not a form. No later milestone of the plan adds one (M23a is the Captures screen). `chaosctl` (M18) has flags for impairment faults and profiles only (`chaosctl overlay create` takes a request document of any kind, a DHCP action included). A DHCP action is made today with the API or the generated clients, with `chaosctl overlay create` and a document, or in the YAML of a scenario (the step list keeps a `dhcp` step it does not edit). It is the same gap as P5-M20-02 and P5-M21-01 for the DNS and TLS families, with two differences: the actions belong on the device detail and the network card (a button "Force a new IP", "Delete lease", a lease time and options form) rather than in the "Add fault" dialog, and `force_new_ip` is a device's action whose address the gateway chooses and shows.
 - Evidence: `web/src/lib/stepForm.ts` (`editableTypes` has no `dhcp`), `web/src/views/DeviceDetailView.vue` (the header comment names the DHCP test actions as arriving later), `internal/ctl/overlays.go`; `docs/development.md` "DHCP test actions (M23)".
@@ -2551,5 +2556,5 @@ Phase 5 (M20 to M23a, application layer) is implemented on the branch `phase-5` 
 - Options: (a) leave it: the API, the clients and scenario files are the way to make DHCP actions, the UI shows them; (b) the actions on the device detail and the network card and a `dhcp` step in the step dialog, with Playwright tests, and `chaosctl dhcp` flags (the DNS and TLS forms of P5-M20-02 and P5-M21-01 are decided together, so the application-layer kinds are designed once).
 - Recommendation: (b) for the device detail (it is in §2.17 already and is where a tester looks for "force a new IP"), together with the DNS and TLS forms; M23 is optional for V1 (plan §5), and so is its UI.
 - Acceptance: the plan has the milestone (or the decision to leave it out) and the design of the actions in §2.17.
-- Needs maintainer: yes
+- Needs maintainer: no (decided 2026-10-25: option (b), M23b)
 - Effort: M

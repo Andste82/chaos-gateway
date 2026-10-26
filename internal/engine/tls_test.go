@@ -247,6 +247,90 @@ func TestAConnectionNoCaseDecidesIsPassedToAnotherTestNetworkOnlyWhereTheMatrixA
 	}
 }
 
+// A host behind the network's own downstream router belongs to the network (plan §2.2.2), and the gateway routes a device's
+// connection to it back out through the bridge it came in on, which the forward chain accepts before the rules and the
+// matrix. So a connection to it that no case decides is passed on, not reset, although no matrix entry names it
+// (P5-AUDIT-03).
+func TestAConnectionNoCaseDecidesIsPassedToAHostBehindTheNetworksOwnRouter(t *testing.T) {
+	h := tlsHarness(t)
+	h.mustApply(h.revision(func(c *model.Configuration) {
+		withDHCPAndDevice(c)
+		d := (*c.Devices)[devID]
+		d.TrustsTestCa = ptr(true)
+		(*c.Devices)[devID] = d
+		n := (*c.Networks)[iotID]
+		lan, _ := n.AsLanNetwork()
+		lan.Routes = &[]model.DownstreamRoute{{Destination: "10.30.0.0/24", Via: "10.10.0.2"}}
+		_ = n.FromLanNetwork(lan)
+		(*c.Networks)[iotID] = n
+	}))
+	h.mustPut(alice, "target: {network: IoT}\ntls: {case: expired, sni: [broker.example.com]}")
+	ask := func(dst string) engine.TLSDecision {
+		t.Helper()
+		dec, err := h.e.ResolveTLS(engine.TLSConnection{Client: netip.MustParseAddr("10.10.0.31"), Dst: netip.MustParseAddrPort(dst), SNI: "other.example.com"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return dec
+	}
+	if dec := ask("10.30.0.5:443"); dec.Case != nil || !dec.Passthrough {
+		t.Errorf("a host behind the network's own router: %+v", dec)
+	}
+	// another test network is still the matrix's, which keeps the networks apart by default
+	if dec := ask("10.20.0.13:443"); dec.Case != nil || dec.Passthrough {
+		t.Errorf("another test network: %+v", dec)
+	}
+	// explain says the same of the connection without the redirect
+	got, err := h.e.Explain(context.Background(), engine.ExplainQuery{Device: "esp32-42", Dst: "10.30.0.5", Protocol: "tcp", Port: 22})
+	if err != nil || got.Access.Verdict != "allow" {
+		t.Errorf("explain: %+v %v", got.Access, err)
+	}
+}
+
+// Two-port topology: the management network lies behind the uplink, and the kernel accepts what the service namespace sends
+// towards the uplink without asking where it goes (compiler.serviceForward), so nothing in the kernel keeps a passed-through or
+// intercepted connection out of the management network. The API's judgment does: a connection to a management source is
+// neither passed on nor handed to the proxy for the upstream, while the rest of the uplink is (P5-AUDIT-17).
+func TestTheResponderKeepsAConnectionOutOfTheManagementNetworkBehindTheUplinkInTheTwoPortTopology(t *testing.T) {
+	h := tlsHarness(t)
+	h.mustApply(h.revision(func(c *model.Configuration) {
+		withDHCPAndDevice(c)
+		d := (*c.Devices)[devID]
+		d.TrustsTestCa = ptr(true)
+		(*c.Devices)[devID] = d
+		wan := "wan0"
+		c.Management.Interface = model.InterfaceRef{Name: &wan}
+		c.Management.AllowedSources = &[]string{"203.0.113.5/32"}
+	}), engine.ApplyOptions{SkipConfirm: true})
+	if s := h.e.Snapshot(); s.Applied == nil || s.Management.Name != s.Applied.Uplink.Name {
+		t.Fatalf("not the two-port topology: the management interface %q", s.Management.Name)
+	}
+	ask := func(dst, sni string) engine.TLSDecision {
+		t.Helper()
+		dec, err := h.e.ResolveTLS(engine.TLSConnection{Client: netip.MustParseAddr("10.10.0.31"), Dst: netip.MustParseAddrPort(dst), SNI: sni})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return dec
+	}
+	h.mustPut(alice, "target: {network: IoT}\ntls: {case: expired, ports: [443], sni: [broker.example.com]}")
+	// an allow rule for everything of the network: the guard alone stands between the device and the management network
+	h.mustPut(alice, "target: {network: IoT}\nrule: {action: allow}")
+	if dec := ask("203.0.113.10:443", "other.example.com"); dec.Case != nil || !dec.Passthrough {
+		t.Errorf("the uplink: %+v", dec)
+	}
+	if dec := ask("203.0.113.5:443", "other.example.com"); dec.Case != nil || dec.Passthrough {
+		t.Errorf("a management source behind the uplink, no case: %+v", dec)
+	}
+	h.mustPut(alice, "target: {device: esp32-42}\ntls: {case: intercept, ports: [443]}")
+	if dec := ask("203.0.113.10:443", "api.example.com"); dec.Case == nil || dec.Case.TLS.Case != model.TlsCaseCaseIntercept || !dec.Passthrough {
+		t.Errorf("the uplink, intercept: %+v", dec)
+	}
+	if dec := ask("203.0.113.5:443", "api.example.com"); dec.Case == nil || dec.Case.TLS.Case != model.TlsCaseCaseIntercept || dec.Passthrough {
+		t.Errorf("a management source behind the uplink, intercept: %+v", dec)
+	}
+}
+
 func TestExplainSaysTheTLSResponderAnswersWhenACaseDecides(t *testing.T) {
 	h := tlsHarness(t)
 	h.mustPut(alice, "target: {device: esp32-42}\ntls: {case: expired, ports: [8883]}")

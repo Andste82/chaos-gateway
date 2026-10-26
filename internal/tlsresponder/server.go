@@ -7,12 +7,14 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/clock"
+	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
@@ -92,11 +94,68 @@ type Server struct {
 	connections, passedThrough, resolveErrors, resets, denied, intercepted, proxyFailures, aborted atomic.Int64
 }
 
-// held is a connection a case holds: the overlay that decided it, and the generation of the decision.
+// held is a connection a case holds: the overlay that decided it, and the generation of the decision. A connection that
+// is passed through has no overlay; it keeps where it came from and where it goes, which is what the kernel's
+// selection of its later packets looks at.
 type held struct {
 	conn    net.Conn
 	overlay string
 	gen     int64
+	info    ConnInfo
+}
+
+// gone says whether a configuration drops a held connection: one of a case whose overlay the configuration does not
+// hold, or one that is passed through and that no case of the configuration selects any more by its client, its
+// destination and its port. Both only for a configuration newer than the decision.
+func (h *held) gone(c *model.TlsServiceConfig, active map[string]bool) bool {
+	if h.gen >= c.Generation {
+		return false
+	}
+	if h.overlay != "" {
+		return !active[h.overlay]
+	}
+	return !selects(c, h.info)
+}
+
+// selects says whether a case of the configuration may still select a connection in the kernel: its client is among
+// the case's sources and its port among the case's ports. A passed-through connection's later packets reach the
+// responder only for as long as that holds (the second rule of compiler.tlsSelect); once no case selects it, they take
+// the uplink without the namespace's translation, and the connection would stall. The destination is checked where the
+// configuration names it by address (cidr); a network, the uplink or a host name is known to the compiler only and
+// counts as selecting, so a case that only narrows its destination leaves such a connection as it is.
+func selects(c *model.TlsServiceConfig, info ConnInfo) bool {
+	port := int(info.Dst.Port())
+	for _, cs := range c.Cases {
+		if !containsAddr(cs.Sources, info.Client) {
+			continue
+		}
+		ports, ranges := domain.TLSPorts(model.TlsCase{Ports: cs.Ports, PortRanges: cs.PortRanges})
+		in := slices.Contains(ports, port)
+		for _, r := range ranges {
+			in = in || (port >= r.From && port <= r.To)
+		}
+		if !in {
+			continue
+		}
+		if d := cs.Destination; d != nil && d.Cidr != nil && !containsAddr([]string{*d.Cidr}, info.Dst.Addr()) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// containsAddr says whether one of the addresses or prefixes holds a.
+func containsAddr(list []string, a netip.Addr) bool {
+	for _, v := range list {
+		if p, err := netip.ParsePrefix(v); err == nil && p.Contains(a) {
+			return true
+		}
+		if b, err := netip.ParseAddr(v); err == nil && b == a {
+			return true
+		}
+	}
+	return false
 }
 
 // New returns a Server. It passes every connection through to its destination, or resets it when it cannot say, until it
@@ -138,13 +197,19 @@ func (s *Server) ResolveErrors() int64 { return s.resolveErrors.Load() }
 // gateway would not have forwarded them.
 func (s *Server) Denied() int64 { return s.denied.Load() }
 
-// Resets is the number of connections reset because the case that held them was removed.
+// Resets is the number of connections reset because the case that held them was removed, or, for a connection that was
+// passed through, because no case selects it any more.
 func (s *Server) Resets() int64 { return s.resets.Load() }
+
+// RefusedReports is the number of handshake reports dropped because the API refused the batch they were in (a 4xx other
+// than 408 and 429): sent again they would be refused again and hold back every later report.
+func (s *Server) RefusedReports() int64 { return s.rep.Refused() }
 
 // SetConfig replaces the configuration: the overlays that hold a case. A connection that a case of an overlay holds
 // and that the configuration of a later generation does not hold any more is reset ("reset on removal", plan §2.8): the
 // device meets a failed connection and goes on to the real server, instead of staying with the responder for as long as
-// it would.
+// it would. A connection that was passed through is reset when no case of such a configuration selects it any more: the
+// kernel stops sending its later packets through the responder then, and it would stall (held.gone).
 func (s *Server) SetConfig(c *model.TlsServiceConfig) {
 	active := map[string]bool{}
 	for _, cs := range c.Cases {
@@ -154,7 +219,7 @@ func (s *Server) SetConfig(c *model.TlsServiceConfig) {
 	s.cfg, s.active = c, active
 	var gone []*held
 	for h := range s.held {
-		if h.overlay != "" && !active[h.overlay] && h.gen < c.Generation {
+		if h.gone(c, active) {
 			gone = append(gone, h)
 			delete(s.held, h)
 		}
@@ -226,14 +291,15 @@ func (s *Server) closeHeld() {
 	}
 }
 
-// hold registers a connection that a case holds, so that SetConfig can reset it. It reports false when the case went
-// between the decision and now (a configuration of a later generation, which SetConfig has taken already, does not hold
-// it): the connection is not held then and the caller resets it, as SetConfig would have.
-func (s *Server) hold(c net.Conn, overlay string, gen int64) (release func(), ok bool) {
-	h := &held{conn: c, overlay: strings.ToLower(overlay), gen: gen}
+// hold registers a connection that a case holds, or one that is passed through (overlay ""), so that SetConfig can reset
+// it. It reports false when the case went between the decision and now (a configuration of a later generation, which
+// SetConfig has taken already, does not hold it or no longer selects the passed-through connection): the connection is
+// not held then and the caller resets it, as SetConfig would have.
+func (s *Server) hold(c net.Conn, overlay string, gen int64, info ConnInfo) (release func(), ok bool) {
+	h := &held{conn: c, overlay: strings.ToLower(overlay), gen: gen, info: info}
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
-	if h.overlay != "" && s.cfg != nil && !s.active[h.overlay] && h.gen < s.cfg.Generation {
+	if s.cfg != nil && h.gone(s.cfg, s.active) {
 		return func() {}, false
 	}
 	s.held[h] = struct{}{}
@@ -298,11 +364,11 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 			s.opt.Log.Debug("a connection that no case decides and the gateway would not forward is reset", "client", client, "dst", dst)
 			reset(c)
 		default:
-			s.passThrough(ctx, c, raw, info)
+			s.passThrough(ctx, c, raw, info, dec.Generation)
 		}
 		return
 	}
-	release, ok := s.hold(c, dec.Overlay, dec.Generation)
+	release, ok := s.hold(c, dec.Overlay, dec.Generation, info)
 	defer release()
 	if !ok {
 		s.resets.Add(1)
@@ -322,7 +388,7 @@ func clientAddr(a net.Addr) netip.Addr {
 
 // passThrough relays a connection that no case decides to the destination the device meant, unchanged: the bytes of the
 // ClientHello that were read first, then whatever follows in both directions.
-func (s *Server) passThrough(ctx context.Context, c net.Conn, hello []byte, info ConnInfo) {
+func (s *Server) passThrough(ctx context.Context, c net.Conn, hello []byte, info ConnInfo, gen int64) {
 	s.passedThrough.Add(1)
 	dctx, cancel := context.WithTimeout(ctx, s.opt.DialTimeout)
 	up, err := s.opt.Dial(dctx, "tcp", info.Dst.String())
@@ -333,8 +399,13 @@ func (s *Server) passThrough(ctx context.Context, c net.Conn, hello []byte, info
 		return
 	}
 	defer func() { _ = up.Close() }()
-	release, _ := s.hold(c, "", 0)
+	release, ok := s.hold(c, "", gen, info)
 	defer release()
+	if !ok {
+		s.resets.Add(1)
+		reset(c)
+		return
+	}
 	if _, err := up.Write(hello); err != nil {
 		reset(c)
 		return

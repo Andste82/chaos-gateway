@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -113,8 +114,28 @@ func (c *Client) CloseIdleConnections() {
 	}
 }
 
-// Failure is the error of a response that was not the one expected: the status and the start of the body.
+// Failure is the error of a response that was not the one expected: the status and the start of the body (a
+// *StatusError).
 func Failure(res *http.Response) error {
 	b, _ := io.ReadAll(io.LimitReader(res.Body, 512))
-	return fmt.Errorf("the API answered %d: %s", res.StatusCode, strings.TrimSpace(string(b)))
+	return &StatusError{Status: res.StatusCode, Body: strings.TrimSpace(string(b))}
+}
+
+// StatusError is an answer of the API with a status that was not the one expected.
+type StatusError struct {
+	Status int
+	Body   string
+}
+
+func (e *StatusError) Error() string { return fmt.Sprintf("the API answered %d: %s", e.Status, e.Body) }
+
+// Refused says whether the API refused a request for its content, for good: a 4xx other than 408 (Request Timeout) and
+// 429 (Too Many Requests). Sending the same request again would be refused again; a transport error, a 5xx, 408 and 429
+// may pass on a later try.
+func Refused(err error) bool {
+	var se *StatusError
+	if !errors.As(err, &se) {
+		return false
+	}
+	return se.Status >= 400 && se.Status < 500 && se.Status != http.StatusRequestTimeout && se.Status != http.StatusTooManyRequests
 }

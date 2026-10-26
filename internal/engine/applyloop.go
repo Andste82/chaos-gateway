@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/clock"
@@ -120,11 +121,18 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			in := e.input(d.Config, d.Host, compiler.Generation{Revision: d.Revision, Seq: d.Generation}, d.Identity, d.Overlays, prev, retirer.IDs())
 			e.withPeerEndpoints(ctx, &in)
 			target := compiler.Compile(in)
+			// the deletions of leases of overlays that are gone are no longer remembered (deleteLeases)
+			e.forgetLeaseDeletions(d.Overlays)
 			start := e.cfg.Clock.Monotonic()
 			var err error
 			var plan *apply.Plan
 			var execWait time.Duration
 			incremental := false
+			// was is the target applied last: an incremental apply sends the DHCP server what changed since
+			var was *compiler.Target
+			if last != nil {
+				was = last.target
+			}
 			if d.IdentityOnly && last != nil && last.d.Config == d.Config && last.d.Revision == d.Revision && hostEqual(last.d.Host, d.Host) {
 				ops, ierr := identityOps(e.cfg.Namespace, last.target, target)
 				if ierr != nil && d.Changed <= last.d.Generation && onlyDevicesCameOrWent(last.d.Identity, d.Identity) {
@@ -210,6 +218,11 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 					cutStuck = nil
 				}
 			}
+			if err == nil && incremental && dhcpChanged(was, target) {
+				// the DHCP actions of a device follow where it is seen (compiler.compileDHCPActions), so an update of the
+				// identity alone can change the server's configuration or its deletions while the kernel's rules stay
+				dhcpErr = e.syncDHCP(ctx, target, nil)
+			}
 			if err == nil && !incremental {
 				cutStuck = nil // the full apply flushed the cut chains
 				dhcpErr = e.syncDHCP(ctx, target, after)
@@ -235,6 +248,30 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// dhcpChanged says whether the DHCP server's part of a target differs from the one applied before: its configuration or the
+// deletions of leases it lists.
+func dhcpChanged(was, now *compiler.Target) bool {
+	var a, b *compiler.KeaTarget
+	if was != nil {
+		a = was.Kea
+	}
+	if now != nil {
+		b = now.Kea
+	}
+	if a == nil || b == nil {
+		return a != b
+	}
+	if a.Text != b.Text || len(a.Deletions) != len(b.Deletions) {
+		return true
+	}
+	for i := range a.Deletions {
+		if a.Deletions[i].Key != b.Deletions[i].Key || a.Deletions[i].Subnet != b.Deletions[i].Subnet || !slices.Equal(a.Deletions[i].MACs, b.Deletions[i].MACs) {
+			return true
+		}
+	}
+	return false
 }
 
 // allocation is what a compile hands on to the next one, so that what stays keeps its number: the

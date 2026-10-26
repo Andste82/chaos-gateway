@@ -78,7 +78,7 @@ func (t *Target) compileDHCPActions(in Input, idx *domain.Index) {
 	acts, dels := w.DHCPActions(), w.DHCPDeletions()
 	known := func(id string) (dhcpDevice, bool) {
 		if d, ok := idx.Devices[id]; ok && d.Device != nil && d.Device.Identifiers != nil && d.Device.Identifiers.Macs != nil {
-			return dhcpDevice{network: d.Network, macs: lowerAll(*d.Device.Identifiers.Macs)}, true
+			return dhcpDevice{network: configuredNetwork(w, in.Identity, id, d.Network), macs: lowerAll(*d.Device.Identifiers.Macs)}, true
 		}
 		if in.Identity != nil {
 			for _, d := range in.Identity.Discovered {
@@ -200,6 +200,25 @@ func (t *Target) compileDHCPActions(in Input, idx *domain.Index) {
 		}
 		t.Kea.Config, t.Kea.Text = *cfgNew, text
 	}
+}
+
+// configuredNetwork is the network of a configured device for the DHCP server: the one the configuration names, else the one it
+// is seen in (P5-AUDIT-07): the network its current addresses lie in, the newest lease first. The configuration's network is
+// informational except for a fixed address, so a device configured by its MAC only is in the network of its lease, as the
+// engine's DeviceState.Network says (the network of its lease, else of its address) and so the engine's choice of the address
+// of force_new_ip, which takes that network.
+func configuredNetwork(w *domain.World, id *domain.Identity, device, declared string) string {
+	if declared != "" || id == nil {
+		return declared
+	}
+	for _, as := range [][]netip.Addr{id.Current[device], id.Addresses[device]} {
+		for _, a := range as {
+			if n, ok := w.NetworkOf(a); ok {
+				return n
+			}
+		}
+	}
+	return ""
 }
 
 // dhcpLayer lays the actions over a copy of the Kea configuration.

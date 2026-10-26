@@ -531,3 +531,66 @@ func TestKeaAcceptsTheConfigurationTheDHCPActionsCompileTo(t *testing.T) {
 		t.Fatalf("kea-dhcp4 -t rejects the configuration: %v\n%s\n%s", err, out, raw)
 	}
 }
+
+// P5-AUDIT-07: the network a configured device names is informational except for a fixed address, so a device configured by its
+// MAC only is in the network it is seen in (the network its current addresses lie in, the newest lease first), and its DHCP
+// actions act there like those of a device that names the network.
+func TestADHCPActionOfAConfiguredDeviceWithoutANetworkActsInTheNetworkItIsSeenIn(t *testing.T) {
+	world := func(t *testing.T, seen ...string) *faultWorld {
+		w := dhcpWorld(t, true)
+		d := (*w.cfg.Devices)[devESP42]
+		d.Network, d.FixedIp = nil, nil
+		(*w.cfg.Devices)[devESP42] = d
+		w.setAddrs(map[string][]string{devESP42: seen, devESP43: {"10.10.0.43"}})
+		return w
+	}
+	w := world(t, "10.10.0.150")
+	w.dhcp(`{target: {device: esp32-42}, dhcp: {action: short_lease, lease_time: 5s}}`, 0)
+	w.dhcp(`{target: {device: esp32-43}, dhcp: {action: silence}}`, 0)
+	tg := compiled(t, w)
+	if c, ok := classOf(tg, macESP42); !ok || c.Seconds != 5 {
+		t.Errorf("short_lease: no lease class for the device: %+v", tg.Kea.Config.LeaseClasses)
+	}
+	if got := problemsOf(tg, CodeDHCPInactive); len(got) != 0 {
+		t.Errorf("the actions of the device say they have no effect: %v", got)
+	}
+
+	w = world(t, "10.10.0.150")
+	w.dhcp(`{target: {device: esp32-42}, dhcp: {action: silence}}`, 0)
+	if got := compiled(t, w).Kea.Config.Silenced; len(got) != 1 || strings.Join(got[0].MACs, ",") != macESP42 {
+		t.Errorf("silence: the device's MAC is not in DROP: %+v", got)
+	}
+
+	w = world(t, "10.10.0.150")
+	w.dhcp(`{target: {device: esp32-42}, dhcp: {action: set_options, options: {domain: x.test}}}`, 0)
+	if r, ok := reservationFor(subnetOf(compiled(t, w), iotNet), macESP42); !ok || r.Options.Domain != "x.test" {
+		t.Errorf("set_options: no reservation with the options: %+v", r)
+	}
+
+	w = world(t, "10.10.0.150")
+	w.dhcp(`{target: {device: esp32-42}, dhcp: {action: force_new_ip, ip: 10.10.0.200}}`, 0)
+	if r, ok := reservationFor(subnetOf(compiled(t, w), iotNet), macESP42); !ok || r.IP.String() != "10.10.0.200" {
+		t.Errorf("force_new_ip: the reservation is not moved: %+v", r)
+	}
+
+	w = world(t, "10.10.0.150")
+	w.dhcp(`{target: {device: esp32-42}, dhcp: {action: delete_lease}}`, 0)
+	tg = compiled(t, w)
+	if ds := tg.Kea.Deletions; len(ds) != 1 || ds[0].Network != iotNet || ds[0].Subnet != subnetOf(tg, iotNet).ID || strings.Join(ds[0].MACs, ",") != macESP42 {
+		t.Errorf("delete_lease: %+v", ds)
+	}
+
+	// seen in Lab, the device's actions act in Lab; not seen at all, it is in no network and says so
+	w = world(t, "10.20.0.77")
+	w.dhcp(`{target: {device: esp32-42}, dhcp: {action: short_lease, lease_time: 5s}}`, 0)
+	tg = compiled(t, w)
+	if c, ok := classOf(tg, macESP42); !ok || c.Seconds != 5 {
+		t.Errorf("seen in Lab: %+v", tg.Kea.Config.LeaseClasses)
+	}
+	w = world(t)
+	w.dhcp(`{target: {device: esp32-42}, dhcp: {action: short_lease, lease_time: 5s}}`, 0)
+	tg = compiled(t, w)
+	if got := problemsOf(tg, CodeDHCPInactive); len(got) != 1 || len(tg.Kea.Config.LeaseClasses) != 0 {
+		t.Errorf("a device that is seen nowhere: %v %+v", got, tg.Kea.Config.LeaseClasses)
+	}
+}

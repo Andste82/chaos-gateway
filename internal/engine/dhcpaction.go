@@ -140,7 +140,8 @@ func (o *owner) dhcpTaken(idx *domain.Index, device string, gw netip.Prefix) map
 			}
 		}
 	}
-	for _, ov := range o.ov.list {
+	// the store, not the list of the last finished batch: a write of the open batch moved its device already (P5-AUDIT-28)
+	for _, ov := range o.ov.store.Overlays() {
 		if ov.Target != nil && ov.Target.Device != nil && strings.EqualFold(*ov.Target.Device, device) {
 			continue
 		}
@@ -181,29 +182,24 @@ func freeAddress(pools []kea.Pool, taken map[netip.Addr]bool) (netip.Addr, bool)
 	return netip.Addr{}, false
 }
 
-// deleteLeases does the deletions of leases a target asks for that were not done yet, and forgets the ones the target no
-// longer lists. It returns the first failure, with the deletions after it left for the next try: the DHCP server that was down
-// when the action was written does them when it is back, while the overlay of the action exists.
+// deleteLeases does the deletions of leases a target asks for that were not done yet. It returns the first failure, with the
+// deletions after it left for the next try: the DHCP server that was down when the action was written does them when it is back,
+// while the overlay of the action exists. A deletion that was done stays done while its overlay exists (forgetLeaseDeletions),
+// also while a target does not list it (its network has DHCP off for a while): each write deletes once (P5-AUDIT-30).
 func (e *Engine) deleteLeases(ctx context.Context, t *compiler.KeaTarget) error {
 	e.dhcp.mu.Lock()
 	if e.dhcp.deleted == nil {
-		e.dhcp.deleted = map[string]bool{}
+		e.dhcp.deleted = map[string]string{}
 	}
-	listed := map[string]bool{}
 	var pending []compiler.LeaseDeletion
 	if t != nil {
 		for _, d := range t.Deletions {
-			listed[d.Key] = true
-			if !e.dhcp.deleted[d.Key] {
+			if _, done := e.dhcp.deleted[d.Key]; !done {
 				pending = append(pending, d)
 			}
 		}
 	}
-	for k := range e.dhcp.deleted {
-		if !listed[k] {
-			delete(e.dhcp.deleted, k)
-		}
-	}
+	e.dhcp.forget(t)
 	e.dhcp.mu.Unlock()
 	for _, d := range pending {
 		n, err := e.cfg.DHCP.DeleteLeases(ctx, d.Subnet, d.MACs)
@@ -211,7 +207,7 @@ func (e *Engine) deleteLeases(ctx context.Context, t *compiler.KeaTarget) error 
 			return &leaseDeletionError{err}
 		}
 		e.dhcp.mu.Lock()
-		e.dhcp.deleted[d.Key] = true
+		e.dhcp.deleted[d.Key] = d.Overlay
 		e.dhcp.mu.Unlock()
 		data := map[string]any{"overlay": d.Overlay, "network": d.Network, "count": n, "subject": Subject{Kind: "overlay", ID: d.Overlay}}
 		if d.Device != "" {
@@ -220,4 +216,31 @@ func (e *Engine) deleteLeases(ctx context.Context, t *compiler.KeaTarget) error 
 		e.Emit(EventDHCPLeasesDeleted, data)
 	}
 	return nil
+}
+
+// forgetLeaseDeletions takes note of the overlays that exist and forgets the deletions that were done for overlays that are gone:
+// a key is the overlay and the time it was written, so it cannot come back once its overlay is removed. A key the target the
+// DHCP server is given lists is kept, so that the retry, which sends that target again until a newer one replaces it, does not
+// delete a second time.
+func (e *Engine) forgetLeaseDeletions(overlays []model.Overlay) {
+	live := make(map[string]bool, len(overlays))
+	for _, o := range overlays {
+		live[strings.ToLower(o.Id.String())] = true
+	}
+	e.dhcp.mu.Lock()
+	defer e.dhcp.mu.Unlock()
+	e.dhcp.live = live
+	e.dhcp.forget(e.dhcp.target)
+}
+
+// forget forgets the done deletions whose overlay is gone and that t does not list; e.dhcp.mu is held.
+func (d *dhcpState) forget(t *compiler.KeaTarget) {
+	if d.live == nil {
+		return // the overlays are not known yet
+	}
+	for k, ov := range d.deleted {
+		if !d.live[ov] && (t == nil || !slices.ContainsFunc(t.Deletions, func(l compiler.LeaseDeletion) bool { return l.Key == k })) {
+			delete(d.deleted, k)
+		}
+	}
 }

@@ -214,8 +214,11 @@ type dhcpState struct {
 	came      map[string]bool
 	reopen    chan struct{}
 	scheduled int
-	// deleted are the keys of the lease deletions that were done (compiler.LeaseDeletion): each is done once
-	deleted map[string]bool
+	// deleted are the keys of the lease deletions that were done (compiler.LeaseDeletion), with their overlay: each is done once,
+	// and the key is forgotten when its overlay is gone (forgetLeaseDeletions)
+	deleted map[string]string
+	// live are the ids of the overlays of the desired state applied last; nil before the first apply
+	live map[string]bool
 }
 
 func (d *dhcpState) set(t *compiler.KeaTarget, err string) {

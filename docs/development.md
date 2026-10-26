@@ -6016,7 +6016,9 @@ and risk 11), so every test of an action that a client notices at its renewal us
   winner of every network and every device an action names; `delete_lease` is no state and is not among them (`World.DHCPDeletions`). The scopes are a device and a
   network (`invalid_target` for a group, the global scope or a remote network), and `force_new_ip` takes a device only: a reservation is one device's.
 - **Kea** (`compiler/dhcpaction.go`, laid over the configuration `compileKea` made, after the faults are compiled). The target's Kea configuration carries the effects, so
-  `config-set` is all the engine does, and every apply sends the configuration with the actions in force (and without those whose overlay went):
+  `config-set` is all the engine does, and every apply sends the configuration with the actions in force (and without those whose overlay went). The actions of a device follow
+  where it is seen (below), so an update of the identity alone, which the apply loop applies incrementally, sends the configuration as well when the DHCP part of the target changed
+  (`dhcpChanged` in `applyloop.go`, P5-AUDIT-27):
 
   | Action | Network | Device |
   |---|---|---|
@@ -6033,18 +6035,23 @@ and risk 11), so every test of an action that a client notices at its renewal us
 - **The address of `force_new_ip`** (`engine/dhcpaction.go`). The compiler needs a stable address (a compile of every apply must give the same reservation, and the lease the device
   takes must not change it), so the engine chooses it when the action is written and the overlay keeps it as `dhcp.ip`. A request may name one (inside the device's network, not
   the gateway's, the network's or the broadcast address, and not one another host holds); without one the engine takes the last address of the pools, going down, that is not taken: leased
-  (whoever holds the lease), held by a known device, the `fixed_ip` of a device, or the address of another overlay of the kind. The DHCP server allocates from the start of a pool,
+  (whoever holds the lease), held by a known device, the `fixed_ip` of a device, or the address of another overlay of the kind (read from the store, so the writes of one batch
+  get different addresses, P5-AUDIT-28). The DHCP server allocates from the start of a pool,
   so the address a device is moved to is the one it takes last. The write is refused when the device has no MAC address (a configured device's MACs come from the configuration, so
   a device that was not seen yet works), its network has no DHCP, or the pools are full (`invalid_dhcp_action` at `/target` or `/dhcp/ip`). Writing the action again chooses again:
   while the device has not taken the address it is the same one, and once it holds it the device is moved on.
 - **`delete_lease`** acts when it is written and stays in the list until its TTL or its owner removes it. The compiler lists it in `Target.Kea.Deletions` with a key of the overlay's
   id and the time it was written (a new write is a new key), and the engine does the deletions right after Kea took the configuration (`Engine.deleteLeases`, in `syncDHCP`, so the
-  answer of a write comes after the deletion): `lease4-wipe` for a network, the leases of the device's MACs (`lease4-get-page` and `lease4-del`) for a device. A key is done once;
-  a key the target no longer lists is forgotten. A deletion Kea could not do is a `DHCPError` of the snapshot ("the DHCP server could not delete leases") and is tried again with
+  answer of a write comes after the deletion): `lease4-wipe` for a network, the leases of the device's MACs (`lease4-get-page` and `lease4-del`) for a device. A key is done once,
+  and the engine remembers it while its overlay exists, also while the target leaves it out (its network has DHCP off for a while, P5-AUDIT-30); it is forgotten when the overlay is
+  gone and the target the server is given no longer lists it (`Engine.forgetLeaseDeletions`). A deletion Kea could not do is a `DHCPError` of the snapshot ("the DHCP server could not delete leases") and is tried again with
   the configuration every five seconds, so a Kea that was down when the action was written does it when it is back, while the overlay exists. The event `dhcp_leases_deleted` (overlay,
   network, device, count) says what was done. A client that renews gets the same address again (spike S6); the action is for the test of what a device does without its lease, not of a new address.
 - **The state of the overlay.** `effective` while Kea is configured with it (a deletion: once it is listed), `overridden` with `overridden_by` while a newer action of its scope wins, `disabled` while
-  nothing could use it: its network has DHCP off, or its device has no MAC address the server could know it by, or no network (the compile says so with the warning `dhcp_action_inactive`). The
+  nothing could use it: its network has DHCP off, or its device has no MAC address the server could know it by, or no network (the compile says so with the warning `dhcp_action_inactive`).
+  The network of a device is the one it names, else the one it is seen in (P5-AUDIT-07): for a configured device without `network` the compiler takes the network its current addresses lie
+  in, the newest lease first (`compiler.configuredNetwork`), which is the network of `DeviceState.Network` (its lease's, else its address's) that the engine's choice of the address of
+  `force_new_ip` takes, and a discovered device's is the one it was seen in. The
   winner of a scope is known from the overlays, not from the traffic of the devices, so a device that was not seen yet overrides as well.
 - **The rest.** `dhcp` is among the overlay kinds, the fault families and (as `dhcp.actions`) the features of the capabilities, and `dhcp` among the step types: a step creates the overlay of the run
   like any other (`domain.StepRequest`), `force_new_ip` of a device of a network without DHCP ends the run as `error` with the reason, and a `restore` or the end of the run removes the actions.
@@ -6088,8 +6095,9 @@ Taken by best practice where the plan leaves room (the one that needed the maint
 ### Tests
 
 Level 0, all run here: `kea/kea_test.go` (the rendering of lease classes, `DROP`, bounds and option reservations, the refusals of the checks, and Kea's own `-t` accepting them), `domain/overlay_test.go` and `validate_scenario_test.go` (the rules of the action's fields, `ip`, the targets),
-`compiler/dhcpaction_test.go` (each action for a network and a device, a discovered device, the combinations in which the device's action beats the network's and what is put back, the newer action of a scope, actions that reach nobody, the deletions and their keys, the document is deterministic, Kea's check),
-`engine/dhcpaction_test.go` (the configuration of the server with and without the overlay, the address of `force_new_ip` and its checks, a full pool, the pools it goes through (the last one first), the fault of the device that stays attached after the move at level 0, an action Kea refuses and one it is not refused for, `delete_lease` once and again and for a device, a deletion that failed and is done later, an action that cannot reach anybody), `api/dhcpaction_test.go` (the states and `overridden_by`, the address over the API, the refusals with their paths, the 422 of an action Kea refuses, the deletion and its event on the stream,
+`compiler/dhcpaction_test.go` (each action for a network and a device, a discovered device, the combinations in which the device's action beats the network's and what is put back, the newer action of a scope, actions that reach nobody, the deletions and their keys, the document is deterministic, Kea's check, a configured device without `network` in the network it is seen in),
+`engine/dhcpaction_test.go` (the configuration of the server with and without the overlay, the address of `force_new_ip` and its checks, a full pool, the pools it goes through (the last one first),
+two devices that each get their own address and concurrent writes of one batch that do as well, a configured device without `network` whose actions act in the network of its lease, an identity update that moves a silenced device into a network with DHCP, `delete_lease` not done again when its network had DHCP off and on, the fault of the device that stays attached after the move at level 0, an action Kea refuses and one it is not refused for, `delete_lease` once and again and for a device, a deletion that failed and is done later, an action that cannot reach anybody), `api/dhcpaction_test.go` (the states and `overridden_by`, the address over the API, the refusals with their paths, the 422 of an action Kea refuses, the deletion and its event on the stream,
 a run with a `dhcp` step and one that ends as an error) with the capabilities of `misc_test.go`, `overlays_test.go` and `runs_test.go`. Web: `lib/faults.test.ts` (the chips), `e2e/dhcp-actions.spec.ts` (Playwright: the faults screen lists the actions under DHCP with what each does). The Kea tests of `kea/dhcpwire_testbed_test.go` (build tag `testbed`, root and Kea) pass here: `TestAShortLeaseOfASubnetIsWhatEveryClientGetsEvenOneThatAsksForAnHour`,
 `TestALeaseClassGivesItsClientsTheirOwnLeaseTimeAndNoOtherClient`, `TestSilencedClientsAreNotAnsweredAndTheOthersAre`, `TestAReservationOfAnotherAddressNaksTheRenewalAndTheClientGetsTheReservedAddress`, `TestAReservationWithOptionsOnlyChangesTheOptionsOfItsClient` and `TestDeletingLeasesRemovesThoseOfTheClientsOrTheSubnetAndTheClientGetsTheSameAddressBack`.
 

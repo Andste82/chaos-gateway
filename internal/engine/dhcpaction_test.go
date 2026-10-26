@@ -3,9 +3,11 @@ package engine_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -469,5 +471,244 @@ func TestAnActionOnADeviceTheServerCannotReachIsAcceptedAndSaysItHasNoEffect(t *
 	}
 	if !found {
 		t.Errorf("%+v", h.e.Snapshot().Problems)
+	}
+}
+
+// P5-AUDIT-07: a configured device that names no network (configured by its MAC only) is in the network of its lease, so its DHCP
+// actions reach the server there, the address force_new_ip gives it included, and none says that it has no effect.
+func TestADHCPActionOfAConfiguredDeviceWithoutANetworkActsInTheNetworkItIsSeenIn(t *testing.T) {
+	h, f := dhcpHarness(t)
+	h.mustApply(h.revision(withDHCPAndDevice)) // esp32-42 has the MAC macCfg and no network
+	sid := 0
+	for id := range h.e.Snapshot().KeaNetworks {
+		sid = id
+	}
+	ch, cancel := h.e.Subscribe()
+	defer cancel()
+	f.setLeases(lease("10.10.0.150", macCfg, sid))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.150", macCfg)})
+	h.observe()
+	h.barrier()
+	if d := h.device(devID); d == nil || d.Network != iotID {
+		t.Fatalf("setup: the device is not seen in IoT: %+v", d)
+	}
+	inactive := func(what string) {
+		t.Helper()
+		for _, p := range h.e.Snapshot().Problems {
+			if p.Code == compiler.CodeDHCPInactive {
+				t.Errorf("%s: %s", what, p.Message)
+			}
+		}
+	}
+
+	h.mustPut(alice, "target: {device: esp32-42}\ndhcp: {action: short_lease, lease_time: 5s}")
+	if cs := f.last().Config.LeaseClasses; len(cs) != 1 || cs[0].Seconds != 5 || !slices.Contains(cs[0].MACs, macCfg) {
+		t.Errorf("short_lease: %+v", cs)
+	}
+	inactive("short_lease")
+	h.mustPut(alice, "target: {device: esp32-42}\ndhcp: {action: silence}")
+	if sl := f.last().Config.Silenced; len(sl) != 1 || !slices.Contains(sl[0].MACs, macCfg) {
+		t.Errorf("silence: %+v", sl)
+	}
+	inactive("silence")
+	h.mustPut(alice, "target: {device: esp32-42}\ndhcp: {action: set_options, options: {domain: x.test}}")
+	reservation := func() *kea.Reservation {
+		for _, r := range f.last().Config.Subnets[0].Reservations {
+			if strings.EqualFold(r.MAC, macCfg) {
+				return &r
+			}
+		}
+		return nil
+	}
+	if r := reservation(); r == nil || r.Options.Domain != "x.test" {
+		t.Errorf("set_options: %+v", r)
+	}
+	inactive("set_options")
+	res := h.mustPut(alice, "target: {device: esp32-42}\ndhcp: {action: force_new_ip}")
+	if r := reservation(); r == nil || r.IP.String() != derefS(res.Overlay.Dhcp.Ip) || derefS(res.Overlay.Dhcp.Ip) == "" {
+		t.Errorf("force_new_ip: the overlay says %q, the server reserves %+v", derefS(res.Overlay.Dhcp.Ip), r)
+	}
+	inactive("force_new_ip")
+	h.mustPut(alice, "target: {device: esp32-42}\ndhcp: {action: delete_lease}")
+	if got := f.deletions(); len(got) != 1 || got[0].subnet != sid || len(got[0].macs) != 1 || got[0].macs[0] != macCfg {
+		t.Errorf("delete_lease: %+v", got)
+	}
+	if evs := collect(ch, engine.EventDHCPLeasesDeleted); len(evs) != 1 || evs[0].Data["device"] != devID {
+		t.Errorf("%+v", evs)
+	}
+	inactive("delete_lease")
+}
+
+// P5-AUDIT-27: the DHCP actions of a device depend on where it is seen, so an update of the identity alone (an incremental apply,
+// which leaves the kernel's rules as they are) sends the DHCP server the configuration again when it changed: a device silenced
+// while it was in a network without DHCP is silenced by the server once it shows up in one with DHCP.
+func TestAnIdentityUpdateThatMovesADeviceIntoANetworkWithDHCPSendsTheServerItsAction(t *testing.T) {
+	h, f := dhcpHarness(t)
+	h.mustApply(h.revision(withDHCPAndDevice)) // esp32-42 names no network
+	sid := 0
+	for id := range h.e.Snapshot().KeaNetworks {
+		sid = id
+	}
+	h.k.SetNeighbors([]linux.Neighbor{{Dst: "10.20.0.77", Dev: "br-lab", LLAddr: macCfg, State: []string{"REACHABLE"}}})
+	h.observe()
+	h.barrier()
+	if d := h.device(devID); d == nil || d.Network != labNetID {
+		t.Fatalf("setup: the device is not seen in Lab: %+v", d)
+	}
+	h.mustPut(alice, "target: {device: esp32-42}\ndhcp: {action: silence}")
+	if sl := f.last().Config.Silenced; len(sl) != 0 {
+		t.Fatalf("setup: a device in a network without DHCP is silenced: %+v", sl)
+	}
+	revision := h.e.Snapshot().Applied.Revision
+	f.setLeases(lease("10.10.0.150", macCfg, sid))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.150", macCfg)})
+	h.observe()
+	h.wait(func() bool { d := h.device(devID); return d != nil && d.Network == iotID }, "the device seen in IoT")
+	snap := h.barrier()
+	if snap.Applied == nil || snap.Applied.Revision != revision {
+		t.Fatalf("setup: the identity update was a new revision: %+v", snap.Applied)
+	}
+	for _, p := range snap.Problems {
+		if p.Code == compiler.CodeDHCPInactive {
+			t.Errorf("the action still says it has no effect: %s", p.Message)
+		}
+	}
+	if sl := f.last().Config.Silenced; len(sl) != 1 || !slices.Contains(sl[0].MACs, macCfg) {
+		t.Errorf("the server was not given the silence of the device after the identity update: %+v", sl)
+	}
+}
+
+// dhcpDevices adds n configured devices dev-0 ... dev-<n-1> in IoT, each with a MAC of its own, to the harness of the DHCP actions.
+func dhcpDevices(h *harness, n int) {
+	h.t.Helper()
+	h.mustApply(h.revision(func(c *model.Configuration) {
+		withDHCPAndDevice(c)
+		(*c.Devices)[devID] = withFixed((*c.Devices)[devID], "10.10.0.31")
+		for i := range n {
+			macs := []string{fmt.Sprintf("02:00:00:00:01:%02x", i)}
+			(*c.Devices)[fmt.Sprintf("cccccccc-0000-4000-8000-%012d", i)] = model.Device{Name: fmt.Sprintf("dev-%d", i), Network: ptr("IoT"),
+				Identifiers: &model.DeviceIdentifiers{Macs: &macs}}
+		}
+	}))
+}
+
+// reservations are the addresses the server reserves, by MAC.
+func reservations(f *fakeDHCP) map[string]string {
+	out := map[string]string{}
+	for _, r := range f.last().Config.Subnets[0].Reservations {
+		out[strings.ToLower(r.MAC)] = r.IP.String()
+	}
+	return out
+}
+
+// P5-AUDIT-29 (development.md, M23): the address force_new_ip gives a device is never the one another overlay of the kind moves
+// another device to; the device's own action, which the write replaces, does not keep its address from it.
+func TestForceNewIPOfTwoDevicesGivesEachItsOwnAddress(t *testing.T) {
+	h, f, _ := dhcpActionHarness(t)
+	dhcpDevices(h, 2)
+	first := h.mustPut(alice, "target: {device: dev-0}\ndhcp: {action: force_new_ip}")
+	second := h.mustPut(alice, "target: {device: dev-1}\ndhcp: {action: force_new_ip}")
+	a, b := derefS(first.Overlay.Dhcp.Ip), derefS(second.Overlay.Dhcp.Ip)
+	if a != "10.10.0.254" || b != "10.10.0.253" {
+		t.Errorf("the devices are moved to %s and %s, want 10.10.0.254 and 10.10.0.253", a, b)
+	}
+	if rs := reservations(f); rs["02:00:00:00:01:00"] != a || rs["02:00:00:00:01:01"] != b {
+		t.Errorf("the server's reservations: %v", rs)
+	}
+	// the first device written again while it has not taken its address: the same one, its own overlay does not hold it
+	if again := h.mustPut(alice, "target: {device: dev-0}\ndhcp: {action: force_new_ip}"); derefS(again.Overlay.Dhcp.Ip) != a || again.Created {
+		t.Errorf("the device's own action is replaced: moved to %s, created %v", derefS(again.Overlay.Dhcp.Ip), again.Created)
+	}
+	// an address another overlay holds is refused when it is asked for, the device's own is not
+	if _, err := h.put(alice, "target: {device: dev-0}\ndhcp: {action: force_new_ip, ip: "+b+"}"); err == nil {
+		t.Errorf("the address of another device's overlay is given to dev-0")
+	}
+	if _, err := h.put(alice, "target: {device: dev-0}\ndhcp: {action: force_new_ip, ip: "+a+"}"); err != nil {
+		t.Errorf("the device's own address: %v", err)
+	}
+}
+
+// P5-AUDIT-28: writes of force_new_ip that arrive together, and so are checked in one batch, give each device an address of its
+// own: each write sees the addresses the writes before it in the batch handed out.
+func TestConcurrentForceNewIPWritesGiveEachDeviceItsOwnAddress(t *testing.T) {
+	h, f, _ := dhcpActionHarness(t)
+	const n = 12
+	dhcpDevices(h, n)
+	var wg sync.WaitGroup
+	ips := make([]string, n)
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := h.put(alice, fmt.Sprintf("target: {device: dev-%d}\ndhcp: {action: force_new_ip}", i))
+			errs[i] = err
+			if err == nil {
+				ips[i] = derefS(res.Overlay.Dhcp.Ip)
+			}
+		}()
+	}
+	wg.Wait()
+	seen := map[string]int{}
+	for i, ip := range ips {
+		if errs[i] != nil {
+			t.Fatalf("dev-%d: %v", i, errs[i])
+		}
+		if j, ok := seen[ip]; ok {
+			t.Errorf("dev-%d and dev-%d are both moved to %s", j, i, ip)
+			continue
+		}
+		seen[ip] = i
+	}
+	h.barrier()
+	rs := reservations(f)
+	for i, ip := range ips {
+		if got := rs[fmt.Sprintf("02:00:00:00:01:%02x", i)]; got != ip {
+			t.Errorf("dev-%d: the server reserves %s, the overlay says %s", i, got, ip)
+		}
+	}
+}
+
+// P5-AUDIT-30 (decision 9): delete_lease deletes once for each write. A deletion the target leaves out for a while (its network has
+// DHCP off, so the compiler does not list it) is not done again when the target lists it again: the engine remembers it while the
+// overlay exists.
+func TestADeleteLeaseIsNotDoneAgainWhenItsNetworkHasDHCPOffAndOnAgain(t *testing.T) {
+	h, f, sid := dhcpActionHarness(t)
+	ch, cancel := h.e.Subscribe()
+	defer cancel()
+	f.setLeases(lease("10.10.0.150", macCfg, sid))
+	res := h.mustPut(alice, "target: {network: IoT}\ndhcp: {action: delete_lease}")
+	if got := f.deletions(); len(got) != 1 {
+		t.Fatalf("setup: %+v", got)
+	}
+	dhcp := func(on bool) {
+		h.mustApply(h.revision(func(c *model.Configuration) {
+			withDHCPAndDevice(c)
+			(*c.Devices)[devID] = withFixed((*c.Devices)[devID], "10.10.0.31")
+			if !on {
+				n := (*c.Networks)[iotID]
+				lan, _ := n.AsLanNetwork()
+				off := false
+				lan.Dhcp = &model.DhcpScope{Enabled: &off}
+				_ = n.FromLanNetwork(lan)
+				(*c.Networks)[iotID] = n
+			}
+		}))
+	}
+	dhcp(false)
+	dhcp(true)
+	if got := f.deletions(); len(got) != 1 {
+		t.Errorf("the leases are deleted again after DHCP was off and on: %+v", got)
+	}
+	if evs := collect(ch, engine.EventDHCPLeasesDeleted); len(evs) != 1 {
+		t.Errorf("%d events, want one: %+v", len(evs), evs)
+	}
+	// the overlay removed and written anew: a new deletion
+	if _, err := h.e.DeleteOverlay(t.Context(), res.Overlay.Id, nil, model.Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	h.mustPut(alice, "target: {network: IoT}\ndhcp: {action: delete_lease}")
+	if got := f.deletions(); len(got) != 2 {
+		t.Errorf("a new overlay deletes: %+v", got)
 	}
 }

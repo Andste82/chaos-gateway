@@ -445,7 +445,7 @@ func TestADeviceTrustingTheTestCASeesTheModifiedResponses(t *testing.T) {
 			"response_body_replace": []any{map[string]any{"search": "upstream", "replace": "the gateway"}},
 		}}),
 	)
-	time.Sleep(500 * time.Millisecond) // the proxy fetches the configuration once it runs
+	ir.gw.waitApplied(t) // the proxy fetches the configuration once it runs
 	dev := ir.device(ir.roots, nil)
 
 	resp, body, err := ir.get(dev, "/plain")
@@ -531,7 +531,7 @@ func TestADelayedResponseArrivesAfterTheDelay(t *testing.T) {
 		rule("delay", map[string]any{"match": matchPath("/late-503"), "delay": "1200ms"}),
 		rule("status", map[string]any{"match": matchPath("/late-503"), "status": 503}),
 	)
-	time.Sleep(500 * time.Millisecond)
+	ir.gw.waitApplied(t)
 	dev := ir.device(ir.roots, nil)
 	timed := func(path string) (time.Duration, int) {
 		start := time.Now()
@@ -612,7 +612,7 @@ func TestConnectionReuseAcrossRequestsIsOneHandoverAndManyExchanges(t *testing.T
 // they are the secrets the device itself holds (a Go client writes its own log), so Wireshark can decrypt the capture of the device with them.
 func TestTheKeyLogHoldsTheSecretsOfTheDevicesConnection(t *testing.T) {
 	ir := newInterceptRig(t, riglOpt{})
-	time.Sleep(300 * time.Millisecond)
+	ir.gw.waitApplied(t)
 	var own lockedWriter
 	dev := ir.device(ir.roots, &own)
 	if _, _, err := ir.get(dev, "/secret-material"); err != nil {
@@ -689,7 +689,7 @@ func TestACaseThatTurnsTheKeyLogOffGivesTheGatewayNoSecrets(t *testing.T) {
 	ir.gw.keylog = &off
 	ir.gw.gen++
 	ir.gw.mu.Unlock()
-	time.Sleep(600 * time.Millisecond)
+	ir.gw.waitApplied(t)
 	dev := ir.device(ir.roots, nil)
 	if _, _, err := ir.get(dev, "/x"); err != nil {
 		t.Fatal(err)
@@ -706,7 +706,7 @@ func TestACaseThatTurnsTheKeyLogOffGivesTheGatewayNoSecrets(t *testing.T) {
 // responder does for its certificate cases, and nothing reaches the server.
 func TestADeviceThatDoesNotTrustTheTestCARejectsTheProxysCertificate(t *testing.T) {
 	ir := newInterceptRig(t, riglOpt{})
-	time.Sleep(300 * time.Millisecond)
+	ir.gw.waitApplied(t)
 	dev := ir.device(x509.NewCertPool(), nil)
 	if _, _, err := ir.get(dev, "/x"); err == nil || !strings.Contains(err.Error(), "certificate") {
 		t.Fatalf("the device took the certificate: %v", err)
@@ -733,7 +733,7 @@ func TestAThrottleRulePacesTheResponseOfTheRequestItMatches(t *testing.T) {
 		_, _ = io.WriteString(w, "small")
 	})})
 	ir.gw.setRules(rule("throttle", map[string]any{"match": matchPath("/big"), "rate": "160kbit"})) // 20000 bytes/s
-	time.Sleep(500 * time.Millisecond)
+	ir.gw.waitApplied(t)
 	dev := ir.device(ir.roots, nil)
 	dev.Transport.(*http.Transport).ForceAttemptHTTP2 = false
 	start := time.Now()
@@ -765,7 +765,7 @@ func TestAThrottleRulePacesTheResponseOfTheRequestItMatches(t *testing.T) {
 func TestAnAbortRuleResetsTheConnectionOfTheDevice(t *testing.T) {
 	ir := newInterceptRig(t, riglOpt{})
 	ir.gw.setRules(rule("abort", map[string]any{"match": matchPath("/abort")}))
-	time.Sleep(500 * time.Millisecond)
+	ir.gw.waitApplied(t)
 	dev := ir.device(ir.roots, nil)
 	if _, _, err := ir.get(dev, "/fine"); err != nil {
 		t.Fatal(err)
@@ -801,7 +801,7 @@ func TestAConnectionThatIsNoHTTPIsCountedAndAbortedByAHostRule(t *testing.T) {
 	echo = tlsEchoServer(t, ir.up.TLS.Certificates[0])
 	ir.rig.setDst(netip.MustParseAddrPort(echo.Addr().String()))
 	ir.gw.setRules()
-	time.Sleep(500 * time.Millisecond)
+	ir.gw.waitApplied(t)
 	// the proxy trusts the echo server's certificate through the CA file of the rig (the same certificate)
 	conn := func() (*tls.Conn, error) {
 		raw, err := net.Dial("tcp", ir.rig.addr)
@@ -834,7 +834,7 @@ func TestAConnectionThatIsNoHTTPIsCountedAndAbortedByAHostRule(t *testing.T) {
 	}
 
 	ir.gw.setRules(rule("abort", map[string]any{"match": map[string]any{"host": hostName}}))
-	time.Sleep(700 * time.Millisecond)
+	ir.gw.waitApplied(t)
 	c, err = conn()
 	if err == nil {
 		_, _ = c.Write([]byte{0x10, 0x02, 0x00, 0x00})
@@ -886,7 +886,7 @@ func TestAWebSocketIsInspectedAndItsHandshakeCanBeBlocked(t *testing.T) {
 	mux.Handle("/ws", websocket.Handler(func(c *websocket.Conn) { _, _ = io.Copy(c, c) }))
 	ir := newInterceptRig(t, riglOpt{handler: mux})
 	ir.gw.setRules(rule("block", map[string]any{"match": matchPath("/ws-blocked")}))
-	time.Sleep(500 * time.Millisecond)
+	ir.gw.waitApplied(t)
 
 	dial := func(path string) (*websocket.Conn, error) {
 		cfg, err := websocket.NewConfig("wss://"+hostName+path, "https://"+hostName)
@@ -943,7 +943,7 @@ func TestPlainHTTPOnAPortOfTheCaseIsHandedOverToo(t *testing.T) {
 	ir := newInterceptRig(t, riglOpt{})
 	ir.rig.setDst(netip.MustParseAddrPort(plain.Listener.Addr().String()))
 	ir.gw.setRules(rule("status", map[string]any{"match": matchPath("/down"), "status": 500}))
-	time.Sleep(500 * time.Millisecond)
+	ir.gw.waitApplied(t)
 	req := func(path string) (int, string) {
 		c, err := net.Dial("tcp", ir.rig.addr)
 		if err != nil {
@@ -975,7 +975,7 @@ func TestPlainHTTPOnAPortOfTheCaseIsHandedOverToo(t *testing.T) {
 // that installed the new certificate are served and those that kept the old one reject what they are shown.
 func TestANewTestCAIsUsedByTheProxyAfterItsFilesChange(t *testing.T) {
 	ir := newInterceptRig(t, riglOpt{})
-	time.Sleep(300 * time.Millisecond)
+	ir.gw.waitApplied(t)
 	if _, _, err := ir.get(ir.device(ir.roots, nil), "/before"); err != nil {
 		t.Fatal(err)
 	}
@@ -1007,7 +1007,7 @@ func TestANewTestCAIsUsedByTheProxyAfterItsFilesChange(t *testing.T) {
 // healthy for it: the next connection to a server that is up is served.
 func TestAServerThatIsDownIsAResetForTheDeviceAndReportedAsUnreachable(t *testing.T) {
 	ir := newInterceptRig(t, riglOpt{})
-	time.Sleep(300 * time.Millisecond)
+	ir.gw.waitApplied(t)
 	up := ir.rig.getDst()
 	ir.rig.setDst(netip.MustParseAddrPort(freeAddr(t)))
 	dev := ir.device(ir.roots, nil)
@@ -1038,7 +1038,7 @@ func TestAServerThatIsDownIsAResetForTheDeviceAndReportedAsUnreachable(t *testin
 // real server's certificate, which here has the address), and the exchange is reported with the address as its host.
 func TestAConnectionWithoutAServerNameIsInterceptedForTheAddress(t *testing.T) {
 	ir := newInterceptRig(t, riglOpt{})
-	time.Sleep(300 * time.Millisecond)
+	ir.gw.waitApplied(t)
 	host := ir.rig.getDst().Addr().String()
 	tr := &http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {

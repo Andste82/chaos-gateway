@@ -25,7 +25,7 @@ func TestTheRequestHeadersOfAModifyRuleReachTheServer(t *testing.T) {
 	ir.gw.setRules(rule("modify", map[string]any{"match": matchPath("/mod"), "modify": map[string]any{
 		"request_headers": map[string]any{"X-Added-By-Rule": "1", "X-Replace-Me": "by-the-rule", "X-Remove-Me": ""},
 	}}))
-	time.Sleep(500 * time.Millisecond)
+	ir.gw.waitApplied(t)
 	dev := ir.device(ir.roots, nil)
 
 	do := func(path string) *http.Response {
@@ -71,7 +71,7 @@ func TestAltSvcOfTheServerLosesItsHTTP3EntriesWhileTheCaseBlocksQUIC(t *testing.
 		_, _ = io.WriteString(w, "ok")
 	})
 	ir := newInterceptRig(t, riglOpt{handler: alt})
-	time.Sleep(500 * time.Millisecond)
+	ir.gw.waitApplied(t)
 	dev := ir.device(ir.roots, nil)
 	altSvc := func(path string) (string, bool) {
 		t.Helper()
@@ -195,7 +195,7 @@ func TestAResponseThatNeverEndsReachesTheDeviceWhileTheServerIsStillSending(t *t
 		rule("modify", map[string]any{"match": matchPath("/stream"), "modify": map[string]any{"response_headers": map[string]any{"X-Chaos": "streamed"}}}),
 		rule("modify", map[string]any{"match": matchPath("/replace"), "modify": map[string]any{"response_body_replace": []any{map[string]any{"search": "text", "replace": "words"}}}}),
 	)
-	time.Sleep(500 * time.Millisecond)
+	ir.gw.waitApplied(t)
 	dev := ir.device(ir.roots, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

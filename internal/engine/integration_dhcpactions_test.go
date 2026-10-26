@@ -117,7 +117,9 @@ func (b *dhcpBed) keaLeaseOf(mac string) string {
 	return ""
 }
 
-// M23 test: a short lease of the network is the lease time the client is given, and it renews at half of it.
+// M23 test: a short lease of the network is the lease time the client is given, and it renews soon. busybox's udhcpc (1.36 and later)
+// raises a lease below 30 s to 30 s for its own timers and renews at half of that, so a client of a short lease renews about 15 s
+// after it is bound, and one of the network's own lease of a minute at 30 s.
 func TestAShortLeaseOfTheNetworkIsWhatUdhcpcGetsAndItRenewsSoonOnTheRealKernel(t *testing.T) {
 	b := actionsBed(t)
 	res := b.put("target: {network: IoT}\ndhcp: {action: short_lease, lease_time: 6s}")
@@ -129,8 +131,8 @@ func TestAShortLeaseOfTheNetworkIsWhatUdhcpcGetsAndItRenewsSoonOnTheRealKernel(t
 	if got := field(line, "lease"); got != "6" {
 		t.Errorf("the client was given a lease of %ss, want the short one of 6s: %s", got, line)
 	}
-	// half of the lease is three seconds: the renewal is there long before the minute the network's own lease would take
-	if l, ok := waitLine(t, log, "renew", 1, 15*time.Second); !ok || field(l, "ip") != field(line, "ip") {
+	// the renewal comes at about 15 s (see above), before the 30 s at which a client of the network's own lease renews
+	if l, ok := waitLine(t, log, "renew", 1, 25*time.Second); !ok || field(l, "ip") != field(line, "ip") {
 		t.Errorf("no renewal with the same address after the short lease: %q", clientLines(log))
 	}
 	// another network is not touched; and when the action goes, a client that asks gets the lease of the network again
@@ -250,7 +252,8 @@ func TestForceNewIPMovesTheClientAtItsRenewalOnTheRealKernel(t *testing.T) {
 	if p := netip.MustParsePrefix("10.10.0.128/25"); !p.Contains(netip.MustParseAddr(moved)) || moved == old {
 		t.Fatalf("the gateway chose %q for a client that holds %s", moved, old)
 	}
-	// the client renews at three seconds, is refused, and discovers: its second lease is the reserved address
+	// the client renews at about 15 s (udhcpc's floor of 30 s, see the short lease test), is refused, and discovers: its second
+	// lease is the reserved address
 	second, ok := waitLine(t, log, "bound", 2, 30*time.Second)
 	if !ok {
 		t.Fatalf("the client never got a new address: %q", clientLines(log))
@@ -264,8 +267,9 @@ func TestForceNewIPMovesTheClientAtItsRenewalOnTheRealKernel(t *testing.T) {
 	if got := b.keaLeaseOf(testbed.ClientAMAC); got != moved {
 		t.Errorf("Kea holds %q for the client, want %s", got, moved)
 	}
-	// a client that has the address stays with it at the next renewal while the overlay lasts
-	if l, ok := waitLine(t, log, "renew", 1, 15*time.Second); !ok || field(l, "ip") != moved {
+	// a client that has the address stays with it at the next renewal while the overlay lasts; it comes about 15 s after the
+	// second lease, and a wait of 15 s raced it (CI run 40393245421)
+	if l, ok := waitLine(t, log, "renew", 1, 25*time.Second); !ok || field(l, "ip") != moved {
 		t.Errorf("the renewal of the new address: %q (client log %q)", l, clientLines(log))
 	}
 }

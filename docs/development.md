@@ -6102,7 +6102,7 @@ a run with a `dhcp` step and one that ends as an error) with the capabilities of
 `TestALeaseClassGivesItsClientsTheirOwnLeaseTimeAndNoOtherClient`, `TestSilencedClientsAreNotAnsweredAndTheOthersAre`, `TestAReservationOfAnotherAddressNaksTheRenewalAndTheClientGetsTheReservedAddress`, `TestAReservationWithOptionsOnlyChangesTheOptionsOfItsClient` and `TestDeletingLeasesRemovesThoseOfTheClientsOrTheSubnetAndTheClientGetsTheSameAddressBack`.
 
 Level 1 (written, vetted with `-tags testbed`, run by CI with `$M23_LEVEL1`, not run here: no KVM, no namespaces): `engine/integration_dhcpactions_test.go`, with busybox's `udhcpc` in the client namespaces against the real Kea in the gateway's namespace (the lines of the client's script say each event and the
-lease, the router, the DNS server and the domain it was given). The script of the bed does not flush the address at a `renew` any more (the address does not change then, and the flush took the default route of a test that was measuring).
+lease, the router, the DNS server and the domain it was given). The script of the bed does not flush the address at a `renew` any more (the address does not change then, and the flush took the default route of a test that was measuring). busybox's `udhcpc` (1.36 and later) raises a lease below 30 s to 30 s for its own timers and renews at half of that, so a client of a short lease renews about 15 s after it is bound, not at half of the lease it was given; the tests wait 25 s for that renewal, which still comes before the 30 s of a client of the network's own lease of a minute (a wait of 15 s raced it and failed twice in the VM job, CI runs 40351451158 and 40393245421).
 
 ### Acceptance map (plan M23 "Tests" and Scope)
 

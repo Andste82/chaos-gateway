@@ -110,13 +110,24 @@ func (c *APIClient) PostResolutions(ctx context.Context, rs []model.DnsResolutio
 	return nil
 }
 
+// The pauses of Follow between two failed attempts: they double from a second up to followPauseMax while no
+// configuration has been in use (the gateway's setup is not applied yet), and stay at followPauseInUse once one has:
+// a restart of the gateway drops the overlays, and the DNS faults of the configuration in use must not outlive them by
+// more than a moment (P5-AUDIT-14).
+const (
+	followPauseMax   = 10 * time.Second
+	followPauseInUse = 2 * time.Second
+)
+
 // Follow registers with the API and follows its configuration until ctx ends: the first request
 // asks for any configuration, every later one for a newer generation. A failure is retried with a
-// growing pause; the configuration in use stays. A failure is logged as a warning once, with a hint,
+// growing pause (followPauseMax, or followPauseInUse once a configuration has been in use); the
+// configuration in use stays. A failure is logged as a warning once, with a hint,
 // and again only when the error changes; the attempts in between are logged at debug level (issue
 // #57 F6: before the setup is applied the API cannot be reached, and every attempt was a warning).
 func (s *Server) Follow(ctx context.Context, c *APIClient, log *slog.Logger) {
 	var after int64
+	inUse := false
 	pause := time.Second
 	warned := ""
 	for ctx.Err() == nil {
@@ -140,13 +151,15 @@ func (s *Server) Follow(ctx context.Context, c *APIClient, log *slog.Logger) {
 				return
 			case <-s.opt.Clock.After(pause):
 			}
-			if pause < 10*time.Second {
-				pause *= 2
+			limit := followPauseMax
+			if inUse {
+				limit = followPauseInUse
 			}
+			pause = min(pause*2, limit)
 			continue
 		case cfg != nil:
 			s.SetConfig(cfg)
-			after = cfg.Generation
+			after, inUse = cfg.Generation, true
 			log.Info("the DNS configuration is in use", "generation", cfg.Generation, "networks", len(cfg.Networks), "upstream", cfg.Upstream)
 		}
 		if warned != "" {

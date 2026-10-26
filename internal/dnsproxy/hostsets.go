@@ -204,8 +204,10 @@ func (p *parsedConfig) resolutionsOf(client netip.Addr, resp *dns.Msg) []model.D
 	return out
 }
 
-// report enters the addresses of an answer into the DNS-derived sets and returns when the gateway has done so.
-func (s *Server) report(ctx context.Context, client netip.Addr, r *dns.Msg, resp *dns.Msg) {
+// report enters the addresses of an answer into the DNS-derived sets and returns when the gateway has done so, or
+// after callTimeout. The deadline starts when the answer is known, not with the query: the upstream's bound may have
+// run out while a delay fault held the answer, and the set must still be updated before it is sent (plan §2.6).
+func (s *Server) report(client netip.Addr, r *dns.Msg, resp *dns.Msg) {
 	if s.rep == nil {
 		return
 	}
@@ -217,7 +219,7 @@ func (s *Server) report(ctx context.Context, client netip.Addr, r *dns.Msg, resp
 	if len(rs) == 0 {
 		return
 	}
-	cctx, cancel := context.WithTimeout(ctx, callTimeout)
+	cctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
 	if err := s.rep.report(cctx, rs); err != nil {
 		s.opt.Log.Warn("the answer goes out although the gateway did not take its addresses into the sets: a hostname fault may miss the first packets", "name", r.Question[0].Name, "error", err)

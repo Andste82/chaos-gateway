@@ -179,8 +179,9 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			resp.Truncate(udpSize(r))
 		}
 		// the addresses of the answer go into the DNS-derived sets before the answer is sent, so the first
-		// packet of the device already matches (plan §2.6)
-		s.report(ctx, client, r, resp)
+		// packet of the device already matches (plan §2.6); the report has a deadline of its own, as a delay
+		// fault may have held the answer past ctx's (P5-AUDIT-11)
+		s.report(client, r, resp)
 		_ = w.WriteMsg(resp)
 	}
 	e.Time = start

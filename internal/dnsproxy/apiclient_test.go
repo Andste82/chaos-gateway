@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -161,4 +162,77 @@ func TestTheProxyWarnsOnceWhileTheAPICannotBeReached(t *testing.T) {
 	if n := countLines(got, "level=INFO", "can be fetched again"); n != 1 {
 		t.Errorf("the recovery is said %d times, want once:\n%s", n, got)
 	}
+}
+
+// P5-AUDIT-14: a restart of the gateway drops the overlays, and with them the DNS faults, while the proxy keeps the configuration in
+// use as long as the API cannot be reached. Once a configuration has been in use the pause between two attempts stays at
+// followPauseInUse (2 s), however long the API was away, so the configuration without the dropped faults is in use within it.
+func TestTheProxyAsksAgainWithinTwoSecondsOnceAConfigurationWasInUse(t *testing.T) {
+	var phase atomic.Value
+	phase.Store("ok")
+	var requests atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		switch phase.Load().(string) {
+		case "ok":
+			if r.URL.Query().Get("after") != "0" {
+				<-r.Context().Done()
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"generation":1,"networks":[],"upstream":[],"faults":[` + fault(ovA, `"action":"nxdomain"`) + `]}`))
+		case "back":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"generation":2,"networks":[],"upstream":[],"faults":[]}`))
+			phase.Store("idle")
+		case "idle":
+			<-r.Context().Done()
+		default:
+			http.Error(w, "restarting", http.StatusServiceUnavailable)
+		}
+	}))
+	defer ts.Close()
+	token := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(token, []byte("svc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clk := clock.NewFake(time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC))
+	c := &APIClient{Base: ts.URL, TokenFile: token, Wait: 5 * time.Second}
+	defer c.CloseIdleConnections()
+	s := New(Options{Clock: clk})
+	armed := clk.Pending()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	faultsInUse := func() int {
+		if pc := s.parsed.Load(); pc != nil {
+			return len(pc.faults)
+		}
+		return -1
+	}
+	// the API goes away while the long poll after the first configuration waits
+	waitUntil := func(what string, ok func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !ok() {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s", what)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	go s.Follow(ctx, c, slog.New(slog.DiscardHandler))
+	waitUntil("the first configuration is not in use", func() bool { return faultsInUse() == 1 })
+	phase.Store("down")
+	c.CloseIdleConnections()
+	ts.CloseClientConnections() // the long poll fails, as the API's container stops
+	for i := range 8 {
+		clk.BlockUntil(armed + 1)
+		before := requests.Load()
+		if i == 7 {
+			phase.Store("back")
+		}
+		clk.Advance(followPauseInUse)
+		waitUntil(fmt.Sprintf("attempt %d did not come within %v of the one before", i+2, followPauseInUse), func() bool { return requests.Load() > before })
+	}
+	waitUntil("the configuration without the dropped fault is not in use", func() bool { return faultsInUse() == 0 })
 }

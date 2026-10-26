@@ -132,8 +132,11 @@ func (t *Target) serviceForwardGuard() []Rule {
 // towards the uplink, and towards the test networks and the WireGuard tunnels of the test role (ifsTest), where the servers
 // are that a connection passed on by the TLS responder or the interception proxy has to reach (plan M21, P5-M21-02). The rule
 // stands after the access rules and the matrix: they cannot judge the connection (it comes in on svc0, from the namespace's
-// address), so the API judged the original connection before a service opened this one (`AccessDecision`), and the management
-// network (the management interface, the WireGuard networks of the role management) is not among the interfaces it accepts.
+// address), so the API judged the original connection before a service opened this one (`AccessDecision`). The management
+// interface and the WireGuard networks of the role management are not among the interfaces it accepts; in the two-port
+// topology the management network lies behind the uplink and the accept towards the uplink lets the namespace reach it: only
+// `AccessDecision` (its management guard) refuses a connection there (a guard by address here would also block a DNS
+// upstream in the management network; plan §3.3, P5-AUDIT-17).
 func (t *Target) serviceForward(ifsCG, ifsTest string, uplink string) []Rule {
 	if t.Service == nil {
 		return nil

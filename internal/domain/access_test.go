@@ -272,6 +272,41 @@ func TestANetworkIncludesTheNetworksBehindItsDownstreamRoutes(t *testing.T) {
 	}
 }
 
+// What the gateway routes back into the network it came from (a device of IoT to a host behind IoT's downstream
+// router) leaves through the bridge it came in on: the kernel accepts it in front of the management guard, the access
+// rules and the matrix (`iifname br-x oifname br-x accept`), so the verdict and explain say allow, where the matrix's
+// default would have said drop (P5-AUDIT-03).
+func TestTrafficRoutedBackIntoItsOwnNetworkIsAllowedBeforeTheRulesAndTheMatrix(t *testing.T) {
+	tw := newTestWorld(t, false)
+	withIoTRouter(t, tw.cfg)
+	rule := tw.overlay("target: {network: IoT}\nrule: {protocol: tcp, ports: [8883], action: drop}", 0)
+	w := tw.world()
+	a := netip.MustParseAddr
+	facts := AccessFacts{Gateway: []netip.Addr{a("10.10.0.1")}, Management: []netip.Prefix{netip.MustParsePrefix("192.168.56.0/24")}}
+	for _, c := range []struct{ name, src, dst string }{
+		{"a device of IoT to a host behind IoT's router", "10.10.0.31", "10.30.0.5"},
+		{"a host behind IoT's router to a device of IoT", "10.30.0.5", "10.10.0.31"},
+		{"two hosts of IoT's subnet (switched, seen with br_netfilter)", "10.10.0.31", "10.10.0.40"},
+	} {
+		if got := w.AccessVerdict(a(c.src), a(c.dst), "tcp", 443, facts); got.Verdict != "allow" || got.Layer != AccessMatrix || !strings.Contains(got.Reason, "same local test network") {
+			t.Errorf("%s: %+v", c.name, got)
+		}
+		// the kernel's accept stands in front of the access rules too: the network's drop rule is not asked
+		got := w.AccessDecision(Query{Source: Subject{IP: a(c.src), Network: idIoT}, DestIP: a(c.dst), Protocol: "tcp", Port: 8883}, facts)
+		if got.Verdict != "allow" || got.Rule != "" {
+			t.Errorf("%s, explain: %+v", c.name, got)
+		}
+	}
+	// another network to the host behind IoT's router is still the matrix's (no entry: the default drop), and the rule still
+	// decides what leaves IoT for somewhere else
+	if got := w.AccessVerdict(a("10.20.0.7"), a("10.30.0.5"), "tcp", 443, facts); got.Verdict != "drop" || !strings.Contains(got.Reason, "the default") {
+		t.Errorf("another network: %+v", got)
+	}
+	if got := w.AccessDecision(Query{Source: Subject{IP: a("10.10.0.31"), Network: idIoT}, DestIP: a("203.0.113.10"), Protocol: "tcp", Port: 8883}, facts); got.Verdict != "drop" || got.Rule != rule.Id.String() {
+		t.Errorf("the uplink: %+v", got)
+	}
+}
+
 func mustPrefixes(w *World, sc model.Scope) []netip.Prefix {
 	p, _ := w.ScopePrefixes(sc, Identity{})
 	return p

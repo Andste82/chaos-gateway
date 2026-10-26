@@ -264,8 +264,12 @@ func (w *World) AccessDecision(q Query, f AccessFacts) AccessExplanation {
 		}
 	}
 	// the management guard stands in front of the rules, as in the forward chain: no rule, an allow
-	// rule included, opens the management network for a device under test
+	// rule included, opens the management network for a device under test; the accept of what a test
+	// network's bridge routes back into it stands in front of both
 	if !toGateway {
+		if a, ok := w.sameBridge(src, dst); ok {
+			return a
+		}
 		if g, ok := w.mgmtGuard(src, dst, f); ok {
 			return g
 		}
@@ -343,6 +347,9 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 		}
 		return AccessExplanation{Verdict: "drop", Layer: AccessGatewayProtection, Reason: "a test network reaches only ICMP echo, DNS and DHCP on the gateway"}
 	}
+	if a, ok := w.sameBridge(src, dst); ok {
+		return a
+	}
 	if g, ok := w.mgmtGuard(src, dst, f); ok {
 		return g
 	}
@@ -409,6 +416,22 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 		}
 	}
 	return AccessExplanation{Verdict: "drop", Layer: AccessMatrix, Reason: "the default: no entry allows this traffic"}
+}
+
+// sameBridge is the accept of the forward chain for what a local test network's bridge sends back out through
+// itself (`iifname br-x oifname br-x accept`, compiler.Compile): traffic switched inside the network that
+// br_netfilter shows the forward hook, and traffic the gateway routes back into the network, to a host behind the
+// network's downstream router (its routes, plan §2.2.2), which belongs to the network. It stands in front of the
+// management guard, the access rules and the matrix, so none of them is asked (P5-AUDIT-03). The network of an address
+// is the one with the longest prefix that holds it, as the gateway's routes pick the bridge.
+func (w *World) sameBridge(src, dst netip.Addr) (AccessExplanation, bool) {
+	from, ok1 := w.NetworkOf(src)
+	to, ok2 := w.NetworkOf(dst)
+	if !ok1 || !ok2 || from != to || !w.Index.Networks[from].IsLan() {
+		return AccessExplanation{}, false
+	}
+	return AccessExplanation{Verdict: "allow", Layer: AccessMatrix, Reason: "the source and the destination are in the same local test network (" + w.Index.Networks[from].Name +
+		"), whose bridge the traffic leaves through again: the gateway never filters it, no access rule or matrix entry is asked"}, true
 }
 
 // mgmtGuard is the guard of the forward chain (plan §2.16): a device under test (a packet that comes

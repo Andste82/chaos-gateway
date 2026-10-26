@@ -12,8 +12,8 @@
 # It signs with the test CA, which the API makes in the volume `chaosgw-tlsca` and which this container reads, key included
 # (the volume is the CAs' alone), and starts mitmproxy again when `POST /tls/ca/regenerate` replaces it. It needs no capability (its
 # ports are above 1024) and keeps its working files in a tmpfs. The certificates of the servers are verified against the bundle of
-# mitmproxy; `CHAOSGW_UPSTREAM_CA_FILE` names other CAs (a file in a volume you mount), `CHAOSGW_UPSTREAM_INSECURE=1` verifies
-# nothing (a lab with private servers). Both are the default of the installation: a case says otherwise for its own devices with
+# mitmproxy; `CHAOSGW_UPSTREAM_CA_FILE` names other CAs (the path of a file you mount into the container, docs/install.md section 3
+# has a compose file for it), `CHAOSGW_UPSTREAM_INSECURE=1` verifies nothing (a lab with private servers). Both are the default of the installation: a case says otherwise for its own devices with
 # `intercept.upstream` (`verify`: the bundle, `own_ca`: the file named here, `insecure`: no check).
 services:
   tls-proxy:
@@ -50,7 +50,9 @@ services:
     depends_on:
       svcns:
         condition: service_started
-        # a recreated holder has a new namespace: the proxy has to join it again
+        # a recreated holder has a new namespace: the proxy has to join it again. This acts on Compose operations only; after a restart
+        # of the holder by the daemon the launcher notices that its namespace lost the service address 169.254.100.2 and exits (code 3,
+        # --namespace-check, on by default), and `restart` brings it back into the current namespace
         restart: true
     restart: unless-stopped
     stop_grace_period: 15s

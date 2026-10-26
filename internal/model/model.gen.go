@@ -4710,7 +4710,8 @@ type HttpRule struct {
 	// empty body, also without the server; `delay` waits for `delay` before the request goes on; `throttle` paces the bytes
 	// sent to the device at `rate`, for the response to the request the rule matches (the next request of the connection
 	// sets its own pacing, none when no throttle rule matches it; the streams of one HTTP/2 connection share it); `abort` resets the
-	// connection to the device; `modify` changes the request and response as `modify` says.
+	// connection to the device; `modify` changes the request and response as `modify` says (its response headers are also
+	// set on the answer of a later `block` or `status` rule, e.g. `Retry-After` on a 503).
 	Action HttpRuleAction `json:"action"`
 
 	// Delay For `delay`.
@@ -4731,7 +4732,8 @@ type HttpRule struct {
 // empty body, also without the server; `delay` waits for `delay` before the request goes on; `throttle` paces the bytes
 // sent to the device at `rate`, for the response to the request the rule matches (the next request of the connection
 // sets its own pacing, none when no throttle rule matches it; the streams of one HTTP/2 connection share it); `abort` resets the
-// connection to the device; `modify` changes the request and response as `modify` says.
+// connection to the device; `modify` changes the request and response as `modify` says (its response headers are also
+// set on the answer of a later `block` or `status` rule, e.g. `Retry-After` on a 503).
 type HttpRuleAction string
 
 // ImpairmentParams Flat `NetemParams` apply to both directions. Alternatively `upload` and/or `download`

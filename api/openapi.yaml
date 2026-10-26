@@ -2258,7 +2258,8 @@ paths:
         The lines are in the NSS key log format that Wireshark reads. The API adds them to the key log of every running
         capture whose scope covers the client (`GET /captures/{id}/download?part=keylog`), which marks the capture
         `sensitive`. Nothing is kept when no capture runs: secrets of a connection that no capture saw are of no use and are not
-        stored.
+        stored. A batch whose `overlay` names no case `intercept` in force, or one with `keylog: false`, is dropped (the proxy
+        does not send such lines; the API does not take them either).
       x-internal: true
       x-milestone: M22
       x-required-scope: service
@@ -3828,7 +3829,8 @@ components:
             empty body, also without the server; `delay` waits for `delay` before the request goes on; `throttle` paces the bytes
             sent to the device at `rate`, for the response to the request the rule matches (the next request of the connection
             sets its own pacing, none when no throttle rule matches it; the streams of one HTTP/2 connection share it); `abort` resets the
-            connection to the device; `modify` changes the request and response as `modify` says.
+            connection to the device; `modify` changes the request and response as `modify` says (its response headers are also
+            set on the answer of a later `block` or `status` rule, e.g. `Retry-After` on a 503).
           enum: [block, status, delay, throttle, abort, modify]
         status:
           type: integer

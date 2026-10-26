@@ -127,8 +127,8 @@ gateway's addon, in the service namespace behind the TLS responder. It is not in
 (`COMPOSE_FILE=...:compose.tls.yaml:compose.tlsproxy.yaml:...`) when you want to inspect and change the HTTP(S) traffic of
 a device that trusts the test CA. Without it the other cases work, and a connection that an interception case selects is
 reset (the health check lists the component `tls_proxy` as degraded while such a case is in force). The proxy checks the
-certificates of the servers it connects to against the bundle of mitmproxy: set `CHAOSGW_UPSTREAM_CA_FILE` (a CA file in a
-volume you mount into the container) for servers with a private CA, or `CHAOSGW_UPSTREAM_INSECURE=1` to verify nothing. These
+certificates of the servers it connects to against the bundle of mitmproxy: set `CHAOSGW_UPSTREAM_CA_FILE` (a CA file that you
+mount into the container, below) for servers with a private CA, or `CHAOSGW_UPSTREAM_INSECURE=1` to verify nothing. These
 two settings are the installation's default; a case can say otherwise for its own devices with `intercept.upstream`: `verify`
 (the bundle, whatever the installation says), `own_ca` (the CA file of the installation and no other CA; a case that asks for it
 where the installation has none is refused, with the reason in the log of the exchanges) or `insecure` (no check of the server's
@@ -139,6 +139,35 @@ install the new one. Captures that run while a device talks through the proxy ge
 Wireshark, so such a capture is marked sensitive. The web app has the **Interception** screen for all of this (the cases and their HTTP rules,
 the exchanges the proxy saw, the download and the replacement of the test CA), and `chaosctl` has `intercept set`, `intercept flows` and
 `tls ca` ("Command line client" below).
+
+The container of the proxy is read-only and mounts only its two volumes, so a CA file of your own needs a mount. Put the file on
+the host (PEM, one or more CA certificates, readable by the proxy's user 65532, for example mode `0644`), add a compose file of your
+own next to the others, and name it in `COMPOSE_FILE` after `compose.tlsproxy.yaml` (with `COMPOSE_FILE` set, Compose does not read a
+`compose.override.yaml` by itself):
+
+```yaml
+# deploy/compose.local.yaml
+services:
+  tls-proxy:
+    environment:
+      CHAOSGW_UPSTREAM_CA_FILE: /etc/chaosgw/upstream-ca.pem
+    volumes:
+      - type: bind
+        source: /etc/chaos-gateway/upstream-ca.pem  # the file on the host
+        target: /etc/chaosgw/upstream-ca.pem
+        read_only: true
+```
+
+```sh
+export COMPOSE_FILE=compose.executor.yaml:compose.api.yaml:compose.kea.yaml:compose.dns.yaml:compose.tls.yaml:compose.tlsproxy.yaml:compose.local.yaml:compose.bird.yaml
+docker compose up -d tls-proxy
+docker compose logs tls-proxy | grep 'CA file'   # nothing: the file is readable; a warning names what is wrong
+```
+
+The variable is the path inside the container. A path that the container cannot read gives a proxy that starts and looks healthy,
+while every connection that is verified against the file fails (the device gets a 502 page); the proxy says so in its log at the
+start. Like the DNS proxy and the TLS responder, the proxy leaves the service namespace when it loses the service address (after a
+restart of the `svcns` container): it exits with code 3 and its restart policy brings it into the new namespace.
 
 ## 4. Finish the setup
 

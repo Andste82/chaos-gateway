@@ -360,16 +360,19 @@ func TestAShortLeaseOfASubnetIsWhatEveryClientGetsEvenOneThatAsksForAnHour(t *te
 }
 
 // A lease class gives the clients of a device a lease time of their own while the subnet keeps its time for the others.
+// Each client asks for an hour before it takes a lease: once it holds one, Kea's lease caching may answer a DISCOVER
+// with what is left of that lease, a second less when the clock crosses a second in between (the nightly on
+// 7.0.0-38-generic, run 40288147095).
 func TestALeaseClassGivesItsClientsTheirOwnLeaseTimeAndNoOtherClient(t *testing.T) {
 	cfg := Config{Subnets: []Subnet{loopbackSubnet()}, LeaseClasses: []LeaseClass{{Name: "cgw-test", MACs: []string{macA, "02:00:00:00:00:A1"}, Seconds: 9, Min: 9, Max: 9}}}
 	startLoopbackKea(t, cfg)
 	r := newRelay(t, "127.0.0.2")
 	for _, mac := range []string{macA, "02:00:00:00:00:a1"} {
-		if ack := r.take(mac); leaseOf(t, ack) != 9*time.Second {
-			t.Errorf("%s: %v, want its class's 9s", mac, leaseOf(t, ack))
-		}
 		if offer, _ := r.asksFor(mac, time.Hour); leaseOf(t, offer) != 9*time.Second {
 			t.Errorf("%s asking for an hour: %v", mac, leaseOf(t, offer))
+		}
+		if ack := r.take(mac); leaseOf(t, ack) != 9*time.Second {
+			t.Errorf("%s: %v, want its class's 9s", mac, leaseOf(t, ack))
 		}
 	}
 	if ack := r.take(macB); leaseOf(t, ack) != 10*time.Minute {

@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1
 #
 # Multi-arch image (linux/amd64, linux/arm64) of the Chaos Gateway core binaries (plan §3.7,
-# §3.8). M1 builds what exists so far, chaosgw and chaosctl; the full image with Kea, BIRD,
-# tcpdump and the mitmproxy sidecar follows with M28.
+# §3.8). It holds chaosgw, chaosctl, the pinned Kea and BIRD and the interception proxy (mitmproxy in
+# its own virtualenv with the addon of sidecars/tls-proxy, M22); M28 adds tcpdump and the rest of
+# the container deployment.
 #
 #   docker buildx build --platform linux/amd64,linux/arm64 -f deploy/Dockerfile .   (make image)
 

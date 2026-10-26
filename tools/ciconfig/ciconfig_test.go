@@ -124,6 +124,34 @@ func TestEveryTestbedRunNamesTheLevel1Lists(t *testing.T) {
 	}
 }
 
+// The CI section of docs/development.md quotes the -expect-pass list of the testbed jobs; it names every list of
+// .github/level1-tests.env, so that a maintainer who edits a workflow from the document drops none of them
+// (P5-AUDIT-42: M22_LEVEL1 and M23_LEVEL1 were missing).
+func TestTheDevelopmentGuideQuotesEveryLevel1List(t *testing.T) {
+	var lists []string
+	for _, l := range strings.Split(read(t, ".github", "level1-tests.env"), "\n") {
+		if m := regexp.MustCompile(`^([A-Z0-9_]+)=.+`).FindStringSubmatch(l); m != nil {
+			lists = append(lists, m[1])
+		}
+	}
+	m := regexp.MustCompile("pass `-expect-pass ([^`]*)`").FindStringSubmatch(read(t, "docs", "development.md"))
+	if m == nil {
+		t.Fatal("docs/development.md quotes no `-expect-pass ...` list of the testbed jobs")
+	}
+	quoted := map[string]bool{}
+	for _, v := range strings.Split(m[1], ",") {
+		quoted[strings.TrimPrefix(v, "$")] = true
+	}
+	for _, name := range lists {
+		if !quoted[name] {
+			t.Errorf("docs/development.md quotes -expect-pass without $%s: %s", name, m[1])
+		}
+	}
+	if len(quoted) != len(lists) {
+		t.Errorf("docs/development.md quotes %d lists, .github/level1-tests.env has %d (%v)", len(quoted), len(lists), lists)
+	}
+}
+
 // The interception proxy (M22) runs the same mitmproxy everywhere: in the image of the gateway, in the testbed image the level 1 tests run in and in the
 // level 0 job that starts the real one for the tests of the responder. A version that differs in one of them would test something other than what ships.
 func TestMitmproxyIsOneVersionInTheImageTheTestbedAndTheLevel0Job(t *testing.T) {

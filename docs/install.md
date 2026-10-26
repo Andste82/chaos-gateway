@@ -136,7 +136,8 @@ certificate). A server that is refused answers the device with a 502 page over t
 CA can be replaced (`POST /api/v1/tls/ca/regenerate`, scope `full`); every device that installed the old certificate then has to
 install the new one. Captures that run while a device talks through the proxy get the TLS secrets of its connections as a key log
 (`GET /api/v1/captures/{id}/download?part=keylog`, scope `full`): the capture and its key log together show the traffic in
-Wireshark, so such a capture is marked sensitive. The web app has the **Interception** screen for all of this (the cases and their HTTP rules,
+Wireshark, so such a capture is marked sensitive. The image of the proxy is built for ARM64 too, but the proxy is not validated
+on ARM64 hardware (a Raspberry Pi) yet: its load there is measured with the hardware lab (plan H1). The web app has the **Interception** screen for all of this (the cases and their HTTP rules,
 the exchanges the proxy saw, the download and the replacement of the test CA), and `chaosctl` has `intercept set`, `intercept flows` and
 `tls ca` ("Command line client" below).
 

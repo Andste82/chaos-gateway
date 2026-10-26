@@ -30,6 +30,8 @@ const props = defineProps<{
   name: string;
   /** The network the actions are about has DHCP switched off. */
   dhcpOff?: boolean;
+  /** The device is in no network the gateway serves (it was seen only on a network that is no longer configured). */
+  noNetwork?: boolean;
   /** The device has no MAC address the DHCP server could know it by. */
   noMac?: boolean;
 }>();
@@ -59,11 +61,12 @@ const blocked = computed(() => !!state.data.value?.pending_confirm || connection
 const buttons = computed(() => dhcpActionsFor(kind.value));
 /** Why an action cannot be made, when it cannot. */
 function unavailable(a: DhcpActionName): string | undefined {
+  if (props.noNetwork) return 'This device is in no network with DHCP: an action has nothing to change.';
   if (props.dhcpOff) return 'DHCP is off in this network: an action has nothing to change.';
   if (a === 'force_new_ip' && props.noMac) return 'The device has no MAC address: a reservation cannot be made for it.';
   return undefined;
 }
-const reason = computed(() => (props.dhcpOff ? unavailable('silence') : props.noMac && kind.value === 'device' ? unavailable('force_new_ip') : undefined));
+const reason = computed(() => (props.dhcpOff || props.noNetwork ? unavailable('silence') : props.noMac && kind.value === 'device' ? unavailable('force_new_ip') : undefined));
 
 const dialogOpen = ref(false);
 const dialogAction = ref<DhcpActionName>('short_lease');

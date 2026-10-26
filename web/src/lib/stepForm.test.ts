@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Scenario, Scope, Step } from '../api/generated/model';
 import { GetScenarioResponse } from '../api/generated/zod/config/config';
+import type { StepType } from './scenarios';
 import { editableTypes, emptyStepForm, formToStep, stepFieldOf, stepFormErrors, stepToForm, type StepForm } from './stepForm';
 import { ESP, mqttOutage } from './scenarioFixtures';
 
@@ -48,6 +49,26 @@ describe('the step form', () => {
     // a case written with its protocol keeps it
     const tcp: Step = { id: 'm', at: '13s', tls: { case: 'expired', protocol: 'tcp', ports: [8883], sni: ['broker.example.com'], cut_existing: true } };
     expect(formToStep(stepToForm(tcp))).toEqual(tcp);
+  });
+
+  it('a step of a type the editor does not make is kept as it is, and sent back with only its id, time and narrowing changed', () => {
+    // every type of this build has a form, so the branch is reached by taking one out of the set for the length of the test
+    const types = editableTypes as Set<StepType>;
+    types.delete('dhcp');
+    try {
+      const step: Step = { id: 'k', at: '11s', dhcp: { action: 'short_lease', lease_time: '30s' } };
+      const f = stepToForm(step);
+      expect(f.kept).toEqual(step);
+      expect(formToStep(f)).toEqual(step);
+      f.id = ' k2 ';
+      f.at = '12s';
+      f.narrow = `device:${ESP}`;
+      expect(formToStep(f)).toEqual({ id: 'k2', at: '12s', target: { device: ESP }, dhcp: { action: 'short_lease', lease_time: '30s' } });
+      expect(stepFormErrors(f, ctx)).toEqual({});
+    } finally {
+      types.add('dhcp');
+    }
+    expect(stepToForm({ id: 'k', at: '11s', dhcp: { action: 'silence' } }).kept).toBeUndefined();
   });
 
   it('a step that is edited keeps what the form leaves out; a tunnel step and a WireGuard action never narrow', () => {

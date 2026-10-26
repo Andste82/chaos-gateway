@@ -105,6 +105,15 @@ export function effectivePools(address: string | undefined, pools: DhcpPool[] | 
 }
 
 /**
+ * Whether the gateway serves DHCP in a local test network: only where the network has a `dhcp` block that is not
+ * switched off (the compiler gives the DHCP server no subnet for any other, and the engine and the warnings read it
+ * the same way). The one rule of the web app for "DHCP is off" (P5-AUDIT-08; P5-AUDIT-10 may change it here).
+ */
+export function dhcpServed(lan: { dhcp?: { enabled?: boolean } } | undefined): boolean {
+  return !!lan?.dhcp && lan.dhcp.enabled !== false;
+}
+
+/**
  * The pool of a local test network that a fixed address (a DHCP reservation, `Device.fixed_ip`) lies in, or
  * undefined: the gateway's warning `fixed_ip_in_pool` (#76). A reservation inside a pool is allowed, but while
  * another client holds the address the device gets a different one from the pool until that lease is released,
@@ -116,7 +125,7 @@ export function reservationPool(
   ip: string | undefined,
 ): { pool: DhcpPool; isDefault: boolean } | undefined {
   const a = parseIPv4(ip);
-  if (!lan?.dhcp || lan.dhcp.enabled === false || a === undefined) return undefined;
+  if (!lan?.dhcp || !dhcpServed(lan) || a === undefined) return undefined;
   const { pools, isDefault } = effectivePools(lan.address, lan.dhcp.pools);
   const pool = pools.find((p) => {
     const from = parseIPv4(p.start);

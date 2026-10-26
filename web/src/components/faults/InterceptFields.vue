@@ -8,10 +8,12 @@ import { computed, useId } from 'vue';
 import {
   actionText,
   emptyRule,
+  headerProblemRow,
   httpActions,
   matchText,
   maxRules,
   methods,
+  replaceProblemRow,
   ruleKey,
   unreachableRules,
   upstreamPolicies,
@@ -21,7 +23,7 @@ import {
   type RuleField,
 } from '../../lib/interceptForm';
 
-defineProps<{ errors: Partial<Record<string, string>> }>();
+const props = defineProps<{ errors: Partial<Record<string, string>> }>();
 const form = defineModel<InterceptForm>({ required: true });
 const uid = useId();
 const fid = (name: string) => `${uid}-${name}`;
@@ -54,6 +56,18 @@ const headerKinds = [
 function addHeader(r: HttpRuleForm, key: 'requestHeaders' | 'responseHeaders') {
   r[key].push({ name: '', value: '', remove: false } satisfies HeaderRow);
 }
+// the messages of a modify rule are tied to the controls they speak of: the message of a list of headers or of the texts to replace
+// describes each input of the list and marks the row it names invalid (every row when the gateway named only the list); the message
+// that the rule changes nothing describes the rule's Action (P5-AUDIT-38)
+function rowInvalid(i: number, f: 'requestHeaders' | 'responseHeaders' | 'replaces', j: number): boolean {
+  if (!props.errors[rerr(i, f)]) return false;
+  const rule = form.value.rules[i]!;
+  const row = f === 'replaces' ? replaceProblemRow(rule.replaces) : headerProblemRow(rule[f]);
+  return row < 0 || row === j;
+}
+const rowDescribedBy = (i: number, f: RuleField) => (props.errors[rerr(i, f)] ? `${rid(i, f)}-error` : undefined);
+const actionDescribedBy = (i: number, r: HttpRuleForm) =>
+  [rid(i, 'action-hint'), r.action === 'modify' && props.errors[rerr(i, 'modify')] ? `${rid(i, 'modify')}-error` : ''].filter(Boolean).join(' ');
 </script>
 
 <template>
@@ -165,7 +179,13 @@ function addHeader(r: HttpRuleForm, key: 'requestHeaders' | 'responseHeaders') {
             <div class="grid grid-cols-2 gap-3">
               <div>
                 <label class="label" :for="rid(i, 'action')">Action</label>
-                <select :id="rid(i, 'action')" v-model="rule.action" class="input" :aria-describedby="rid(i, 'action-hint')">
+                <select
+                  :id="rid(i, 'action')"
+                  v-model="rule.action"
+                  class="input"
+                  :aria-invalid="rule.action === 'modify' && !!errors[rerr(i, 'modify')]"
+                  :aria-describedby="actionDescribedBy(i, rule)"
+                >
                   <option v-for="a in httpActions" :key="a.value" :value="a.value">{{ a.label }}</option>
                 </select>
               </div>
@@ -207,21 +227,41 @@ function addHeader(r: HttpRuleForm, key: 'requestHeaders' | 'responseHeaders') {
             <p :id="rid(i, 'action-hint')" class="m-0 -mt-1 text-[13px] text-text-2" data-testid="action-hint">{{ actionHint(rule) }}</p>
 
             <template v-if="rule.action === 'modify'">
-              <p v-if="errors[rerr(i, 'modify')]" class="field-error m-0">{{ errors[rerr(i, 'modify')] }}</p>
+              <p v-if="errors[rerr(i, 'modify')]" :id="`${rid(i, 'modify')}-error`" class="field-error m-0">{{ errors[rerr(i, 'modify')] }}</p>
               <div v-for="k in headerKinds" :key="k.key" class="flex flex-col gap-2" role="group" :aria-label="`${k.label} of rule ${i + 1}`">
                 <div class="flex items-center justify-between">
                   <span class="text-[13px] text-text-2">{{ k.label }}</span>
                   <button type="button" class="btn btn-sm" :aria-label="`Add a ${k.what} header to rule ${i + 1}`" @click="addHeader(rule, k.key)">Add header</button>
                 </div>
                 <div v-for="(h, j) in rule[k.key]" :key="j" class="grid grid-cols-[1fr_1.4fr_auto_auto] items-center gap-2">
-                  <input v-model="h.name" class="input mono" placeholder="Header" :aria-label="`${k.label} of rule ${i + 1}, header ${j + 1} name`" />
-                  <input v-model="h.value" class="input mono" placeholder="value" :disabled="h.remove" :aria-label="`${k.label} of rule ${i + 1}, header ${j + 1} value`" />
+                  <input
+                    v-model="h.name"
+                    class="input mono"
+                    placeholder="Header"
+                    :aria-label="`${k.label} of rule ${i + 1}, header ${j + 1} name`"
+                    :aria-invalid="rowInvalid(i, k.key, j)"
+                    :aria-describedby="rowDescribedBy(i, k.key)"
+                  />
+                  <input
+                    v-model="h.value"
+                    class="input mono"
+                    placeholder="value"
+                    :disabled="h.remove"
+                    :aria-label="`${k.label} of rule ${i + 1}, header ${j + 1} value`"
+                    :aria-invalid="rowInvalid(i, k.key, j)"
+                    :aria-describedby="rowDescribedBy(i, k.key)"
+                  />
                   <label class="flex items-center gap-1.5 text-[13px] text-text-2">
-                    <input v-model="h.remove" type="checkbox" :aria-label="`${k.label} of rule ${i + 1}, header ${j + 1}: take the header away`" />Remove
+                    <input
+                      v-model="h.remove"
+                      type="checkbox"
+                      :aria-label="`${k.label} of rule ${i + 1}, header ${j + 1}: take the header away`"
+                      :aria-describedby="rowDescribedBy(i, k.key)"
+                    />Remove
                   </label>
                   <button type="button" class="btn btn-sm" :aria-label="`Remove ${k.what} header ${j + 1} of rule ${i + 1}`" @click="rule[k.key].splice(j, 1)">×</button>
                 </div>
-                <p v-if="errors[rerr(i, k.key)]" class="field-error m-0">{{ errors[rerr(i, k.key)] }}</p>
+                <p v-if="errors[rerr(i, k.key)]" :id="`${rid(i, k.key)}-error`" class="field-error m-0">{{ errors[rerr(i, k.key)] }}</p>
               </div>
               <div class="flex flex-col gap-2" role="group" :aria-label="`Texts replaced in the response of rule ${i + 1}`">
                 <div class="flex items-center justify-between">
@@ -229,11 +269,25 @@ function addHeader(r: HttpRuleForm, key: 'requestHeaders' | 'responseHeaders') {
                   <button type="button" class="btn btn-sm" :aria-label="`Add a replacement to rule ${i + 1}`" @click="rule.replaces.push({ search: '', replace: '' })">Add replacement</button>
                 </div>
                 <div v-for="(x, j) in rule.replaces" :key="j" class="grid grid-cols-[1fr_1fr_auto] items-center gap-2">
-                  <input v-model="x.search" class="input mono" placeholder="search for" :aria-label="`Replacement ${j + 1} of rule ${i + 1}: search for`" />
-                  <input v-model="x.replace" class="input mono" placeholder="replace with" :aria-label="`Replacement ${j + 1} of rule ${i + 1}: replace with`" />
+                  <input
+                    v-model="x.search"
+                    class="input mono"
+                    placeholder="search for"
+                    :aria-label="`Replacement ${j + 1} of rule ${i + 1}: search for`"
+                    :aria-invalid="rowInvalid(i, 'replaces', j)"
+                    :aria-describedby="rowDescribedBy(i, 'replaces')"
+                  />
+                  <input
+                    v-model="x.replace"
+                    class="input mono"
+                    placeholder="replace with"
+                    :aria-label="`Replacement ${j + 1} of rule ${i + 1}: replace with`"
+                    :aria-invalid="rowInvalid(i, 'replaces', j)"
+                    :aria-describedby="rowDescribedBy(i, 'replaces')"
+                  />
                   <button type="button" class="btn btn-sm" :aria-label="`Remove replacement ${j + 1} of rule ${i + 1}`" @click="rule.replaces.splice(j, 1)">×</button>
                 </div>
-                <p v-if="errors[rerr(i, 'replaces')]" class="field-error m-0">{{ errors[rerr(i, 'replaces')] }}</p>
+                <p v-if="errors[rerr(i, 'replaces')]" :id="`${rid(i, 'replaces')}-error`" class="field-error m-0">{{ errors[rerr(i, 'replaces')] }}</p>
                 <p v-if="rule.replaces.length" class="m-0 text-[13px] text-text-2">The text is searched as UTF-8 in the body of the response, which the proxy holds whole in memory to change it.</p>
               </div>
             </template>

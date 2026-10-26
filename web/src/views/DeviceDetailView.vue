@@ -44,6 +44,7 @@ import { deviceNetworkInfo, deviceStatus, displayName, isAdopted, isConfigured, 
 import { describeMatch, describeScope, faultChips, overlayChips } from '../lib/faults';
 import { focusAfterUpdate } from '../lib/focus';
 import { profileTitle } from '../lib/profileNames';
+import { dhcpServed } from '../lib/networks';
 import { useDraftStore } from '../stores/draft';
 import { formatAgo, formatByteRate, formatClock, formatRemaining, subnetOf } from '../lib/format';
 import { useApiScreen } from '../stores/apiPanel';
@@ -79,8 +80,8 @@ const networkConfig = computed(() => network.value?.config as { name?: string; a
 const netInfo = computed(() => (d.value ? deviceNetworkInfo(network.value?.config, d.value.id) : undefined));
 /** The device is in no network the gateway serves (a WireGuard client has none: its card is left out). */
 const noNetwork = computed(() => !!networks.data.value && !network.value);
-/** DHCP is off where the device is. */
-const dhcpOff = computed(() => !!networks.data.value && !!network.value && (networkConfig.value as { dhcp?: { enabled?: boolean } } | undefined)?.dhcp?.enabled === false);
+/** DHCP is off where the device is: the gateway's rule, a network without a `dhcp` block included. */
+const dhcpOff = computed(() => !!networks.data.value && !!network.value && !dhcpServed(networkConfig.value as { dhcp?: { enabled?: boolean } } | undefined));
 /** The DHCP server knows a device by its MAC addresses, the configured ones or the seen ones. */
 const hasMac = computed(() => !!d.value && ((d.value.observed.macs?.length ?? 0) > 0 || (d.value.config?.identifiers?.macs?.length ?? 0) > 0));
 const groupNames = computed(() => (d.value?.groups ?? []).map((g) => names.value.group?.(g) ?? g));
@@ -113,7 +114,7 @@ const faults = computed<ActiveFault[]>(() => {
       kind: o.kind,
       target: own ? (d.value?.name ?? '') : describeScope(o.target, n),
       destination: [own ? '' : `via ${describeScope(o.target, n)}`, describeMatch(o.fault, n)].filter(Boolean).join(' '),
-      chips: overlayChips(o, n.profile),
+      chips: overlayChips(o, n.profile, n),
       packets: o.counters?.packets,
       expiresAt: o.expires_at,
       state: o.state,
@@ -304,7 +305,7 @@ useApiScreen('this device', () => [
 
         <DeviceExchanges :device="{ id: d.id, name: d.name }" :active="intercepted" />
 
-        <CapturePanel :device="{ id: d.id, name: d.name }" />
+        <CapturePanel :device="{ id: d.id, name: d.name, network: d.network }" />
       </div>
 
       <aside class="flex min-w-0 flex-col gap-5">

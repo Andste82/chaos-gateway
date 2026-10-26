@@ -71,7 +71,7 @@ const rows = computed(() => all.value.filter((d) => matchesFilter(d, filter.valu
 const bodies = computed<FaultBodies>(() => {
   const ov = new Map((overlays.data.value ?? []).map((o) => [o.id, o]));
   const cf = new Map((configFaults.data.value ?? []).map((f) => [f.id, f.config]));
-  return { overlay: (id) => ov.get(id), config: (id) => cf.get(id) };
+  return { overlay: (id) => ov.get(id), config: (id) => cf.get(id), names: names.value };
 });
 
 /** The name a discovered device is adopted under in the draft, while that is not applied yet. */

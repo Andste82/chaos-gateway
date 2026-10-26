@@ -112,15 +112,17 @@ export function dnsChips(d: DnsFault): string[] {
 /**
  * The chips of a TLS case: "TLS expired · 8883", "TLS self signed · broker.example.com", "TLS untrusted ca · 203.0.113.0/24 · cuts existing". The
  * interception adds what its settings change: "TLS intercept · 443 · 2 HTTP rules · QUIC allowed · no key log · servers not verified".
+ * A network destination is named as the dialog's preview names it ("network IoT"), its UUID only when the name is not at hand
+ * (P5-AUDIT-33).
  */
-export function tlsChips(t: TlsCase): string[] {
+export function tlsChips(t: TlsCase, names: Names = {}): string[] {
   const what = `TLS ${t.case.replace(/_/g, ' ')}`;
   const parts: string[] = [];
   const ports = [...(t.ports ?? []).map(String), ...(t.port_ranges ?? []).map((r) => `${r.from}-${r.to}`)];
   if (ports.length) parts.push(ports.join(', '));
   if (t.destination?.cidr) parts.push(t.destination.cidr);
   if (t.destination?.hostname) parts.push(t.destination.hostname);
-  if (t.destination?.network) parts.push(`network ${t.destination.network}`);
+  if (t.destination?.network) parts.push(`network ${names.network?.(t.destination.network) ?? t.destination.network}`);
   if (t.destination?.uplink) parts.push('uplink');
   if (t.sni?.length) parts.push(`SNI ${t.sni.join(', ')}`);
   if (t.cut_existing) parts.push('cuts existing');
@@ -161,8 +163,8 @@ export function dhcpChips(d: DhcpAction): string[] {
   }
 }
 
-/** The chips of an overlay, whatever its kind. */
-export function overlayChips(o: Overlay, profileName?: (ref: string) => string | undefined): string[] {
+/** The chips of an overlay, whatever its kind; the names give the networks a TLS case names their names. */
+export function overlayChips(o: Overlay, profileName?: (ref: string) => string | undefined, names: Names = {}): string[] {
   switch (o.kind) {
     case 'fault':
       return faultChips(o.fault);
@@ -173,7 +175,7 @@ export function overlayChips(o: Overlay, profileName?: (ref: string) => string |
     case 'dns':
       return o.dns ? dnsChips(o.dns) : ['DNS fault'];
     case 'tls':
-      return o.tls ? tlsChips(o.tls) : ['TLS case'];
+      return o.tls ? tlsChips(o.tls, names) : ['TLS case'];
     case 'dhcp':
       return o.dhcp ? dhcpChips(o.dhcp) : ['DHCP action'];
     case 'wireguard':

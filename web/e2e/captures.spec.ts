@@ -490,6 +490,43 @@ test('New capture shows the request in the API panel and in the dialog, and neve
   await expect(d.getByTestId('scenario-api').getByTestId('api-call')).toContainText('"selector"');
 });
 
+test('New capture never offers a client of the admin tunnel as a device or a source, and its device page says why it cannot be captured (P5-AUDIT-31)', async ({ page }) => {
+  const gw = MockGateway.sample();
+  const hub = '7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d';
+  const laptop = 'b7c8d9e0-0000-4000-8000-0000000000a7';
+  gw.networks.push({
+    id: hub,
+    config: {
+      type: 'wireguard',
+      kind: 'hub',
+      name: 'admin-tunnel',
+      role: 'management',
+      address: '10.99.0.1/24',
+      listen_port: 51821,
+      clients: { [laptop]: { name: 'admin-laptop', public_key: 'FHQNDwQocDIBvHWRCNqB4itfFryYORwJaqSuvgYzoUo=', address: '10.99.0.2' } },
+    } as never,
+    status: { state: 'ok', interface: 'wg-admin' },
+  });
+  gw.devices.push({ id: laptop, name: 'admin-laptop', origin: 'client', network: hub, observed: { online: true, addresses: ['10.99.0.2'], sources: ['wireguard'] } } as never);
+  await open(gw, page, '/captures');
+  await page.getByTestId('new-capture').click();
+  const d = dialog(page);
+  await expect(d.getByLabel('Device', { exact: true }).getByRole('option').filter({ hasText: 'ESP32-42' })).toHaveCount(1);
+  await expect(d.getByLabel('Device', { exact: true }).getByRole('option').filter({ hasText: 'admin-laptop' })).toHaveCount(0);
+  await d.getByRole('group', { name: 'Scope' }).getByRole('button', { name: 'Selector' }).click();
+  await expect(d.getByLabel('Source').getByRole('option').filter({ hasText: 'Device · ESP32-42' })).toHaveCount(1);
+  await expect(d.getByLabel('Source').getByRole('option').filter({ hasText: 'admin-laptop' })).toHaveCount(0);
+
+  await page.goto(`/devices/${laptop}`);
+  await expect(page.getByTestId('device-capture')).toBeDisabled();
+  await expect(page.getByTestId('device-captures-management')).toHaveText(
+    "This device is a client of a management WireGuard network: its packets are the admin's tunnel, which the gateway does not record.",
+  );
+  await page.goto(`/devices/${ESP}`);
+  await expect(page.getByTestId('device-capture')).toBeEnabled();
+  await expect(page.getByTestId('device-captures-management')).toHaveCount(0);
+});
+
 test('a gateway without a capture volume says so on the screen and on the device', async ({ page }) => {
   const gw = MockGateway.sample();
   gw.capabilities = { ...gw.capabilities, features: gw.capabilities.features.filter((f) => f !== 'captures') };

@@ -107,7 +107,7 @@ function refText(r: FaultRef): string {
   if (r.layer === 'overlay') {
     const o = overlayList.value.find((x) => x.id === r.id);
     if (o?.kind === 'profile') return `profile ${profileTitle(n.profile(o.profile ?? '') ?? o.profile ?? '')} on ${describeScope(o.target, n)} (overlay)`;
-    if (o) return `${describeScope(o.target, n)} ${overlayChips(o, n.profile).join(', ')} (overlay)`;
+    if (o) return `${describeScope(o.target, n)} ${overlayChips(o, n.profile, n).join(', ')} (overlay)`;
     return r.profile?.name ? `profile ${profileTitle(r.profile.name)} (overlay)` : `an overlay${r.summary ? ` (${r.summary})` : ''}`;
   }
   const f = draft.baseConfig?.faults?.[r.id] ?? viewById.value.get(r.id)?.config;
@@ -128,7 +128,7 @@ const rows = computed<Row[]>(() => {
       target: o.target ? describeScope(o.target, n) : o.fault?.tunnel ? describeTunnel(o.fault.tunnel, n) : 'Everything',
       device: o.target?.device,
       destination: describeMatch(o.fault ?? o.rule, n),
-      chips: o.kind === 'profile' ? [`profile ${profileTitle(n.profile(o.profile ?? '') ?? o.profile ?? '')}`] : overlayChips(o, n.profile),
+      chips: o.kind === 'profile' ? [`profile ${profileTitle(n.profile(o.profile ?? '') ?? o.profile ?? '')}`] : overlayChips(o, n.profile, n),
       packets: o.counters?.packets,
       expiresAt: o.expires_at,
       state: o.state,

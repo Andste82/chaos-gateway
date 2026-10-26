@@ -162,7 +162,7 @@ export function stepText(s: Step, names: ScenarioNames = {}): string {
     case 'dns':
       return dnsChips(s.dns!).join(', ');
     case 'tls':
-      return tlsChips(s.tls!).join(', ');
+      return tlsChips(s.tls!, names).join(', ');
     case 'dhcp':
       return dhcpChips(s.dhcp!).join(', ');
     default:

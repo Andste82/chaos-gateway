@@ -34,7 +34,7 @@ import LoadError from '../components/ui/LoadError.vue';
 import StatusDot from '../components/ui/StatusDot.vue';
 import { firstError, useActiveConfig, useDevices, useNetworks, usePortForwards } from '../composables/gateway';
 import { forwardRows } from '../lib/forwards';
-import { subnetText } from '../lib/networks';
+import { dhcpServed, subnetText } from '../lib/networks';
 import { useApiScreen } from '../stores/apiPanel';
 import { useDraftStore } from '../stores/draft';
 
@@ -321,7 +321,7 @@ watch(unknownNetwork, async (unknown) => {
       v-if="selected?.config.type === 'lan' && selected.status.state !== 'pending' && marks[selected.id] !== 'DELETED'"
       :target="{ network: selected.id }"
       :name="(selected.config as LanNetwork).name"
-      :dhcp-off="(selected.config as LanNetwork).dhcp?.enabled === false"
+      :dhcp-off="!dhcpServed(selected.config as LanNetwork)"
     />
     <LeasesCard v-if="selected?.config.type === 'lan' && selected.status.state !== 'pending'" :network="selected" />
     <ReservationsCard v-if="selected?.config.type === 'lan' && marks[selected.id] !== 'DELETED'" :network="selected" />

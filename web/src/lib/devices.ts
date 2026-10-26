@@ -14,7 +14,7 @@ import type {
   WireGuardNetwork,
 } from '../api/generated/model';
 import type { DotTone } from '../components/ui/StatusDot.vue';
-import { faultChips, overlayChips } from './faults';
+import { faultChips, overlayChips, type Names } from './faults';
 import { forwardTitle } from './forwards';
 import { discoveredDeviceId } from './ids';
 import { profileTitle } from './profileNames';
@@ -164,6 +164,8 @@ export function referenceEffectText(r: DeviceReference, device: string): string 
 export interface FaultBodies {
   overlay?: (id: string) => Overlay | undefined;
   config?: (id: string) => FaultBody | undefined;
+  /** The names of the networks a TLS case may name. */
+  names?: Names;
 }
 
 const chipFamilies = new Set(['impairment', 'mtu', 'tunnel']);
@@ -185,7 +187,7 @@ export function deviceFaults(d: DeviceView, bodies: FaultBodies = {}): string[] 
     if (f.layer === 'overlay') {
       const o = bodies.overlay?.(f.id);
       if (o) {
-        out.push(...overlayChips(o));
+        out.push(...overlayChips(o, undefined, bodies.names));
         continue;
       }
     } else if (chipFamilies.has(f.family)) {

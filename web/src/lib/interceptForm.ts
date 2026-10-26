@@ -110,18 +110,34 @@ export function unreachableRules(rules: HttpRuleForm[]): Set<number> {
   return out;
 }
 
-function headerErrors(rows: HeaderRow[], what: string): string | undefined {
+/** The first problem of a list of headers and the row it names. */
+function headerProblem(rows: HeaderRow[], what: string): { row: number; message: string } | undefined {
   const seen = new Set<string>();
-  for (const r of rows) {
+  for (const [row, r] of rows.entries()) {
     const name = r.name.trim();
-    if (!name) return `Name the ${what} header, or remove the row.`;
-    if (!headerName.test(name)) return `${name} is no header name: letters, digits and - ! # $ % & ' * + . ^ _ \` | ~ only.`;
-    if (!r.remove && lineBreak.test(r.value)) return `The value of ${name} has a line break.`;
-    if (!r.remove && r.value === '') return `${name} has no value: give one, or tick Remove to take the header away.`;
-    if (seen.has(name.toLowerCase())) return `${name} is listed twice.`;
+    if (!name) return { row, message: `Name the ${what} header, or remove the row.` };
+    if (!headerName.test(name)) return { row, message: `${name} is no header name: letters, digits and - ! # $ % & ' * + . ^ _ \` | ~ only.` };
+    if (!r.remove && lineBreak.test(r.value)) return { row, message: `The value of ${name} has a line break.` };
+    if (!r.remove && r.value === '') return { row, message: `${name} has no value: give one, or tick Remove to take the header away.` };
+    if (seen.has(name.toLowerCase())) return { row, message: `${name} is listed twice.` };
     seen.add(name.toLowerCase());
   }
   return undefined;
+}
+
+function headerErrors(rows: HeaderRow[], what: string): string | undefined {
+  return headerProblem(rows, what)?.message;
+}
+
+/** The row of a list of headers that its message names, or -1 (the inputs of that row are marked invalid). */
+export function headerProblemRow(rows: HeaderRow[]): number {
+  return headerProblem(rows, '')?.row ?? -1;
+}
+
+/** The row of the texts to replace that their message names, or -1. */
+export function replaceProblemRow(rows: ReplaceRow[]): number {
+  const empty = rows.findIndex((x) => x.search === '');
+  return empty >= 0 ? empty : rows.findIndex((x) => lineBreak.test(x.search) || lineBreak.test(x.replace));
 }
 
 /** The problems of one rule, by field. */

@@ -198,3 +198,67 @@ func TestTheKeyLogOfACaptureIsBounded(t *testing.T) {
 	}
 	m.Close(context.Background())
 }
+
+// A capture that begins to end after a batch of key lines chose it takes none of them: no key log is written, and the final record
+// stays what finish wrote (P5-AUDIT-20).
+func TestACaptureThatEndsWhileABatchOfKeyLinesIsOnItsWayTakesNone(t *testing.T) {
+	dir := t.TempDir()
+	m, op, _ := newManager(t, dir)
+	ref := func(s string) *model.Ref { return &s }
+	c, err := m.Start(context.Background(), capturemgr.StartRequest{CaptureRequest: model.CaptureRequest{Scope: model.CaptureScope{Device: ref("with-mac")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer capturemgr.SetKeylogTargetsChosen(func() {
+		op.last().end(executor.CaptureEvent{Kind: executor.CaptureStopped, Reason: "user", Packets: 4, Size: 400})
+		eventually(t, "the capture stops", func() bool { r, _ := m.Get(c.Id); return r.Status == model.CaptureStatusStopped })
+	})()
+	recordPath := filepath.Join(dir, c.Id.String(), "capture.json")
+	m.AppendKeylog(netip.MustParseAddr("10.10.0.5"), []string{"CLIENT_RANDOM a b"})
+	if _, err := os.Stat(filepath.Join(dir, c.Id.String(), "keylog.txt")); !os.IsNotExist(err) {
+		t.Errorf("a capture that was ending got a key log: %v", err)
+	}
+	raw, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"status": "stopped"`) || strings.Contains(string(raw), `"keylog": true`) {
+		t.Errorf("the record of the capture: %s", raw)
+	}
+	m.Close(context.Background())
+}
+
+// Key lines that arrive while a capture ends never leave the running record on disk after the end, and a capture whose key log holds a line
+// is marked in its final record (P5-AUDIT-20).
+func TestKeyLinesThatArriveWhileACaptureEndsNeverLeaveItRunningOnDisk(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		dir := t.TempDir()
+		m, op, _ := newManager(t, dir)
+		ref := func(s string) *model.Ref { return &s }
+		c, err := m.Start(context.Background(), capturemgr.StartRequest{CaptureRequest: model.CaptureRequest{Scope: model.CaptureScope{Device: ref("with-mac")}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for j := 0; j < 20; j++ {
+				m.AppendKeylog(netip.MustParseAddr("10.10.0.5"), []string{"CLIENT_RANDOM a b"})
+			}
+		}()
+		op.last().end(executor.CaptureEvent{Kind: executor.CaptureStopped, Reason: "user", Packets: 4, Size: 400})
+		eventually(t, "the capture stops", func() bool { r, _ := m.Get(c.Id); return r.Status == model.CaptureStatusStopped })
+		<-done
+		raw, err := os.ReadFile(filepath.Join(dir, c.Id.String(), "capture.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), `"status": "stopped"`) {
+			t.Fatalf("round %d: the record on disk after the end: %s", i, raw)
+		}
+		if fi, err := os.Stat(filepath.Join(dir, c.Id.String(), "keylog.txt")); err == nil && fi.Size() > 0 && !strings.Contains(string(raw), `"keylog": true`) {
+			t.Fatalf("round %d: a capture whose key log holds lines is not marked: %s", i, raw)
+		}
+		m.Close(context.Background())
+	}
+}

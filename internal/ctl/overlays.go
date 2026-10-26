@@ -25,6 +25,8 @@ import (
 type targetFlags struct {
 	device, group, network string
 	global                 bool
+	// deviceOrNetwork is set by addDeviceOrNetwork: only --device and --network are registered.
+	deviceOrNetwork bool
 }
 
 func (t *targetFlags) add(fs *pflag.FlagSet) {
@@ -37,6 +39,7 @@ func (t *targetFlags) add(fs *pflag.FlagSet) {
 // addDeviceOrNetwork registers the targets of what a device or a network has and a group or everything has not (a DHCP
 // action); `scope` then names exactly one of the two.
 func (t *targetFlags) addDeviceOrNetwork(fs *pflag.FlagSet) {
+	t.deviceOrNetwork = true
 	fs.StringVar(&t.device, "device", "", "target: a device (name or UUID)")
 	fs.StringVar(&t.network, "network", "", "target: a network")
 }
@@ -56,6 +59,9 @@ func (t *targetFlags) scope() (map[string]any, error) {
 		n++
 	}
 	if n != 1 {
+		if t.deviceOrNetwork {
+			return nil, failf(ExitError, "name exactly one target: --device or --network")
+		}
 		return nil, failf(ExitError, "name exactly one target: --device, --group, --network or --global")
 	}
 	return out, nil

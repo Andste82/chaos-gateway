@@ -6277,7 +6277,7 @@ actions on the device detail and the network card and as the step `dhcp`, the do
 - **`chaosctl`** (`internal/ctl/appfamilies.go`). `dns set <action>`, `tls set <case>` and `dhcp set <action>` take the action or the case as their argument (dashes or underscores:
   `wrong-answer`, `not-yet-valid`) and the flags of the fields (`--name`, `--delay`, `--answer`, `--answer-ttl`; `--port`, `--sni`, `--to`, `--cut-existing`; `--lease-time`, `--ip`, `--router`,
   `--dns-server`, `--domain`, `--no-domain`, `--ntp-server`, `--option code=value`), the target of `fault set` (`--device`, `--group`, `--network`, `--global`; a DHCP action only `--device` or
-  `--network`) and `--ttl` and `--lease`. What the command line can see is refused with exit 2 before a request (an unknown action, a field the action needs and lacks or does not use);
+  `--network`, and its refusal without a target names only these two, P5-AUDIT-34) and `--ttl` and `--lease`. What the command line can see is refused with exit 2 before a request (an unknown action, a field the action needs and lacks or does not use);
   what only the gateway knows is its refusal with the pointer, exit 2 as for every command. Standard output is the id of the overlay (`--json`: the overlay), `dhcp set force-new-ip` says the
   address on standard error.
 
@@ -6333,7 +6333,7 @@ No test is left to CI beyond the ones it runs anyway: the Playwright suite and t
 | Each of the three as a step in the step dialog | `the steps dns, tls and dhcp: made with the same fields …`, `a DHCP step of a scenario that targets a group …`, `a DHCP step on a network offers no forced new IP …`, `a DNS step is edited with the DNS fields`; `lib/stepForm.test.ts` |
 | The validation messages | the `toHaveAccessibleDescription` assertions of the tests above, the refusals under the fields (`the gateway's refusal of a DNS fault`, `… of a TLS case`, `… of a DHCP action stands under the field it names`); `…Errors` and `…FieldOf` in the unit tests |
 | The CA download | `a TLS case: its selection …` (the TLS fields), `the test CA is downloaded from the faults screen and from the device detail` |
-| The `chaosctl` flags tested in-process against the API on the simulated kernel | `TestChaosctlOverlays/MakesDNSFaults`, `MakesTLSCases`, `MakesDHCPActions`; `TestTheFlagsOfADNSFaultBecomeItsBody`, `TestTheFlagsOfATLSCaseBecomeItsBody`, `TestTheFlagsOfADHCPActionBecomeItsBody` |
+| The `chaosctl` flags tested in-process against the API on the simulated kernel | `TestChaosctlOverlays/MakesDNSFaults`, `MakesTLSCases`, `MakesDHCPActions`; `TestTheFlagsOfADNSFaultBecomeItsBody`, `TestTheFlagsOfATLSCaseBecomeItsBody`, `TestTheFlagsOfADHCPActionBecomeItsBody`, `TestADHCPActionWithoutATargetNamesTheTargetFlagsTheCommandHas` |
 | One level 1 flow only if something needs the kernel | none needed (decision 13) |
 | The design is added to §2.17 | plan §2.17, "Forms for the application-layer kinds (M23b)" and the rows of the table of screens |
 
@@ -6361,7 +6361,8 @@ app and with `chaosctl`: the form of the settings and of the rules in the "Add f
 - **The device detail** (`components/intercept/DeviceExchanges.vue`) is the same table in its compact form for `device=<id>`, limit 8; it is shown while an interception case acts on the device (an overlay of the case on the device's page: its own or a wider scope's) or the log holds exchanges of the device.
 - **`chaosctl`** (`internal/ctl/intercept.go`). `intercept set` makes the case with the selection flags of `tls set` (now `tlsFlags.selection`, shared), the target and lifetime flags, `--no-keylog`, `--allow-quic`, `--upstream` and the repeated `--rule`; a rule is parsed by `parseHTTPRule` (items separated by `;`: `host=`, `path=`, `method=`, one of `block`, `abort`,
   `status=`, `delay=`, `throttle=`, or the changes `request-header=Name:Value`, `response-header=`, `remove-request-header=Name`, `remove-response-header=`, `replace=SEARCH=>REPLACEMENT`). `intercept flows` reads `GET /intercept/flows` with `--device`, `--host`, `--since` (a time or how long ago), `--faulted`, `--limit` and `--all` (follows the cursor), and prints a table (the device by its
-  name: one more read of `/devices`, only when an exchange has a device) or, with `--json`, the page of the API. `tls ca` downloads the certificate (to standard output or `--out`, mode 0644: it is public), `tls ca regenerate --yes` replaces it and prints the new one; without `--yes` it refuses and says what it costs. `tls set intercept` is still refused, and now names `intercept set`.
+  name: one more read of `/devices`, only when an exchange has a device; what the device sent, host, path, method and error, with every character that is not printable escaped as `\xNN`, so that an ESC or a BEL
+  does not reach the terminal, P5-AUDIT-40; a line on stderr when older exchanges exist and `--all` was not given) or, with `--json`, the page of the API (with its `next_cursor`; with `--all` the exchanges of every page and no cursor, P5-AUDIT-39). `tls ca` downloads the certificate (to standard output or `--out`, mode 0644: it is public), `tls ca regenerate --yes` replaces it and prints the new one; without `--yes` it refuses and says what it costs. `tls set intercept` is still refused, and now names `intercept set`.
 
 ### Decisions
 
@@ -6404,7 +6405,7 @@ Level 1 (written and vetted with `-tags testbed`, run by CI with `M22_LEVEL1`): 
 | … and its live update from `http_fault_triggered` | `the table is live: it follows the gateway, can be paused, and shows older exchanges on request`, `an exchange no rule acted on comes with the poll, one a rule acted on with its event, before the next poll` (breaking either the poll or the event's invalidation fails it), and `composables/eventStream.test.ts` |
 | A screen or a panel of the device detail | both: the screen above, `the device detail has a panel of the exchanges of the device while a case acts on it …`, `a device that no case acts on … has no panel of exchanges` |
 | The CA buttons: download, and the regeneration after a question | `the test CA: downloaded from the screen, and replaced only after the question says what it costs`, `a session without the scope full cannot replace the test CA, and says why` |
-| `chaosctl intercept flows` and `chaosctl tls ca` | `TestChaosctlListsTheExchangesOfTheProxyWithTheFiltersOfTheAPI`, `TestChaosctlDownloadsAndReplacesTheTestCA` (and `TestChaosctlMakesInterceptionCasesWithTheirRules` for `intercept set`); `internal/ctl/intercept_test.go` |
+| `chaosctl intercept flows` and `chaosctl tls ca` | `TestChaosctlListsTheExchangesOfTheProxyWithTheFiltersOfTheAPI`, `TestChaosctlDoesNotPrintTheControlCharactersADeviceSent`, `TestChaosctlDownloadsAndReplacesTheTestCA` (and `TestChaosctlMakesInterceptionCasesWithTheirRules` for `intercept set`); `internal/ctl/intercept_test.go` |
 | The `chaosctl` commands in-process | the tests of the row above, against the API on the simulated kernel |
 | A level 1 flow only if something needs the kernel and the proxy | `TestChaosctlMakesAnInterceptionCaseAndReadsItsExchangesAndTheCAOnTheRealKernel` (decision 12) |
 | The design is added to §2.17 | plan §2.17, "Interception UI (M23c)", the row "Interception" of the table of screens and the changes to the rows of the device detail and the Add fault dialog |

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -360,8 +362,9 @@ log is empty after a restart. --since takes a time (2026-10-25T12:00:00Z) or how
 				return err
 			}
 			var items []model.InterceptFlow
+			var page model.InterceptFlowPage
 			for {
-				var page model.InterceptFlowPage
+				page = model.InterceptFlowPage{}
 				if _, err := cl.call(cmd.Context(), http.MethodGet, "/intercept/flows", q, nil, &page); err != nil {
 					return apiFail(err)
 				}
@@ -371,11 +374,21 @@ log is empty after a restart. --since takes a time (2026-10-25T12:00:00Z) or how
 				}
 				q.Set("cursor", *page.NextCursor)
 			}
+			more := !all && page.NextCursor != nil && *page.NextCursor != ""
 			if a.asJSON {
-				a.printJSON(model.InterceptFlowPage{Items: items})
+				if all {
+					// every page was read: there is no cursor left
+					a.printJSON(model.InterceptFlowPage{Items: items})
+				} else {
+					// the page of the API as it is, with the cursor to the older exchanges
+					a.printJSON(page)
+				}
 				return nil
 			}
 			a.printFlows(cmd.Context(), cl, items)
+			if more {
+				fmt.Fprintln(a.env.Stderr, "more exchanges: use --all or a larger --limit")
+			}
 			return nil
 		},
 	}
@@ -446,7 +459,9 @@ func (a *app) printFlows(ctx context.Context, cl *client, items []model.Intercep
 		if f.Error != nil && *f.Error != "" {
 			req += "  [" + *f.Error + "]"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", f.Time.UTC().Format(time.RFC3339), dev, f.Protocol, req, status, acted, size)
+		// host, path, method and the error are as the device sent them (plan §2.16: devices are untrusted): a control
+		// character must not reach the terminal
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", f.Time.UTC().Format(time.RFC3339), printable(dev), printable(string(f.Protocol)), printable(req), status, printable(acted), size)
 	}
 	_ = tw.Flush()
 }
@@ -467,6 +482,37 @@ func flowRequest(f model.InterceptFlow) string {
 	b.WriteString(host)
 	if f.Path != nil {
 		b.WriteString(*f.Path)
+	}
+	return b.String()
+}
+
+// printable escapes what is not printable (control characters such as ESC and BEL, a tab, invalid UTF-8) as \xNN or
+// \uNNNN, so that a string a device chose cannot drive the terminal or shift the columns of a table.
+func printable(s string) string {
+	ok := true
+	for _, r := range s {
+		if r == utf8.RuneError || !unicode.IsPrint(r) {
+			ok = false
+			break
+		}
+	}
+	if ok {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && n <= 1:
+			fmt.Fprintf(&b, `\x%02x`, s[i])
+		case !unicode.IsPrint(r) && r < 0x100:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case !unicode.IsPrint(r):
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			b.WriteRune(r)
+		}
+		i += n
 	}
 	return b.String()
 }

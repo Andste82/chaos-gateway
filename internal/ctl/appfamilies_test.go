@@ -146,3 +146,25 @@ func TestTheFlagsOfADHCPActionBecomeItsBody(t *testing.T) {
 		}
 	}
 }
+
+func TestADHCPActionWithoutATargetNamesTheTargetFlagsTheCommandHas(t *testing.T) {
+	var tf targetFlags
+	fs := pflag.NewFlagSet("dhcp", pflag.ContinueOnError)
+	tf.addDeviceOrNetwork(fs)
+	for _, args := range [][]string{nil, {"--device", "esp32-42", "--network", "IoT"}} {
+		if err := fs.Parse(args); err != nil {
+			t.Fatal(err)
+		}
+		_, err := tf.scope()
+		if err == nil || !strings.Contains(err.Error(), "name exactly one target: --device or --network") || strings.Contains(err.Error(), "--group") || strings.Contains(err.Error(), "--global") {
+			t.Errorf("%v: %v, want only --device and --network named", args, err)
+		}
+	}
+	if fs.Lookup("group") != nil || fs.Lookup("global") != nil {
+		t.Error("dhcp set has no --group or --global")
+	}
+	var all targetFlags
+	if _, err := all.scope(); err == nil || !strings.Contains(err.Error(), "--device, --group, --network or --global") {
+		t.Errorf("the other commands name all four targets: %v", err)
+	}
+}

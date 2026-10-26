@@ -189,6 +189,33 @@ func TestChaosctlListsTheExchangesOfTheProxyWithTheFiltersOfTheAPI(t *testing.T)
 			t.Errorf("%v: %d exchanges, want %d", tc.args, got, tc.want)
 		}
 	}
+	// without --all the JSON is the page of the API, its cursor to the older exchanges included; with --all no cursor is left
+	cursorOf := func(args ...string) any {
+		r := ctlAs(g, admin, append([]string{"intercept", "flows", "--json"}, args...)...)
+		var page map[string]any
+		if r.code != 0 || json.Unmarshal([]byte(r.out), &page) != nil {
+			t.Fatalf("%v: %+v", args, r)
+		}
+		return page["next_cursor"]
+	}
+	if c, ok := cursorOf("--limit", "2").(string); !ok || c == "" {
+		t.Errorf("--limit 2: next_cursor %v, want the cursor of the API", cursorOf("--limit", "2"))
+	}
+	if c := cursorOf("--limit", "2", "--all"); c != nil {
+		t.Errorf("--limit 2 --all: next_cursor %v, want none", c)
+	}
+	if c := cursorOf(); c != nil {
+		t.Errorf("one page holds them all: next_cursor %v", c)
+	}
+	// the table says on stderr that older exchanges exist, and is silent when it shows them all
+	if r := ctlAs(g, admin, "intercept", "flows", "--limit", "2"); r.code != 0 || len(strings.Split(strings.TrimSpace(r.out), "\n")) != 3 || !strings.Contains(r.err, "more exchanges: use --all or a larger --limit") {
+		t.Errorf("--limit 2: %+v, want 2 rows and the hint", r)
+	}
+	for _, args := range [][]string{nil, {"--limit", "2", "--all"}} {
+		if r := ctlAs(g, admin, append([]string{"intercept", "flows"}, args...)...); r.code != 0 || strings.Contains(r.err, "more exchanges") {
+			t.Errorf("%v: %+v, want no hint", args, r)
+		}
+	}
 	for _, tc := range []struct {
 		args []string
 		want string
@@ -209,6 +236,39 @@ func TestChaosctlListsTheExchangesOfTheProxyWithTheFiltersOfTheAPI(t *testing.T)
 			t.Errorf("%+v", r)
 		}
 	})
+}
+
+// What a device sent is untrusted (plan §2.16): an ESC or a BEL in the host, the path, the method or the error of an exchange reaches the
+// table escaped, not as a byte that drives the admin's terminal; --json keeps the strings as they are, JSON-encoded.
+func TestChaosctlDoesNotPrintTheControlCharactersADeviceSent(t *testing.T) {
+	g, admin := tlsGateway(t)
+	t0 := time.Now().Add(-time.Minute)
+	if r := g.postFlows(
+		flowReport("10.10.0.31", "api.example.com\x1b]0;owned\x07", "/v1/\x1b[2K\x1b[1A", 200, t0, map[string]any{"method": "GE\x1bT"}),
+		map[string]any{"time": t0.Add(time.Second).UTC().Format(time.RFC3339Nano), "client": "10.10.0.99", "original_dst": "203.0.113.10:8883", "protocol": "tcp",
+			"host": "broker\x07.example.com", "error": "reset\x1b]52;c;aGk=\x07"},
+	); r.Status != 204 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	r := ctlAs(g, admin, "intercept", "flows")
+	if r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	if strings.ContainsAny(r.out, "\x1b\x07") {
+		t.Errorf("the table holds a raw ESC or BEL: %q", r.out)
+	}
+	for _, want := range []string{`GE\x1bT api.example.com\x1b]0;owned\x07/v1/\x1b[2K\x1b[1A`, `broker\x07.example.com  [reset\x1b]52;c;aGk=\x07]`} {
+		if !strings.Contains(r.out, want) {
+			t.Errorf("%q, want %q", r.out, want)
+		}
+	}
+	r = ctlAs(g, admin, "intercept", "flows", "--json")
+	var page struct {
+		Items []map[string]any `json:"items"`
+	}
+	if r.code != 0 || json.Unmarshal([]byte(r.out), &page) != nil || len(page.Items) != 2 || page.Items[1]["path"] != "/v1/\x1b[2K\x1b[1A" || strings.ContainsAny(r.out, "\x1b\x07") {
+		t.Errorf("--json: %+v", r)
+	}
 }
 
 func TestChaosctlDownloadsAndReplacesTheTestCA(t *testing.T) {

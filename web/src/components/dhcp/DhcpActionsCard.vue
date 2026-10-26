@@ -128,6 +128,7 @@ function expiry(o: Overlay): string {
       <p v-if="reason" class="m-0 text-[13px] text-text-2" data-testid="dhcp-unavailable">{{ reason }}</p>
 
       <LoadError v-if="firstError(overlays)" :error="firstError(overlays)" what="The DHCP actions are not loaded" :retry="overlays.refetch" />
+      <p v-else-if="overlays.isLoading.value" class="m-0 text-[13px] text-text-2" role="status" data-testid="dhcp-loading">Loading…</p>
       <p v-else-if="rows.length === 0" class="m-0 text-[13px] text-text-3" data-testid="dhcp-none">No action is in force.</p>
       <ul v-else class="m-0 flex list-none flex-col gap-2 p-0" data-testid="dhcp-actions">
         <li v-for="o in rows" :key="o.id" class="flex flex-col gap-1 text-[13px]" data-testid="dhcp-action">

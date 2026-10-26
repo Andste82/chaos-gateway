@@ -17,7 +17,7 @@ import EmptyState from '../components/ui/EmptyState.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
 import StatusDot from '../components/ui/StatusDot.vue';
-import { useActiveFaults, useCanIntercept, useGatewayState, useHealth, useInterceptFlows, useNames } from '../composables/gateway';
+import { firstError, useActiveFaults, useCanIntercept, useGatewayState, useHealth, useInterceptFlows, useNames, useOverlays } from '../composables/gateway';
 import { useNow } from '../composables/useNow';
 import { filtered, flowParams, hostFilterError, maxShown, noFilters, pageSize, type FlowFilters } from '../lib/intercept';
 import { useApiScreen } from '../stores/apiPanel';
@@ -32,6 +32,8 @@ const health = useHealth();
 const { names, devices } = useNames();
 const now = useNow();
 const faults = useActiveFaults();
+// the cases are overlays only: whether they are known is the overlays' read, not the configured faults' (P5-AUDIT-36)
+const overlays = useOverlays();
 
 // ---- the filters, in the address (?device=&host=&faulted=1)
 const q = (k: string) => (typeof route.query[k] === 'string' ? (route.query[k] as string) : '');
@@ -132,8 +134,8 @@ useApiScreen('the interception', () => [
     <p v-if="proxyProblem" class="m-0 rounded-md border border-fault-border bg-fault-tint p-3 text-[13px] text-fault-text" role="status" data-testid="proxy-problem">{{ proxyProblem }}</p>
 
     <SectionCard title="Interception in force">
-      <p v-if="faults.isLoading.value" class="m-0 text-sm text-text-2" role="status">Loading…</p>
-      <LoadError v-else-if="faults.error.value && !faults.items.value.length" :error="faults.error.value" what="The cases in force are not loaded" />
+      <p v-if="overlays.isLoading.value" class="m-0 text-sm text-text-2" role="status">Loading…</p>
+      <LoadError v-else-if="firstError(overlays)" :error="firstError(overlays)" what="The cases in force are not loaded" :retry="overlays.refetch" />
       <p v-else-if="cases.length === 0" class="m-0 text-sm text-text-2" data-testid="no-cases">
         No interception case is in force: no device's traffic goes through the proxy. Add one to read and change what a device says to its servers.
       </p>

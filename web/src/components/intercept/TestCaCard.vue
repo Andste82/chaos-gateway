@@ -4,7 +4,7 @@
 // question that says what it costs: every device that installed the old certificate trusts nothing the gateway shows it until it
 // installs the new one. The replacement needs the scope `full`, which the admin's session has. After it the card offers the new
 // certificate for download, with a reminder that the devices need it.
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { regenerateTestCa } from '../../api/generated/hooks/config/config';
 import { useApiPanelStore } from '../../stores/apiPanel';
@@ -26,6 +26,10 @@ const error = ref('');
 /** The CA was replaced since the page was opened: the new certificate has to go to the devices. */
 const replaced = ref(false);
 const full = computed(() => session.session?.scope === 'full');
+// a refusal belongs to the attempt that was refused: the question opens again without it (P5-AUDIT-37)
+watch(askOpen, (o) => {
+  if (o) error.value = '';
+});
 
 async function regenerate() {
   if (busy.value) return;

@@ -2,7 +2,7 @@
 // One exchange of the interception proxy (plan §2.17 "Interception UI"; M23c): when, which device, what kind (HTTP, WebSocket, a stream
 // that is no HTTP), what it asked for, how it ended, the rules that acted on it (a word each, never by color alone), its size and
 // duration, and under "Details" the rest the gateway logged (the client, the address the device meant, the whole path, the rule's case,
-// why it ended without an answer). The table of the screen and the compact list of the device detail use the same row.
+// why it ended without an answer). The table of the screen and the compact list of the device detail (every column but the device's) use the same row.
 import { computed, useId } from 'vue';
 import type { InterceptFlow } from '../../api/generated/model';
 import { actionLabels, durationText, kindLabels, outcomeText, requestText, sizeText } from '../../lib/intercept';

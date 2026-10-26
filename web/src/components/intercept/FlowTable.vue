@@ -19,14 +19,14 @@ function toggle(key: string, v: boolean) {
 }
 const cols = computed(() =>
   props.compact
-    ? 'grid-cols-[84px_70px_minmax(0,1fr)_70px_minmax(0,130px)_80px]'
+    ? 'grid-cols-[84px_70px_minmax(0,1fr)_70px_minmax(0,130px)_minmax(90px,120px)_64px_80px]'
     : 'grid-cols-[96px_minmax(100px,1fr)_80px_minmax(180px,2.2fr)_80px_minmax(110px,1fr)_minmax(150px,1.1fr)_80px_80px]',
 );
 </script>
 
 <template>
   <div class="overflow-x-auto" :class="compact ? '' : '-mx-5'">
-    <div role="table" aria-label="Exchanges of the interception proxy" :aria-rowcount="items.length + 1" :class="compact ? 'min-w-[560px]' : 'min-w-[1060px]'" data-testid="flow-table">
+    <div role="table" aria-label="Exchanges of the interception proxy" :aria-rowcount="items.length + 1" :class="compact ? 'min-w-[700px]' : 'min-w-[1060px]'" data-testid="flow-table">
       <div role="row" class="data-head grid h-10 items-center gap-3 px-4" :class="cols">
         <span role="columnheader">Time</span>
         <span v-if="!compact" role="columnheader">Device</span>
@@ -34,8 +34,8 @@ const cols = computed(() =>
         <span role="columnheader">Request</span>
         <span role="columnheader">Status</span>
         <span role="columnheader">Rules acted</span>
-        <span v-if="!compact" role="columnheader">Size</span>
-        <span v-if="!compact" role="columnheader">Took</span>
+        <span role="columnheader">Size</span>
+        <span role="columnheader">Took</span>
         <span role="columnheader"><span class="sr-only">Details</span></span>
       </div>
       <FlowRow

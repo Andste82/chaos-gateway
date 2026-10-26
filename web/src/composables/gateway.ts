@@ -402,7 +402,7 @@ export function useActiveFaults() {
         device: o.target?.device,
         link: scopeLink(o.target, o.fault?.tunnel),
         destination: describeMatch(o.fault, n),
-        chips: overlayChips(o, n.profile),
+        chips: overlayChips(o, n.profile, n),
         packets: o.counters?.packets,
         expiresAt: o.expires_at,
         state: o.state,

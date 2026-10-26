@@ -103,6 +103,7 @@ describe('steps and checks in words', () => {
     expect(stepText({ id: 'a', at: '0s', dns: { action: 'short_ttl', ttl: '0s' } }, names)).toBe('DNS TTL 0s');
     expect(stepText({ id: 'a', at: '0s', tls: { case: 'not_yet_valid', ports: [8883], cut_existing: true } }, names)).toBe('TLS not yet valid · 8883 · cuts existing');
     expect(stepText({ id: 'a', at: '0s', tls: { case: 'self_signed' } }, names)).toBe('TLS self signed');
+    expect(stepText({ id: 'a', at: '0s', tls: { case: 'expired', destination: { network: IOT } } }, names)).toBe('TLS expired · network IoT');
     expect(stepText({ id: 'a', at: '0s', dhcp: { action: 'short_lease', lease_time: '7s' } }, names)).toBe('DHCP short lease 7s');
     expect(stepText({ id: 'a', at: '0s', dhcp: { action: 'force_new_ip', ip: '10.10.0.254' } }, names)).toBe('DHCP new IP 10.10.0.254');
   });

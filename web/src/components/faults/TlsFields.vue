@@ -87,13 +87,13 @@ const eid = (f: string) => `${uid}-${f}-error`;
     </div>
 
     <label class="flex items-start gap-2 text-sm">
-      <input v-model="form.cutExisting" type="checkbox" class="mt-1" :aria-invalid="!!errors.tlsCut" />
+      <input v-model="form.cutExisting" type="checkbox" class="mt-1" :aria-invalid="!!errors.tlsCut" :aria-describedby="errors.tlsCut ? eid('cut') : undefined" />
       <span>
         Also cut existing connections
         <span class="block text-[13px] text-text-2">Without it only new connections meet the case. With it a connection that is open already is selected at its next packet and reset; the device can reconnect.</span>
       </span>
     </label>
-    <p v-if="errors.tlsCut" class="field-error m-0">{{ errors.tlsCut }}</p>
+    <p v-if="errors.tlsCut" :id="eid('cut')" class="field-error m-0">{{ errors.tlsCut }}</p>
 
     <InterceptFields v-if="intercept" v-model="form.intercept" :errors="errors" />
   </div>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Overlay } from '../api/generated/model';
-import { describeMatch, describeOwner, describeScope, faultChips, impairmentCombines, impairmentOf, overlayChips, withImpairment } from './faults';
+import { describeMatch, describeOwner, describeScope, faultChips, impairmentCombines, impairmentOf, overlayChips, tlsChips, withImpairment } from './faults';
 
 const names = { device: (id: string) => ({ d1: 'ESP32-42' })[id], network: (id: string) => ({ n1: 'IoT' })[id], group: () => 'Sensors' };
 
@@ -89,6 +89,15 @@ describe('fault chips', () => {
     }
     expect(overlayChips({ ...base, tls: { case: 'intercept', intercept: { http_rules: [{ action: 'abort' }] } } } as Overlay)).toEqual(['TLS intercept · 1 HTTP rule']);
     expect(overlayChips({ ...base } as Overlay)).toEqual(['TLS case']);
+  });
+
+  it('name the network a TLS case is aimed at, not its UUID (P5-AUDIT-33)', () => {
+    const base = { id: 'o', owner: { type: 'user', id: 'admin' }, created_at: '', updated_at: '', generation: 1, kind: 'tls' } as const;
+    const o = { ...base, tls: { case: 'expired', ports: [443], destination: { network: 'n1' } } } as Overlay;
+    expect(tlsChips(o.tls!, names)).toEqual(['TLS expired · 443 · network IoT']);
+    expect(overlayChips(o, undefined, names)).toEqual(['TLS expired · 443 · network IoT']);
+    // without the name at hand the reference is all there is
+    expect(overlayChips(o)).toEqual(['TLS expired · 443 · network n1']);
   });
 });
 

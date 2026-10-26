@@ -1,7 +1,7 @@
 // Captures in the UI (plan §2.11, §2.17 "Captures"; M23a): the state of a capture in words and tones, its scope in
 // words, the storage against the quota and the free-space limit, the device a capture belongs to, and the form of
 // "New capture" with the checks the gateway makes (the limits of plan §2.11) and the request it becomes.
-import type { Capture, CaptureRequest, CaptureScope, CaptureStorage, Scope } from '../api/generated/model';
+import type { Capture, CaptureRequest, CaptureScope, CaptureStorage, Scope, WireGuardNetwork } from '../api/generated/model';
 import type { DotTone } from '../components/ui/StatusDot.vue';
 import { describeMatch, describeScope, type Names } from './faults';
 import { scopeOf } from './faultForm';
@@ -135,6 +135,24 @@ export function describeCaptureScope(scope: CaptureScope | undefined, names: Nam
 export function isDeviceCapture(c: Pick<Capture, 'scope'>, device: { id: string; name: string }): boolean {
   const ref = c.scope.device ?? c.scope.selector?.source.device;
   return ref !== undefined && (ref === device.id || ref.toLowerCase() === device.name.toLowerCase());
+}
+
+/**
+ * Whether the gateway records a network: never a WireGuard network of the role management, the admin's tunnel to the
+ * control plane (it refuses the capture with `management_network`, P4-AUDIT-16), so the dialog does not offer it.
+ */
+export function isRecordable(n: { config: { type?: string } }): boolean {
+  return !(n.config.type === 'wireguard' && (n.config as WireGuardNetwork).role === 'management');
+}
+
+/**
+ * Whether the gateway records a device: not a client of a management WireGuard network, since its packets are the
+ * admin's tunnel too and the gateway refuses the capture as for the network (P5-AUDIT-31). A device whose network is
+ * not known is offered; the gateway decides.
+ */
+export function isRecordableDevice(d: { network?: string }, networks: { id: string; config: { type?: string } }[] | undefined): boolean {
+  const n = d.network ? networks?.find((x) => x.id === d.network) : undefined;
+  return !n || isRecordable(n);
 }
 
 /** The URL of the capture's file, or of its TLS key log. */

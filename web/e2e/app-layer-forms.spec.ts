@@ -279,6 +279,13 @@ test('the gateway\'s refusal of a TLS case stands under the field it names', asy
   await d.getByLabel('Address or prefix').fill('203.0.113.7/24');
   await d.getByRole('button', { name: 'Apply fault' }).click();
   await expect(d.getByLabel('Address or prefix')).toHaveAccessibleDescription('203.0.113.7/24 has host bits set');
+  // the refusal of the cut is tied to its checkbox (P5-AUDIT-38)
+  gw.rejectOverlay = [{ path: '/tls/cut_existing', code: 'invalid_tls_case', message: 'cut_existing needs a selection of new connections' }];
+  await d.getByLabel('Address or prefix').fill('203.0.113.0/24');
+  await d.getByLabel('Also cut existing connections').check();
+  await d.getByRole('button', { name: 'Apply fault' }).click();
+  await expect(d.getByLabel('Also cut existing connections')).toHaveAccessibleDescription('cut_existing needs a selection of new connections');
+  await expect(d.getByLabel('Also cut existing connections')).toHaveAttribute('aria-invalid', 'true');
 });
 
 test('the test CA is downloaded from the faults screen and from the device detail', async ({ page }) => {
@@ -451,6 +458,37 @@ test('a device without a MAC cannot be moved, and a network without DHCP has not
   await expect(page.getByTestId('dhcp-unavailable')).toHaveText('DHCP is off in this network: an action has nothing to change.');
   await page.goto('/networks');
   for (const a of ['short_lease', 'delete_lease', 'set_options', 'silence']) await expect(page.getByTestId(`dhcp-add-${a}`)).toBeDisabled();
+});
+
+test('while the overlays load, the DHCP card says so instead of "No action is in force" (P5-AUDIT-32)', async ({ page }) => {
+  const gw = MockGateway.sample();
+  let release = () => {};
+  gw.holding['/overlays'] = new Promise<void>((r) => (release = r));
+  await gw.install(page);
+  await page.goto(`/devices/${ESP}`);
+  const card = page.getByTestId('dhcp-card');
+  await expect(card.getByTestId('dhcp-loading')).toHaveText('Loading…');
+  await expect(card.getByTestId('dhcp-none')).toHaveCount(0);
+  release();
+  await expect(card.getByTestId('dhcp-none')).toHaveText('No action is in force.');
+  await expect(card.getByTestId('dhcp-loading')).toHaveCount(0);
+});
+
+test('a network without a dhcp block has DHCP off, as the gateway reads it, and its DHCP card says so (P5-AUDIT-08)', async ({ page }) => {
+  const gw = MockGateway.sample();
+  gw.networks = gw.networks.map((n) => {
+    if (n.id !== IOT) return n;
+    const config: Record<string, unknown> = { ...n.config };
+    delete config.dhcp;
+    return { ...n, config: config as unknown as typeof n.config };
+  });
+  await gw.install(page);
+  await page.goto(`/devices/${ESP}`);
+  for (const a of ['short_lease', 'delete_lease', 'force_new_ip', 'set_options', 'silence']) await expect(page.getByTestId(`dhcp-add-${a}`)).toBeDisabled();
+  await expect(page.getByTestId('dhcp-unavailable')).toHaveText('DHCP is off in this network: an action has nothing to change.');
+  await page.goto('/networks');
+  for (const a of ['short_lease', 'delete_lease', 'set_options', 'silence']) await expect(page.getByTestId(`dhcp-add-${a}`)).toBeDisabled();
+  await expect(page.getByTestId('dhcp-unavailable')).toHaveText('DHCP is off in this network: an action has nothing to change.');
 });
 
 test('a device that is in no network the gateway serves says so under its DHCP card, and its buttons are off', async ({ page }) => {

@@ -134,11 +134,13 @@ test('an interception case with several rules: made in the Add fault dialog, the
   await d.getByRole('button', { name: 'Add rule' }).click();
   const r4 = rule(page, 4);
   await r4.getByLabel('Action').selectOption('modify');
-  await expect(r4.getByText('This rule changes nothing')).toBeVisible();
+  await expect(r4.getByLabel('Action')).toHaveAccessibleDescription(/This rule changes nothing: add a header or a text to replace\.$/);
+  await expect(r4.getByLabel('Action')).toHaveAttribute('aria-invalid', 'true');
   await expect(d.getByRole('button', { name: 'Apply fault' })).toBeDisabled();
   await r4.getByRole('button', { name: 'Add a request header to rule 4' }).click();
   await r4.getByLabel('Request headers of rule 4, header 1 name').fill('X-Chaos');
-  await expect(r4.getByText('X-Chaos has no value')).toBeVisible();
+  await expect(r4.getByLabel('Request headers of rule 4, header 1 value')).toHaveAccessibleDescription('X-Chaos has no value: give one, or tick Remove to take the header away.');
+  await expect(r4.getByLabel('Request headers of rule 4, header 1 name')).toHaveAttribute('aria-invalid', 'true');
   await r4.getByLabel('Request headers of rule 4, header 1 value').fill('on');
   await r4.getByRole('button', { name: 'Add a request header to rule 4' }).click();
   await r4.getByLabel('Request headers of rule 4, header 2 name').fill('Cookie');
@@ -547,6 +549,20 @@ test('the exchanges that cannot be loaded say so', async ({ page }) => {
   await expect(page.getByTestId('flows-empty')).toHaveCount(0);
 });
 
+test('the cases in force are not called none when the overlays cannot be read but the configured faults can (P5-AUDIT-36)', async ({ page }) => {
+  const gw = MockGateway.sample();
+  gw.failing['/overlays'] = 500;
+  await gw.install(page);
+  await page.goto('/interception');
+  const card = page.getByRole('region', { name: 'Interception in force' });
+  await expect(card.getByTestId('load-error')).toContainText('The cases in force are not loaded');
+  await expect(card.getByTestId('no-cases')).toHaveCount(0);
+  delete gw.failing['/overlays'];
+  await card.getByRole('button', { name: 'Try again' }).click();
+  await expect(card.getByTestId('no-cases')).toBeVisible();
+  await expect(card.getByTestId('load-error')).toHaveCount(0);
+});
+
 // ---- the test CA
 
 test('the test CA: downloaded from the screen, and replaced only after the question says what it costs', async ({ page }) => {
@@ -574,6 +590,12 @@ test('the test CA: downloaded from the screen, and replaced only after the quest
   await q.getByTestId('ca-regenerate-confirm').click();
   await expect(q.getByRole('alert')).toHaveText('this token has not the scope full');
   expect(gw.regenerated).toBe(0);
+  // the refusal belongs to that attempt: the question opens again without it (P5-AUDIT-37)
+  await q.getByRole('button', { name: 'Cancel' }).click();
+  await expect(q).toBeHidden();
+  await card.getByRole('button', { name: 'Replace the test CA…' }).click();
+  await expect(q).toBeVisible();
+  await expect(q.getByRole('alert')).toHaveCount(0);
 
   // and the replacement itself: the toast, the reminder and the new certificate to download
   await q.getByTestId('ca-regenerate-confirm').click();
@@ -609,6 +631,9 @@ test('the device detail has a panel of the exchanges of the device while a case 
   await expect(rows).toHaveCount(5);
   await expect(rows.first().getByTestId('flow-request')).toHaveText('GET api.example.com/v1/c');
   await expect(panel.getByTestId('flow-device')).toHaveCount(0);
+  // only the device column is left out: every row has a cell under each header (P5-AUDIT-09)
+  await expect(panel.getByRole('columnheader')).toHaveText(['Time', 'Kind', 'Request', 'Status', 'Rules acted', 'Size', 'Took', 'Details']);
+  for (const row of await rows.all()) await expect(row.getByRole('cell')).toHaveCount(8);
   expect(gw.requestsTo('GET', '/intercept/flows').at(-1)!.query).toMatchObject({ device: ESP, limit: '8' });
   await panel.getByTestId('device-exchanges-all').click();
   await expect(page).toHaveURL(new RegExp(`/interception\\?device=${ESP}`));

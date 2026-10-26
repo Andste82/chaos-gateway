@@ -11,13 +11,15 @@ import { useQueryClient } from '@tanstack/vue-query';
 import { computed, ref, useId, watch } from 'vue';
 import { ApiError, errorMessage } from '../../api/fetcher';
 import { startCapture } from '../../api/generated/hooks/captures/captures';
-import type { Capture, WireGuardNetwork } from '../../api/generated/model';
+import type { Capture } from '../../api/generated/model';
 import { useGroups, useNames } from '../../composables/gateway';
 import {
   captureErrors,
   captureFieldOf,
   emptyCaptureForm,
   formToCaptureRequest,
+  isRecordable,
+  isRecordableDevice,
   type CaptureField,
   type CaptureForm,
   type ScopeKind,
@@ -77,10 +79,11 @@ const kindHints: Record<ScopeKind, string> = {
   uplink: 'Every packet of the uplink interface after NAT. It is not attributable to a device, and in a two-port setup it holds the management traffic too.',
 };
 
-/** The WireGuard networks of the role management are the admin's tunnel: the gateway never records them. */
-const recordable = (n: { config: { type?: string; role?: string } }) => !(n.config.type === 'wireguard' && (n.config as WireGuardNetwork).role === 'management');
-const deviceOptions = computed(() => (devices.data.value ?? []).map((d) => ({ value: d.id, label: d.name })));
-const networkOptions = computed(() => (networks.data.value ?? []).filter(recordable).map((n) => ({ value: n.id, label: names.value.network?.(n.id) ?? n.id })));
+// the WireGuard networks of the role management and their clients are the admin's tunnel: the gateway never records them
+const deviceOptions = computed(() =>
+  (devices.data.value ?? []).filter((d) => isRecordableDevice(d, networks.data.value)).map((d) => ({ value: d.id, label: d.name })),
+);
+const networkOptions = computed(() => (networks.data.value ?? []).filter(isRecordable).map((n) => ({ value: n.id, label: names.value.network?.(n.id) ?? n.id })));
 const sourceOptions = computed(() => {
   const out: { value: string; label: string }[] = [{ value: 'global', label: 'Everything' }];
   for (const n of networkOptions.value) out.push({ value: `network:${n.value}`, label: `Network · ${n.label}` });

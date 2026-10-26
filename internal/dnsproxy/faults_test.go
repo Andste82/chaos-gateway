@@ -288,6 +288,57 @@ func TestAShortTTLFaultRewritesTheTTLAndTheCacheKeepsTheRealOne(t *testing.T) {
 	}
 }
 
+// P5-AUDIT-16: short_ttl rewrites every record of the answer, the authority and the additional section too (not the OPT record):
+// the SOA of a negative answer is what sets how long a client caches the NXDOMAIN or NODATA.
+func TestAShortTTLFaultRewritesTheAuthorityAndAdditionalSectionsAndNegativeAnswers(t *testing.T) {
+	rr := func(s string) dns.RR {
+		r, err := dns.NewRR(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	up := &fakeUpstream{answer: func(_, _ string, q dns.Question) (*dns.Msg, error) {
+		m := new(dns.Msg)
+		m.Response = true
+		soa := rr("example.test. 900 IN SOA ns.example.test. admin.example.test. 1 3600 600 86400 300")
+		if strings.HasPrefix(q.Name, "missing.") {
+			m.Rcode = dns.RcodeNameError
+			m.Ns = []dns.RR{soa}
+			return m, nil
+		}
+		m.Answer = []dns.RR{aRecord(q.Name, "203.0.113.10", 300)}
+		m.Ns = []dns.RR{rr("example.test. 900 IN NS ns.example.test.")}
+		m.Extra = []dns.RR{aRecord("ns.example.test.", "203.0.113.53", 900)}
+		return m, nil
+	}}
+	_, addr, _ := runWithLog(t, up, config(t, faults(fault(ovA, `"action":"short_ttl","ttl":"1s"`))), nil)
+	check := func(name string, rcode int) {
+		t.Helper()
+		r := ask(t, addr, "udp", name, dns.TypeA)
+		if r.Rcode != rcode {
+			t.Fatalf("%s: %v", name, r)
+		}
+		n := 0
+		for _, section := range [][]dns.RR{r.Answer, r.Ns, r.Extra} {
+			for _, x := range section {
+				if x.Header().Rrtype == dns.TypeOPT {
+					continue
+				}
+				n++
+				if x.Header().Ttl != 1 {
+					t.Errorf("%s: %v keeps its TTL", name, x)
+				}
+			}
+		}
+		if want := map[int]int{dns.RcodeSuccess: 3, dns.RcodeNameError: 1}[rcode]; n != want {
+			t.Errorf("%s: %d records, want %d: %v", name, n, want, r)
+		}
+	}
+	check("example.test", dns.RcodeSuccess)
+	check("missing.example.test", dns.RcodeNameError)
+}
+
 func baseConfigGen(g int64) *model.DnsServiceConfig {
 	c := baseConfig()
 	c.Generation = g
@@ -374,6 +425,33 @@ func TestTheAddressesAreReportedBeforeTheAnswerIsSent(t *testing.T) {
 	got := calls[0][0]
 	if got.Set != "dns_aaaaaaaaaa" || got.Client != "127.0.0.1" || got.Name != "example.test" || len(got.Addresses) != 1 || got.Addresses[0] != "203.0.113.10" || got.Ttl != 300 {
 		t.Errorf("%+v", got)
+	}
+}
+
+// Plan §2.6 (P5-AUDIT-11): the set is updated before the answer is sent also when a delay fault holds the answer longer than the
+// query's bound on the upstream (three times Timeout): the report has a deadline of its own from the moment the answer is known.
+func TestAnAnswerADelayFaultHoldsPastTheUpstreamBoundIsStillReportedBeforeItIsSent(t *testing.T) {
+	up := upstreamA()
+	rec := &memResolutions{block: make(chan struct{}), seen: make(chan struct{}, 1)}
+	_, addr := running(t, up, config(t, sets(hostSet("dns_aaaaaaaaaa", "", "example.test"))+","+faults(fault(ovA, `"action":"delay","delay":"500ms"`))),
+		func(o *Options) { o.Resolutions, o.Timeout = rec, 100*time.Millisecond })
+	answered := make(chan *dns.Msg, 1)
+	go func() { answered <- ask(t, addr, "udp", "example.test", dns.TypeA) }()
+	select {
+	case <-rec.seen:
+	case r := <-answered:
+		t.Fatalf("the answer was sent before the report was made: %v", r)
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing was reported")
+	}
+	select {
+	case <-answered:
+		t.Fatal("the answer was sent before the report was through")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(rec.block)
+	if r := <-answered; len(r.Answer) != 1 {
+		t.Errorf("%v", r)
 	}
 }
 

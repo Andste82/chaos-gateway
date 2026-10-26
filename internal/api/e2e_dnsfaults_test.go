@@ -664,17 +664,24 @@ func TestSetUpdatesAreWrittenBesideAppliesOnTheRealKernel(t *testing.T) {
 }
 
 // M20 test (plan §3.10): the added answer latency for the names of a hostname set stays small: the proxy reports before it answers, and the
-// call returns when the kernel holds the elements. Names that nothing selects are the baseline.
+// call returns when the kernel holds the elements. Names that nothing selects are the baseline. Every measured name of the set has an
+// address of its own (P5-AUDIT-12): the proxy does not make a report again for the same client, set and addresses within a minute, so
+// names with one address would measure the deduplicated path after the first; the set's elements after the run show that every answer
+// made a report and a write.
 func TestTheAddedAnswerLatencyForHostnameSetNamesMeetsThePlanOnTheRealKernel(t *testing.T) {
-	b := newFaultBed(t, "--address=/set.test/203.0.113.51", "--address=/plain.test/203.0.113.52")
+	const names = 40
+	extra := []string{"--address=/plain.test/203.0.113.52"}
+	for i := 0; i < names; i++ {
+		extra = append(extra, fmt.Sprintf("--address=/h%d.set.test/198.18.0.%d", i, 1+i))
+	}
+	b := newFaultBed(t, extra...)
 	b.overlay(t, `{"target":{"network":"IoT"},"fault":{"latency":"1ms","destination":{"hostname":"*.set.test"}}}`)
 	waitFor(t, 20*time.Second, "the set is in the kernel", func() bool { return len(b.g.e.Snapshot().DNSSets) == 1 })
 	// the first query of a name goes upstream, then the proxy's cache answers: distinct names measure the path that reports
-	measure := func(suffix string) time.Duration {
+	measure := func(what string, name func(i int) string) (time.Duration, int) {
 		var ds []time.Duration
-		for i := 0; i < 40; i++ {
-			name := fmt.Sprintf("h%d-%d.%s", time.Now().UnixNano()%1000000, i, suffix)
-			out, err := b.dig(name, "+stats")
+		for i := 0; i < names; i++ {
+			out, err := b.dig(name(i), "+stats")
 			if err != nil {
 				continue
 			}
@@ -684,17 +691,27 @@ func TestTheAddedAnswerLatencyForHostnameSetNamesMeetsThePlanOnTheRealKernel(t *
 			}
 		}
 		if len(ds) < 20 {
-			t.Fatalf("%d answers for %s", len(ds), suffix)
+			t.Fatalf("%d answers for %s", len(ds), what)
 		}
-		return testbed.Median(ds)
+		return testbed.Median(ds), len(ds)
 	}
 	// dnsmasq answers every name of an --address domain
-	plain := measure("plain.test")
-	inSet := measure("set.test")
+	plain, _ := measure("plain.test", func(i int) string { return fmt.Sprintf("h%d-%d.plain.test", time.Now().UnixNano()%1000000, i) })
+	inSet, answered := measure("set.test", func(i int) string { return fmt.Sprintf("h%d.set.test", i) })
+	// every answer was reported and written: one element per name, of the client A
+	var ofA int
+	for _, e := range b.setElements("*.set.test") {
+		if strings.HasPrefix(e, testbed.ClientAAddr+" . 198.18.0.") {
+			ofA++
+		}
+	}
+	if ofA < answered {
+		t.Errorf("the set holds %d elements of A after %d answers: the measurement did not go through the report each time", ofA, answered)
+	}
 	added := inSet - plain
 	// plan §3.10: 5 ms on x86, 20 ms on a Raspberry Pi; dig reports whole milliseconds and the testbed VM is noisy: three times the target
 	limit := 15 * time.Millisecond
-	t.Logf("median query time %v for names in a set, %v for the others: %v added (the plan allows 5 ms)", inSet, plain, added)
+	t.Logf("median query time %v for names in a set (%d reports), %v for the others: %v added (the plan allows 5 ms)", inSet, ofA, plain, added)
 	if added > limit {
 		t.Errorf("the answers for names in a hostname set take %v longer, want at most %v", added, limit)
 	}

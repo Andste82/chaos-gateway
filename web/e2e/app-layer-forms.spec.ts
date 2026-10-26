@@ -453,6 +453,16 @@ test('a device without a MAC cannot be moved, and a network without DHCP has not
   for (const a of ['short_lease', 'delete_lease', 'set_options', 'silence']) await expect(page.getByTestId(`dhcp-add-${a}`)).toBeDisabled();
 });
 
+test('a device that is in no network the gateway serves says so under its DHCP card, and its buttons are off', async ({ page }) => {
+  const gw = MockGateway.sample();
+  gw.devices = gw.devices.map((x) => (x.id === ESP ? { ...x, network: '5d1f0c2e-9b3a-4e7d-8c6f-2a1b3c4d5e6f' } : x));
+  await gw.install(page);
+  await page.goto(`/devices/${ESP}`);
+  const card = page.getByTestId('dhcp-card');
+  for (const a of ['short_lease', 'delete_lease', 'force_new_ip', 'set_options', 'silence']) await expect(card.getByTestId(`dhcp-add-${a}`)).toBeDisabled();
+  await expect(card.getByTestId('dhcp-unavailable')).toHaveText('This device is in no network with DHCP: an action has nothing to change.');
+});
+
 test('a gateway that has no DHCP actions has no card for them', async ({ page }) => {
   const gw = MockGateway.sample();
   gw.capabilities.overlay_kinds = gw.capabilities.overlay_kinds.filter((k) => k !== 'dhcp');

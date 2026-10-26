@@ -77,8 +77,10 @@ const notFound = computed(() => device.error.value instanceof ApiError && device
 const network = computed(() => networks.data.value?.find((n) => n.id === d.value?.network));
 const networkConfig = computed(() => network.value?.config as { name?: string; address?: string } | undefined);
 const netInfo = computed(() => (d.value ? deviceNetworkInfo(network.value?.config, d.value.id) : undefined));
-/** DHCP is off where the device is, or the device is in no network the gateway serves (a WireGuard client has none: its card is left out). */
-const dhcpOff = computed(() => !!networks.data.value && (!network.value || (networkConfig.value as { dhcp?: { enabled?: boolean } } | undefined)?.dhcp?.enabled === false));
+/** The device is in no network the gateway serves (a WireGuard client has none: its card is left out). */
+const noNetwork = computed(() => !!networks.data.value && !network.value);
+/** DHCP is off where the device is. */
+const dhcpOff = computed(() => !!networks.data.value && !!network.value && (networkConfig.value as { dhcp?: { enabled?: boolean } } | undefined)?.dhcp?.enabled === false);
 /** The DHCP server knows a device by its MAC addresses, the configured ones or the seen ones. */
 const hasMac = computed(() => !!d.value && ((d.value.observed.macs?.length ?? 0) > 0 || (d.value.config?.identifiers?.macs?.length ?? 0) > 0));
 const groupNames = computed(() => (d.value?.groups ?? []).map((g) => names.value.group?.(g) ?? g));
@@ -370,6 +372,7 @@ useApiScreen('this device', () => [
           :target="{ device: d.id }"
           :name="d.name"
           :dhcp-off="dhcpOff"
+          :no-network="noNetwork"
           :no-mac="!hasMac"
         />
 

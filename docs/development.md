@@ -1213,7 +1213,10 @@ proxy; the TLS responder (M21) joined it, see "TLS responder: certificate cases 
   Until the setup has been applied the proxy cannot reach the API (the link to its namespace is made by
   the first apply). `Follow` warns once, with a hint, and again only when the error changes; the
   attempts in between are logged at debug level, and the recovery once (issue #57 F6,
-  `TestTheProxyWarnsOnceWhileTheAPICannotBeReached`).
+  `TestTheProxyWarnsOnceWhileTheAPICannotBeReached`). The pause between two attempts doubles from 1 s to at most 10 s while no
+  configuration has been in use, and stays at 2 s once one has (P5-AUDIT-14): a restart of the gateway drops the overlays, and the
+  DNS faults of the configuration the proxy keeps while the API is away go within 2 s of its return
+  (`TestTheProxyAsksAgainWithinTwoSecondsOnceAConfigurationWasInUse`).
 - **Not in M6b:** DNS faults, hostname selectors and the redirect of hardcoded resolvers (M20, done: "DNS faults and hostname selectors (M20)"), the TLS responder (M21, "TLS responder: certificate cases (M21)"),
   `/internal/dns/resolutions` (M20, done), per-device query statistics.
 
@@ -5574,7 +5577,9 @@ checks, waits and captures that name a host use the same addresses.
   levels. Decision 2 says what that costs.
 - **The proxy** (`dnsproxy`). `hostname_sets` of its configuration tell which names to report: after the answer is known and before it
   is sent, the question and the CNAME targets of the answer are matched against the selectors (and the client against the set's
-  sources), and (client, name, A addresses, smallest TTL) is posted to `POST /internal/dns/resolutions`; the answer waits for the call.
+  sources), and (client, name, A addresses, smallest TTL) is posted to `POST /internal/dns/resolutions`; the answer waits for the call, at most
+  2 s from the moment the answer is known (a deadline of its own, not the rest of the query's bound on the upstream, which a `delay` fault may
+  have used up, P5-AUDIT-11).
   Reports of concurrent queries gather for at most `BatchWindow` (2 ms) and make one call; a report for the same client, set and addresses made
   in the last minute is not made again (a new configuration forgets them). The report is of the answer that was sent: a wrong answer
   reports the addresses it gave, a short TTL its TTL. A call that fails does not stop the answer (decision 7).
@@ -5584,13 +5589,20 @@ checks, waits and captures that name a host use the same addresses.
   flows of every read of the connections (`refresh`): an element with a flow of its client to its address and less than half of its
   lifetime left is written again with the full lifetime, so a long-lived connection keeps its fault past a short TTL and past ten
   minutes. After a restart the elements the kernel still holds are adopted from the listing the first apply reads back, with the time they have left.
+- **A device that changes its address** (`hostSets.rekey`, plan §2.3: "DNS-derived hostname-set entries keyed on the old address are re-keyed";
+  P5-AUDIT-01). After every apply that succeeded, full or incremental, the engine compares the owners of the addresses with those of the last one: an element
+  (A, x) of a device that has the address B now (too, or instead) is written as (B, x) with the time it has left, into every set whose sources hold B, so a device
+  that keeps its cached answer after a "force new IP" keeps its hostname faults and rules without a new query. The element (A, x) is taken out when A went to
+  another device (the new holder wins, as in the identity map) or left a device that has other addresses; an old address that stays mapped for its connections
+  keeps its elements. A failed write is logged, and the device's next query writes the element.
 - **The executor** (`executor/dnssets.go`, `netlinkset.go`). `nft_dns_elements` takes the elements of the sets of this one kind
   (`dns_<10 hex>_<6 hex>`, valid unicast IPv4 addresses, 1 s to 30 days) and runs beside the writer: it never enters the queue (as a read
   does not), one request at a time on a persistent netlink connection per namespace (`google/nftables`, lasting, opened at the first update;
   `executor.New` uses it when the runner is the real one and the nft tool through the runner otherwise, which is what the tests against
   the simulated kernel run). The client sends such requests over connections of its own, so they do not wait for a plan on the main one either. The kernel
   does not change the lifetime of an element it has, so a refresh deletes and adds in one transaction, and a delete that finds nothing
-  (the element ran out) is answered with the adds alone.
+  (the element ran out) is answered with the adds alone. An element with `delete` is taken out (the re-keying above); when the transaction fails, these
+  deletes go one by one after the adds, and one that finds nothing is no error.
 - **A plan that replaces a set.** Updates for a set whose name the plan about to run changes wait for it (`hostSets.begin`/`end` around the apply of the
   apply loop) and then go into the new set; the report names the selector (the id), not the set. The new set starts empty, the mirror drops what it
   held, and the event `dns_set_epoch` says so. A failed plan changes nothing. Updates for other sets, and all of them while no plan replaces
@@ -5605,7 +5617,9 @@ checks, waits and captures that name a host use the same addresses.
   empty answer with the TC bit, over TCP the real one; `short_ttl` rewrites every TTL (`0s` is allowed), after the proxy's cache, which keeps the real one. The log
   entry names the overlay when the fault changed the answer, and the engine publishes `dns_fault_triggered` (at most once per overlay and device in 10 s).
   A DNS fault competes only with DNS faults (E5). The state of a DNS overlay is `effective` while it is in a list; `GET /overlays` names what overrides it.
-  The counter of a DNS overlay, and of the `dns` part of an activated profile, is the number of answers the fault changed (packets, no bytes), kept in memory like the log (its epoch is the start of the API);
+  The counter of a DNS overlay, and of the `dns` part of an activated profile, is the number of answers the fault changed (packets, no bytes), kept in memory like the log (its epoch is the start of the API; a counter that adds it to the kernel counters of a profile's other parts
+  has an epoch that changes when either part's does, `mixEpochs`, so a kernel fault that is made anew mid-run is not taken for a counter that went on, P5-AUDIT-13;
+  the counts of overlays that are not in the store any more are forgotten at the first read of a new snapshot, and a read copies only those of the overlays in a DNS or TLS list, P5-AUDIT-15);
   a DNS step that changed no answer is a `zero_hit` of the run ("the DNS fault of step X changed no answer"); a profile step, "DNS broken" included, is judged by the counter of its activation, which adds
   the answers its `dns` part changed to the packets of its other parts, and says "the profile of step X matched no packet".
 - **Hardcoded resolvers** (`compiler/service.go`). A network with `dns.redirect_hardcoded` gets the DNAT of the gateway's address for every other destination of UDP and TCP port 53 too, except what lies in
@@ -5653,13 +5667,14 @@ Taken by best practice where the plan leaves room (the one that needed the maint
 ### Tests
 
 Level 0, all run here: `compiler/hostnames_test.go` (sets, rules, order, per-device rules, MTU, the nft parser accepts the transaction: `scenarioHostnames` is in `transactionScenarios`), `dns_test.go` (the entries of the proxy's list, E5, order),
-`dnsredirect_test.go`, `forward_test.go` (the responder form of a hostname rule), `domain` (the unavailable families, the matching of `*.suffix`), `executor/dnssets_test.go` (decode and scope of the operation, the transaction's JSON, refresh and its fallback, an update beside a plan on the executor and over the socket, one request at a time),
+`dnsredirect_test.go`, `forward_test.go` (the responder form of a hostname rule), `domain` (the unavailable families, the matching of `*.suffix`), `executor/dnssets_test.go` (decode and scope of the operation, the transaction's JSON, refresh and its fallback, an element taken out and its fallback, an update beside a plan on the executor and over the socket, one request at a time),
 `apply/dnssets_test.go` (the elements survive every apply on the simulated kernel, verify does not compare them, a set that goes), `engine/hostsets_test.go` and `hostsets_internal_test.go` (the set holds the report when the call returns, no second write,
-refresh at half, the group commit, a flow keeps an element alive, an update beside a held plan, an update for a replaced set waits and lands in the new one, a request that was on its way while a plan replaced the set is not remembered as written, a large batch is split into requests the executor takes, adoption after a restart, the names),
-`dnsproxy/faults_test.go` (every action over UDP and TCP, sources, names, order, the report before the answer, CNAMEs, batching, dedup, a failing report), `api/dnsfaults_test.go` (the configuration, state, resolutions endpoint, events, capabilities), `run/hostnames_test.go`
+refresh at half, the group commit, a flow keeps an element alive, an update beside a held plan, an update for a replaced set waits and lands in the new one, a request that was on its way while a plan replaced the set is not remembered as written, a large batch is split into requests the executor takes, adoption after a restart, the names, the elements of a device follow it to its new address: `TestTheElementsOfADeviceFollowItToItsNewAddress`; through the apply loop after a forced new IP: `dhcpaction_test.go` `TestTheDNSDerivedElementsOfADeviceFollowItAfterTheForcedNewIP`),
+`dnsproxy/faults_test.go` (every action over UDP and TCP, sources, names, order, the report before the answer, also after a delay past the upstream's bound, CNAMEs, batching, dedup, a failing report, `short_ttl` in the authority and additional sections and in a negative answer),
+`api/counters_internal_test.go` (the epoch of a profile counter with a `dns` part, the counters of removed overlays), `api/dnsfaults_test.go` (the configuration, state, resolutions endpoint, events, capabilities), `run/hostnames_test.go`
 (checks and a wait for a host), the capture of a host in `api/captures_test.go`. Web: `lib/faults.test.ts` (DNS chips), `lib/rules.test.ts`; the Playwright specs of profiles, rules, the Linux view and the scenarios pass.
 
-Level 1 (written, vetted with `-tags testbed`, run by CI with `$M20_LEVEL1`, not run here: no KVM, no namespaces): `api/e2e_dnsfaults_test.go` and `executor/dnssets_integration_test.go`, listed in `.github/level1-tests.env`.
+Level 1 (written, vetted with `-tags testbed`, run by CI with `$M20_LEVEL1`, not run here: no KVM, no namespaces): `api/e2e_dnsfaults_test.go`, `executor/dnssets_integration_test.go` and `engine/integration_dhcpactions_test.go` `TestAHostnameFaultStillActsAfterTheForcedNewIPWithoutANewQueryOnTheRealKernel`, listed in `.github/level1-tests.env`.
 
 ### Acceptance map (plan M20 "Tests" and the acceptance of Phase 2)
 
@@ -5673,7 +5688,8 @@ Level 1 (written, vetted with `-tags testbed`, run by CI with `$M20_LEVEL1`, not
 | Download and upload latency apply to the queries of a device (S16) | `TestUploadAndDownloadLatencyApplyToTheQueriesOfADeviceOnTheRealKernel` |
 | A set update during a long plan is applied without waiting for it | `TestASetUpdateDuringALongPlanIsAppliedWithoutWaitingForIt`, `TestADNSSetUpdateIsWrittenWhileALongPlanRuns`, `TestADNSElementIsWrittenWhileTheExecutorAppliesALargeTransactionOnTheRealKernel`, `TestSetUpdatesAreWrittenBesideAppliesOnTheRealKernel` |
 | … and one for a set the plan replaces lands in the new set | `TestAnUpdateForASetThePlanReplacesWaitsAndLandsInTheNewSet` |
-| The added answer latency for hostname-set names meets §3.10 | `TestTheAddedAnswerLatencyForHostnameSetNamesMeetsThePlanOnTheRealKernel` (3 times the target on a VM; the measurement is logged) |
+| §2.3: DNS-derived entries keyed on the old address are re-keyed (P5-AUDIT-01) | `TestTheElementsOfADeviceFollowItToItsNewAddress`, `TestTheDNSDerivedElementsOfADeviceFollowItAfterTheForcedNewIP`, `TestAHostnameFaultStillActsAfterTheForcedNewIPWithoutANewQueryOnTheRealKernel` (level 1) |
+| The added answer latency for hostname-set names meets §3.10 | `TestTheAddedAnswerLatencyForHostnameSetNamesMeetsThePlanOnTheRealKernel` (3 times the target on a VM; the measurement is logged; every measured name has an address of its own, so each answer makes a report and a write, and the set's elements after the run say so, P5-AUDIT-12) |
 | Acceptance: an access rule with a hostname destination compiles to the DNS-derived set; a drop rule blocks the resolved addresses (P2-M9-02) | `TestADNSDerivedSetIsDynamicKeyedOnTheDeviceAndTheAddressAndHasATimeout`, `TestADropRuleWithAHostnameBlocksTheResolvedAddressesOnTheRealKernel` |
 | Acceptance: a profile with a `dns` part, "DNS broken" included, activates and competes in the DNS family (E5); the family is lifted (P2-M11-01) | `TestADeviceLatencyAndADNSBrokenProfileOnTheNetworkCombine`, `TestTheDNSBrokenProfileActivatesAndCombinesWithALatencyFaultOnTheRealKernel` |
 | Scope: DoT blocking | `TestDNSOverTLSIsDroppedForTheNetworksThatBlockItAfterTheAccessRules`, `TestHardcodedDNSIsRedirectedAndDoTIsBlockedOnTheRealKernel` |

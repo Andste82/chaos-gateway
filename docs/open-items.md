@@ -2680,11 +2680,14 @@ Remaining points of minor weight that the round left, none of them a new item:
   decisions 5 and 7).
 - `internal/api` needs a `-timeout` above the Makefile's 20 minutes under `-race` on a loaded small machine (829 s here, earlier
   runs of the round hit 10 minutes with the default timeout).
-- `TestForceNewIPMovesTheClientAtItsRenewalOnTheRealKernel` (`M23_LEVEL1`) failed once in the VM job of CI run 40351451158 on
-  `66a06cc`, a commit that changed only docs: the client had its new address, but no renewal of it came within 15 s. The rerun of
-  the job passed, and the test passed in both testbed jobs of run 40335480067 on `9bfd4cf` and in every earlier run. The cause is
-  not known; the check now prints the client's log, as the test's other checks do, so that a next failure shows what the client
-  did.
+- `TestForceNewIPMovesTheClientAtItsRenewalOnTheRealKernel` (`M23_LEVEL1`) failed in the VM job of CI run 40351451158 on
+  `66a06cc` (a commit that changed only docs; the rerun of the job passed) and again in run 40393245421 on `2d42d10`: the client
+  had its new address, but no renewal of it came within 15 s. The client's log, which the check now prints, showed the cause:
+  busybox's `udhcpc` (1.36 and later) raises a lease below 30 s to 30 s for its own timers and renews at half of that, so the
+  renewal of the 6 s lease comes about 15 s after the client is bound, not at 3 s as the test assumed, and the wait of 15 s raced it. The
+  test and `TestAShortLeaseOfTheNetworkIsWhatUdhcpcGetsAndItRenewsSoonOnTheRealKernel`, which had the same wait, now wait 25 s,
+  still before the 30 s at which a client of the network's own lease of a minute renews; their comments and the M23 section of
+  `docs/development.md` say why. Not a Phase 5 code defect: the gateway gave the leases it should.
 
 ### Phase 5 audit items for the maintainer
 

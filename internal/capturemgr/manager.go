@@ -764,15 +764,35 @@ func (m *Manager) save(c *capState) {
 	m.writeRecord(c, f)
 }
 
+// saveUnlessEnding writes the record of a capture unless it has begun to end. The check and the write are one step under the
+// lock of the record's file, so finish's final record, written under the same lock after it set ending, always comes last.
+func (m *Manager) saveUnlessEnding(c *capState) {
+	c.fileMu.Lock()
+	defer c.fileMu.Unlock()
+	m.mu.Lock()
+	if c.ending {
+		m.mu.Unlock()
+		return
+	}
+	f := recordFile{Version: fileVersion, Capture: c.rec, Files: append([]string(nil), c.files...)}
+	m.mu.Unlock()
+	m.writeRecordLocked(c, f)
+}
+
 // writeRecord writes a record of a capture to its file.
 func (m *Manager) writeRecord(c *capState, f recordFile) {
+	c.fileMu.Lock()
+	defer c.fileMu.Unlock()
+	m.writeRecordLocked(c, f)
+}
+
+// writeRecordLocked is writeRecord for a caller that holds c.fileMu.
+func (m *Manager) writeRecordLocked(c *capState, f recordFile) {
 	raw, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		m.log.Error("cannot encode a capture", "capture", c.id, "error", err)
 		return
 	}
-	c.fileMu.Lock()
-	defer c.fileMu.Unlock()
 	tmp := filepath.Join(c.dir, recordName+".tmp")
 	if err := os.WriteFile(tmp, raw, 0o640); err != nil {
 		m.log.Error("cannot write a capture", "capture", c.id, "error", err)

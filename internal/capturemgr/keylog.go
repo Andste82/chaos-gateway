@@ -70,6 +70,9 @@ func (m *Manager) AppendKeylog(client netip.Addr, lines []string) {
 		}
 	}
 	m.mu.Unlock()
+	if keylogTargetsChosen != nil {
+		keylogTargetsChosen()
+	}
 	for _, t := range targets {
 		if Covers(snap, w, t.scope, client) {
 			m.appendKeylog(t.c, lines)
@@ -77,10 +80,17 @@ func (m *Manager) AppendKeylog(client netip.Addr, lines []string) {
 	}
 }
 
+// keylogTargetsChosen is called, in tests only, between the choice of the captures that take a batch and the writes: a capture
+// can end in between.
+var keylogTargetsChosen func()
+
+// appendKeylog writes the lines to the key log of a capture. The capture may have begun to end since it was chosen: the end is
+// checked again before anything is written, and the flags are set before the lines are, so the record that finish writes
+// (which copies the record after setting ending) holds them whenever the file holds a line.
 func (m *Manager) appendKeylog(c *capState, lines []string) {
 	c.keyMu.Lock()
 	defer c.keyMu.Unlock()
-	if c.keyFull {
+	if c.keyFull || m.isEnding(c) {
 		return
 	}
 	f, err := os.OpenFile(filepath.Join(c.dir, keylogName), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o640)
@@ -88,34 +98,41 @@ func (m *Manager) appendKeylog(c *capState, lines []string) {
 		m.log.Warn("cannot open the key log of a capture", "capture", c.id, "error", err)
 		return
 	}
+	defer func() { _ = f.Close() }()
 	var buf []byte
 	for _, l := range lines {
 		buf = append(buf, l...)
 		buf = append(buf, '\n')
 	}
 	if fi, err := f.Stat(); err == nil && fi.Size()+int64(len(buf)) > maxKeylogBytes {
-		_ = f.Close()
 		c.keyFull = true
 		m.log.Warn("the key log of a capture is full: the secrets of later connections are dropped", "capture", c.id, "limit", maxKeylogBytes)
 		return
 	}
-	_, werr := f.Write(buf)
-	if cerr := f.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		m.log.Warn("cannot write the key log of a capture", "capture", c.id, "error", werr)
+	m.mu.Lock()
+	if c.ending || c.rec.Status != model.CaptureStatusRunning {
+		m.mu.Unlock()
 		return
 	}
-	m.mu.Lock()
 	first := !deref(c.rec.Keylog)
-	if first && !c.ending {
+	if first {
 		c.rec.Keylog, c.rec.Sensitive = ptr(true), ptr(true)
 	}
 	m.mu.Unlock()
 	if first {
-		m.save(c)
+		// the running record, unless the capture has begun to end since: then finish writes the final one, which has the flags
+		m.saveUnlessEnding(c)
 	}
+	if _, err := f.Write(buf); err != nil {
+		m.log.Warn("cannot write the key log of a capture", "capture", c.id, "error", err)
+	}
+}
+
+// isEnding reports whether a capture has ended or begun to end.
+func (m *Manager) isEnding(c *capState) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return c.ending || c.rec.Status != model.CaptureStatusRunning
 }
 
 // openKeylog returns the key log of a capture for download.

@@ -182,6 +182,10 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			} else {
 				e.hosts.applied(target, nil)
 			}
+			if err == nil {
+				// the DNS-derived set elements of a device that changed its address follow it (plan §2.3)
+				e.hosts.rekey(ctx, d.Identity)
+			}
 			took := e.cfg.Clock.Monotonic() - start
 			prev.deviceHigh = max(prev.deviceHigh, target.DeviceNumHigh)
 			if err != nil {

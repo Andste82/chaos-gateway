@@ -137,7 +137,15 @@ func (n *netlinkSets) WriteDNSElements(ctx context.Context, ns string, updates [
 		if c, ok := n.ns[ns]; ok {
 			c.sets = map[string]*nftables.Set{}
 		}
-		err = n.write(ns, updates, false)
+		if err = n.write(ns, updates, false); err == nil {
+			// the elements to take out go one by one: one that is not there is what was wanted
+			for _, d := range deletesOf(updates) {
+				if derr := n.write(ns, []DNSSetUpdate{d}, true); derr != nil && !errors.Is(derr, syscall.ENOENT) {
+					err = derr
+					break
+				}
+			}
+		}
 	}
 	if err != nil && !errors.Is(err, syscall.ENOENT) && !errors.Is(err, syscall.EEXIST) {
 		// the connection may be out of step (the kernel closed it, the namespace went): the next update
@@ -173,9 +181,11 @@ func (n *netlinkSets) write(ns string, updates []DNSSetUpdate, withDeletes bool)
 			if err != nil {
 				return err
 			}
-			q.add = append(q.add, nftables.SetElement{Key: k, Timeout: time.Duration(e.TimeoutSeconds) * time.Second})
-			if withDeletes && e.Replace {
+			if withDeletes && (e.Replace || e.Delete) {
 				q.del = append(q.del, nftables.SetElement{Key: k})
+			}
+			if !e.Delete {
+				q.add = append(q.add, nftables.SetElement{Key: k, Timeout: time.Duration(e.TimeoutSeconds) * time.Second})
 			}
 		}
 		batch = append(batch, q)
@@ -186,8 +196,10 @@ func (n *netlinkSets) write(ns string, updates []DNSSetUpdate, withDeletes bool)
 				return err
 			}
 		}
-		if err := c.conn.SetAddElements(q.set, q.add); err != nil {
-			return err
+		if len(q.add) > 0 {
+			if err := c.conn.SetAddElements(q.set, q.add); err != nil {
+				return err
+			}
 		}
 	}
 	return c.conn.Flush()

@@ -22,46 +22,66 @@ type SetWriter interface {
 func WithSetWriter(w SetWriter) Option { return func(e *Executor) { e.sets = w } }
 
 // dnsCommands is the nftables JSON of the updates: the deletes of the elements that are refreshed
-// (withDeletes), then the adds with their lifetimes, one command per set.
-func dnsCommands(updates []DNSSetUpdate, withDeletes bool) []byte {
+// (refreshDeletes) and of those that are taken out (explicitDeletes), then the adds with their lifetimes,
+// one command per set. It is nil when there is nothing to send.
+func dnsCommands(updates []DNSSetUpdate, refreshDeletes, explicitDeletes bool) []byte {
 	key := func(e DNSElement) any { return map[string]any{"concat": []any{e.Client, e.Addr}} }
 	var cmds []any
-	if withDeletes {
-		for _, u := range updates {
-			var del []any
-			for _, e := range u.Elements {
-				if e.Replace {
-					del = append(del, key(e))
-				}
+	for _, u := range updates {
+		var del []any
+		for _, e := range u.Elements {
+			if (e.Replace && refreshDeletes) || (e.Delete && explicitDeletes) {
+				del = append(del, key(e))
 			}
-			if len(del) > 0 {
-				cmds = append(cmds, map[string]any{"delete": map[string]any{"element": map[string]any{
-					"family": NftFamily, "table": NftTable, "name": u.Set, "elem": del}}})
-			}
+		}
+		if len(del) > 0 {
+			cmds = append(cmds, map[string]any{"delete": map[string]any{"element": map[string]any{
+				"family": NftFamily, "table": NftTable, "name": u.Set, "elem": del}}})
 		}
 	}
 	for _, u := range updates {
 		add := make([]any, 0, len(u.Elements))
 		for _, e := range u.Elements {
-			add = append(add, map[string]any{"elem": map[string]any{"val": key(e), "timeout": e.TimeoutSeconds}})
+			if !e.Delete {
+				add = append(add, map[string]any{"elem": map[string]any{"val": key(e), "timeout": e.TimeoutSeconds}})
+			}
 		}
-		cmds = append(cmds, map[string]any{"add": map[string]any{"element": map[string]any{
-			"family": NftFamily, "table": NftTable, "name": u.Set, "elem": add}}})
+		if len(add) > 0 {
+			cmds = append(cmds, map[string]any{"add": map[string]any{"element": map[string]any{
+				"family": NftFamily, "table": NftTable, "name": u.Set, "elem": add}}})
+		}
+	}
+	if len(cmds) == 0 {
+		return nil
 	}
 	b, _ := json.Marshal(map[string]any{"nftables": cmds})
 	return b
 }
 
-// refreshes reports whether an update asks to refresh an element.
+// refreshes reports whether an update deletes an element: a refresh, or an element that is taken out.
 func refreshes(updates []DNSSetUpdate) bool {
 	for _, u := range updates {
 		for _, e := range u.Elements {
-			if e.Replace {
+			if e.Replace || e.Delete {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// deletesOf returns every element that is taken out, as an update of its own each: written one by one,
+// one that is not there does not stop the others.
+func deletesOf(updates []DNSSetUpdate) []DNSSetUpdate {
+	var out []DNSSetUpdate
+	for _, u := range updates {
+		for _, e := range u.Elements {
+			if e.Delete {
+				out = append(out, DNSSetUpdate{Set: u.Set, Elements: []DNSElement{e}})
+			}
+		}
+	}
+	return out
 }
 
 // cliSets writes through `nft -j -f -`.
@@ -70,16 +90,24 @@ type cliSets struct{ run Runner }
 func (w cliSets) Close() error { return nil }
 
 func (w cliSets) WriteDNSElements(ctx context.Context, ns string, updates []DNSSetUpdate) error {
-	err := w.write(ctx, ns, dnsCommands(updates, true))
+	err := w.write(ctx, ns, dnsCommands(updates, true, true))
 	if err != nil && refreshes(updates) {
-		// an element that was to be refreshed ran out in the meantime: the delete finds nothing and
-		// fails the transaction. The adds alone are the right thing then.
-		err = w.write(ctx, ns, dnsCommands(updates, false))
+		// an element that was to be refreshed or taken out ran out in the meantime: the delete finds
+		// nothing and fails the transaction. The adds alone are the right thing then, and the elements
+		// to take out go one by one (one that is not there is what was wanted).
+		if err = w.write(ctx, ns, dnsCommands(updates, false, false)); err == nil {
+			for _, d := range deletesOf(updates) {
+				_ = w.write(ctx, ns, dnsCommands([]DNSSetUpdate{d}, false, true))
+			}
+		}
 	}
 	return err
 }
 
 func (w cliSets) write(ctx context.Context, ns string, ruleset []byte) error {
+	if ruleset == nil {
+		return nil
+	}
 	c := Command{Tool: ToolNft, Args: []string{"-j", "-f", "-"}, Stdin: string(ruleset), NS: ns}
 	res, err := w.run.Run(ctx, c)
 	if err != nil {
@@ -92,9 +120,10 @@ func (w cliSets) write(ctx context.Context, ns string, ruleset []byte) error {
 }
 
 // planDNSElements is the operation as a step of a request that also holds other operations: the adds
-// through the nft tool (a refresh is an add here; the netlink path does the delete).
+// through the nft tool (a refresh is an add here; the netlink path does the delete). An element that is
+// taken out must be there in this form (the engine never sends one beside other operations).
 func planDNSElements(o *NftDNSElements) []Step {
-	return []Step{{Cmd: Command{Tool: ToolNft, Args: []string{"-j", "-f", "-"}, Stdin: string(dnsCommands(o.Updates, false)), NS: o.NS}}}
+	return []Step{{Cmd: Command{Tool: ToolNft, Args: []string{"-j", "-f", "-"}, Stdin: string(dnsCommands(o.Updates, false, true)), NS: o.NS}}}
 }
 
 // isDNSElements reports whether a request consists of DNS-set updates only (at least one).

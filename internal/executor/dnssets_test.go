@@ -29,20 +29,22 @@ func TestTheDNSElementsOperationTakesDNSSetsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, body := range map[string]string{
-		"another set":       dnsOp("ident4_aabbcc"),
-		"the set of a rule": dnsOp("asrc_0123456789ab_aabbcc"),
-		"a short id":        dnsOp("dns_0123_abcdef"),
-		"no hash":           dnsOp("dns_0123456789"),
-		"no update":         `{"type":"nft_dns_elements","updates":[]}`,
-		"no element":        `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[]}]}`,
-		"a prefix":          `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.0/24","addr":"203.0.113.7","timeout_seconds":600}]}]}`,
-		"a name":            `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"example.com","timeout_seconds":600}]}]}`,
-		"an IPv6 address":   `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"2001:db8::1","timeout_seconds":600}]}]}`,
-		"a multicast":       `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"224.0.0.1","timeout_seconds":600}]}]}`,
-		"no lifetime":       `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"203.0.113.7","timeout_seconds":0}]}]}`,
-		"a year":            `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"203.0.113.7","timeout_seconds":31536000}]}]}`,
-		"an unknown field":  `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"203.0.113.7","timeout_seconds":60,"x":1}]}]}`,
-		"a namespace":       `{"type":"nft_dns_elements","namespace":"a b","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"203.0.113.7","timeout_seconds":60}]}]}`,
+		"another set":              dnsOp("ident4_aabbcc"),
+		"the set of a rule":        dnsOp("asrc_0123456789ab_aabbcc"),
+		"a short id":               dnsOp("dns_0123_abcdef"),
+		"no hash":                  dnsOp("dns_0123456789"),
+		"no update":                `{"type":"nft_dns_elements","updates":[]}`,
+		"no element":               `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[]}]}`,
+		"a prefix":                 `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.0/24","addr":"203.0.113.7","timeout_seconds":600}]}]}`,
+		"a name":                   `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"example.com","timeout_seconds":600}]}]}`,
+		"an IPv6 address":          `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"2001:db8::1","timeout_seconds":600}]}]}`,
+		"a multicast":              `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"224.0.0.1","timeout_seconds":600}]}]}`,
+		"no lifetime":              `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"203.0.113.7","timeout_seconds":0}]}]}`,
+		"a year":                   `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"203.0.113.7","timeout_seconds":31536000}]}]}`,
+		"an unknown field":         `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"203.0.113.7","timeout_seconds":60,"x":1}]}]}`,
+		"a namespace":              `{"type":"nft_dns_elements","namespace":"a b","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"203.0.113.7","timeout_seconds":60}]}]}`,
+		"a delete with a lifetime": `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"203.0.113.7","timeout_seconds":60,"delete":true}]}]}`,
+		"a delete that replaces":   `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[{"client":"10.10.0.1","addr":"203.0.113.7","replace":true,"delete":true}]}]}`,
 	} {
 		if _, err := Decode([]byte(body)); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -262,5 +264,41 @@ func TestTheNetlinkKeyOfAnElementIsTheTwoAddresses(t *testing.T) {
 	}
 	if _, err := elementKey(DNSElement{Client: "x", Addr: "203.0.113.7"}); err == nil {
 		t.Error("a bad address")
+	}
+}
+
+// Plan §2.3 (P5-AUDIT-01): an element can be taken out (the engine re-keys the elements of a device whose old address went
+// to another device). The delete is in the transaction and has no add; when the transaction fails because an element is
+// not there any more, the adds are written alone and every element to take out goes on its own, so one that ran out does
+// not keep another in the set.
+func TestADNSElementIsTakenOutAndOneThatRanOutDoesNotStopTheOthers(t *testing.T) {
+	const op = `{"type":"nft_dns_elements","updates":[{"set":"` + dnsSetA + `","elements":[` +
+		`{"client":"10.10.0.42","addr":"203.0.113.7","delete":true},{"client":"10.10.0.43","addr":"203.0.113.7","delete":true},` +
+		`{"client":"10.10.0.44","addr":"203.0.113.7","timeout_seconds":540}]}]}`
+	fr := &fakeRunner{}
+	e := newExec(t, fr)
+	if _, err := e.Do(context.Background(), mustDecode(t, op)); err != nil {
+		t.Fatal(err)
+	}
+	cmds := fr.commands()
+	if len(cmds) != 1 || !strings.Contains(cmds[0].Stdin, `"delete":{"element":{"elem":[{"concat":["10.10.0.42","203.0.113.7"]},{"concat":["10.10.0.43","203.0.113.7"]}]`) ||
+		strings.Count(cmds[0].Stdin, `"timeout"`) != 1 || !strings.Contains(cmds[0].Stdin, `{"elem":{"timeout":540,"val":{"concat":["10.10.0.44","203.0.113.7"]}}}`) {
+		t.Fatalf("%+v", cmds)
+	}
+	// 10.10.0.42 ran out: the transaction fails, the add goes alone, then each delete on its own
+	fr2 := &fakeRunner{respond: func(c Command) (Result, error) {
+		if strings.Contains(c.Stdin, `"10.10.0.42"`) && strings.Contains(c.Stdin, `"delete"`) {
+			return Result{Exit: 1, Stderr: "Error: Could not process rule: No such file or directory"}, nil
+		}
+		return Result{}, nil
+	}}
+	e2 := newExec(t, fr2)
+	if _, err := e2.Do(context.Background(), mustDecode(t, op)); err != nil {
+		t.Fatal(err)
+	}
+	cmds = fr2.commands()
+	if len(cmds) != 4 || strings.Contains(cmds[1].Stdin, `"delete"`) || !strings.Contains(cmds[1].Stdin, `"10.10.0.44"`) ||
+		!strings.Contains(cmds[3].Stdin, `"delete":{"element":{"elem":[{"concat":["10.10.0.43","203.0.113.7"]}]`) || strings.Contains(cmds[3].Stdin, `"add"`) {
+		t.Errorf("%d commands: %+v", len(cmds), cmds)
 	}
 }

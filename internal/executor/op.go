@@ -120,6 +120,10 @@ type DNSElement struct {
 	// is there already, so it is deleted and added again in the same transaction. An element that is not
 	// there (it ran out meanwhile) is added.
 	Replace bool `json:"replace,omitempty"`
+	// Delete takes the element out of the set instead of writing it (TimeoutSeconds and Replace are
+	// not set): the engine re-keys an element when its client's address went to another device (plan
+	// §2.3). An element that is not there (it ran out meanwhile) is no error.
+	Delete bool `json:"delete,omitempty"`
 }
 
 // DNSSetUpdate are the elements to write into one DNS-derived set.

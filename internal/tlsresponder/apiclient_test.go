@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
@@ -189,5 +190,60 @@ func TestFollowGivesEveryNewConfigurationToTheServerAndGoesOnAfterAFailure(t *te
 	defer f.mu.Unlock()
 	if len(f.polled) < 3 || f.polled[1] != "0" || f.polled[2] != "3" {
 		t.Errorf("the generations asked for after each answer: %v", f.polled)
+	}
+}
+
+// A batch of handshake reports the API refuses for its content (a 4xx other than 408 and 429) would be refused again on every
+// try and hold back every later report: it is dropped and counted, and the next report goes through. A batch that may pass
+// later (a 5xx, 429) stays and is sent again (P5-AUDIT-18).
+func TestABatchOfReportsTheAPIRefusesIsDroppedAndTheNextOneGoesThrough(t *testing.T) {
+	f, c := newFakeAPI(t)
+	rep := newReporter(c, &clock.Real{}, slog.New(slog.DiscardHandler))
+	report := func(client string) model.TlsHandshakeReport {
+		return model.TlsHandshakeReport{Time: time.Now().UTC(), Client: client, OriginalDst: "203.0.113.10:8883", Outcome: model.TlsHandshakeReportOutcomeRejected}
+	}
+	setCode := func(code int) {
+		f.mu.Lock()
+		f.postCode = code
+		f.mu.Unlock()
+	}
+	posted := func() [][]model.TlsHandshakeReport {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return append([][]model.TlsHandshakeReport(nil), f.posted...)
+	}
+	pending := func() int {
+		rep.mu.Lock()
+		defer rep.mu.Unlock()
+		return len(rep.pending)
+	}
+	ctx := context.Background()
+
+	setCode(http.StatusUnprocessableEntity)
+	rep.add(report("10.10.0.31"))
+	rep.flush(ctx)
+	if got := posted(); len(got) != 1 || pending() != 0 || rep.Refused() != 1 {
+		t.Fatalf("the refused batch: posted %d, pending %d, refused %d", len(got), pending(), rep.Refused())
+	}
+	setCode(http.StatusNoContent)
+	rep.add(report("10.10.0.32"))
+	rep.flush(ctx)
+	if got := posted(); len(got) != 2 || len(got[1]) != 1 || got[1][0].Client != "10.10.0.32" || pending() != 0 {
+		t.Fatalf("the next report does not go through alone: %+v, pending %d", got, pending())
+	}
+
+	for _, code := range []int{http.StatusServiceUnavailable, http.StatusTooManyRequests, http.StatusRequestTimeout} {
+		setCode(code)
+		rep.add(report("10.10.0.33"))
+		rep.flush(ctx)
+		if pending() != 1 || rep.Refused() != 1 {
+			t.Fatalf("%d: pending %d, refused %d, want the batch kept", code, pending(), rep.Refused())
+		}
+		setCode(http.StatusNoContent)
+		rep.flush(ctx)
+		got := posted()
+		if last := got[len(got)-1]; pending() != 0 || len(last) != 1 || last[0].Client != "10.10.0.33" {
+			t.Fatalf("%d: the kept batch was not sent again: %+v, pending %d", code, last, pending())
+		}
 	}
 }

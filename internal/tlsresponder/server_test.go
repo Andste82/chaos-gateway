@@ -567,3 +567,133 @@ func TestACaseTheResponderDoesNotServeNeverLetsTheDeviceThrough(t *testing.T) {
 		t.Errorf("a report for a case that was not served")
 	}
 }
+
+// serviceConfig is a configuration of the responder with one case per entry of sources, for the clients it names and the
+// ports given (none: the default TLS ports).
+func serviceConfig(gen int64, ports []int, sources ...string) *model.TlsServiceConfig {
+	c := &model.TlsServiceConfig{Generation: gen}
+	for _, src := range sources {
+		entry := struct {
+			Case        model.TlsServiceConfigCasesCase     `json:"case"`
+			CutExisting *bool                               `json:"cut_existing,omitempty"`
+			Destination *model.Destination                  `json:"destination,omitempty"`
+			Expected    model.TlsServiceConfigCasesExpected `json:"expected"`
+			Intercept   *model.InterceptSettings            `json:"intercept,omitempty"`
+			Overlay     model.Uuid                          `json:"overlay"`
+			PortRanges  *[]model.PortRange                  `json:"port_ranges,omitempty"`
+			Ports       *[]int                              `json:"ports,omitempty"`
+			Protocol    *model.Protocol                     `json:"protocol,omitempty"`
+			Sni         *[]model.Hostname                   `json:"sni,omitempty"`
+			Sources     []model.Ipv4OrCidr                  `json:"sources"`
+		}{Case: "expired", Overlay: uuid.MustParse(overlayID), Sources: []string{src}}
+		if ports != nil {
+			entry.Ports = &ports
+		}
+		c.Cases = append(c.Cases, entry)
+	}
+	return c
+}
+
+// A connection that no case decides is passed through only while a case selects it in the kernel (the selection of
+// its later packets needs a case that still selects it, compiler.tlsSelect): once the configuration of a later
+// generation has no case that selects it, its later packets take the uplink without the namespace's translation and
+// it would stall. The responder resets it then, so that the device opens a new connection (P5-AUDIT-02).
+func TestAPassedThroughConnectionIsResetWhenNoCaseSelectsItAnyMore(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	accepted := make(chan net.Conn, 4)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- c
+			go func() { _, _ = io.Copy(io.Discard, c) }() // the "real server" reads and never answers
+		}
+	}()
+	r := newRig(t, func(ConnInfo) Decision { return Decision{Generation: 5, Passthrough: true} }, nil)
+	r.dial = func(ctx context.Context, n, a string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, n, ln.Addr().String())
+	}
+	passed := func() <-chan error {
+		c, err := net.Dial("tcp", r.addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+		_, _ = c.Write(captureHello(t, &tls.Config{ServerName: "other.example.com"}))
+		done := make(chan error, 1)
+		go func() { done <- readAll(c) }()
+		select {
+		case up := <-accepted:
+			t.Cleanup(func() { _ = up.Close() })
+		case <-time.After(3 * time.Second):
+			t.Fatal("the connection was not passed through")
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for { // it is held once the ClientHello went on
+			r.srv.cfgMu.Lock()
+			n := len(r.srv.held)
+			r.srv.cfgMu.Unlock()
+			if n > 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the passed-through connection is not held")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		return done
+	}
+	stays := func(done <-chan error, what string) {
+		t.Helper()
+		select {
+		case err := <-done:
+			t.Fatalf("%s ended the passed-through connection: %v", what, err)
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	isReset := func(done <-chan error, what string) {
+		t.Helper()
+		select {
+		case err := <-done:
+			if err == nil || !strings.Contains(err.Error(), "reset") {
+				t.Errorf("after %s the connection ended with %v, want a reset", what, err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("after %s the passed-through connection stays", what)
+		}
+	}
+
+	done := passed()
+	r.srv.SetConfig(serviceConfig(9, nil, "127.0.0.1/32")) // a case still selects the client on the port: nothing happens
+	stays(done, "a configuration that still selects it")
+	r.srv.SetConfig(serviceConfig(10, []int{443}, "127.0.0.1")) // the port is no longer selected
+	isReset(done, "a configuration that selects another port")
+	if r.srv.Resets() != 1 {
+		t.Errorf("%d resets", r.srv.Resets())
+	}
+
+	r.srv.SetConfig(serviceConfig(4, nil, "127.0.0.1"))
+	done = passed()
+	r.srv.SetConfig(serviceConfig(5, nil)) // not newer than the decision: the decision may be the newer news
+	stays(done, "a configuration of the generation of the decision")
+	r.srv.SetConfig(serviceConfig(11, nil, "10.10.0.42")) // the case went for this client
+	isReset(done, "a configuration without a case for the client")
+	if r.srv.Resets() != 2 {
+		t.Errorf("%d resets", r.srv.Resets())
+	}
+
+	r.srv.SetConfig(serviceConfig(4, nil, "127.0.0.1"))
+	done = passed()
+	r.srv.SetConfig(serviceConfig(12, nil)) // no case at all: the chain is not compiled
+	isReset(done, "a configuration without cases")
+	if r.srv.Resets() != 3 || r.srv.PassedThrough() != 3 {
+		t.Errorf("%d resets, %d passed through", r.srv.Resets(), r.srv.PassedThrough())
+	}
+}

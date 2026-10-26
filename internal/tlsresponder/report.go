@@ -8,6 +8,7 @@ import (
 
 	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/model"
+	"github.com/Andste82/chaos-gateway/internal/svcapi"
 )
 
 // Sink receives the outcomes of the handshakes. The API implements it behind an HTTP call.
@@ -32,6 +33,8 @@ type reporter struct {
 	mu      sync.Mutex
 	pending []model.TlsHandshakeReport
 	dropped int64
+	// refused counts the reports of the batches the API refused (and that were dropped)
+	refused int64
 	// base counts the reports that left the head of pending without being sent (dropped)
 	base int64
 	wake chan struct{}
@@ -64,6 +67,13 @@ func (r *reporter) Dropped() int64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.dropped
+}
+
+// Refused is the number of reports dropped because the API refused the batch they were in.
+func (r *reporter) Refused() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.refused
 }
 
 func (r *reporter) run(ctx context.Context) {
@@ -99,11 +109,19 @@ func (r *reporter) flush(ctx context.Context) {
 		pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		err := r.sink.Post(pctx, batch)
 		cancel()
-		if err != nil {
+		if err != nil && !svcapi.Refused(err) {
 			r.log.Debug("the handshake reports were not accepted", "error", err)
 			return // they stay; the next tick tries again
 		}
+		if err != nil {
+			// the API refused their content (a 4xx other than 408 and 429): sent again they would be refused again,
+			// and every later report would wait behind them, so they go
+			r.log.Warn("the API refused a batch of handshake reports: they are dropped", "reports", n, "error", err)
+		}
 		r.mu.Lock()
+		if err != nil {
+			r.refused += int64(n)
+		}
 		// reports dropped from the head while the batch was on its way were part of it
 		if gone := n - int(r.base-startBase); gone > 0 && len(r.pending) >= gone {
 			r.pending = r.pending[gone:]

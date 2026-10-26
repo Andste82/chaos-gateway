@@ -57,6 +57,15 @@ func TestTheNetlinkConnectionWritesAndRefreshesDNSElementsInTheGatewayNamespace(
 	// the same element again, not asked to be refreshed: nothing changes, and no error
 	g.must(el("10.10.0.11", "203.0.113.10", 900, false))
 
+	// an element is taken out (P5-AUDIT-01), and one that is not there beside it does not stop it or fail the request
+	g.must(&executor.NftDNSElements{Target: tgt(g.ns), Updates: []executor.DNSSetUpdate{{Set: dnsSet, Elements: []executor.DNSElement{
+		{Client: "10.10.0.99", Addr: "203.0.113.99", Delete: true},
+		{Client: "10.10.0.13", Addr: "203.0.113.30", Delete: true},
+	}}}})
+	if out := listing(); strings.Contains(out, "203.0.113.30") || !strings.Contains(out, "10.10.0.11 . 203.0.113.10") {
+		t.Fatalf("the element was not taken out, or another went with it:\n%s", out)
+	}
+
 	// a set that is not there is an error of the request
 	if _, err := g.c.Do(tctx(t), &executor.NftDNSElements{Target: tgt(g.ns), Updates: []executor.DNSSetUpdate{{
 		Set: "dns_ffffffffff_ffffff", Elements: []executor.DNSElement{{Client: "10.10.0.11", Addr: "203.0.113.10", TimeoutSeconds: 60}}}}}); err == nil {

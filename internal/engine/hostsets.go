@@ -84,6 +84,9 @@ type hostSets struct {
 	elems map[string]map[hostKey]*hostElem
 	// gates hold the ids of the sets a plan in flight replaces: a channel that is closed when it is through
 	gates map[string]chan struct{}
+	// owner is the device of each address in the identity of the last applied target (rekey); nil before
+	// the first apply
+	owner map[netip.Addr]string
 
 	qmu      sync.Mutex
 	queue    []*hostWrite
@@ -273,6 +276,15 @@ func (h *hostSets) writeBatch(batch []*hostWrite) error {
 			for _, el := range els {
 				key := el.Client + "|" + el.Addr
 				k := hostKey{netip.MustParseAddr(el.Client), netip.MustParseAddr(el.Addr)}
+				if p := merged[id][key]; p != nil && (el.Delete || p.el.Delete) {
+					// the later one wins: an element taken out and reported again is a refresh (it may
+					// still be there), one written and then taken out goes
+					if !el.Delete {
+						el.Replace = true
+					}
+					*p = pair{el: el, names: append([]string(nil), w.names[id][k]...), k: k}
+					continue
+				}
 				if p := merged[id][key]; p != nil {
 					p.el.TimeoutSeconds = max(p.el.TimeoutSeconds, el.TimeoutSeconds)
 					p.el.Replace = p.el.Replace || el.Replace
@@ -336,6 +348,10 @@ func (h *hostSets) writeBatch(batch []*hostWrite) error {
 			h.elems[id] = map[hostKey]*hostElem{}
 		}
 		for _, p := range m {
+			if p.el.Delete {
+				delete(h.elems[id], p.k)
+				continue
+			}
 			life := time.Duration(p.el.TimeoutSeconds) * time.Second
 			el := h.elems[id][p.k]
 			if el == nil {
@@ -410,6 +426,86 @@ func (h *hostSets) applied(t *compiler.Target, kernel *linux.Ruleset) {
 	h.mu.Unlock()
 	for _, d := range epochs {
 		h.e.Emit(EventDNSSetEpoch, d)
+	}
+}
+
+// rekey follows the devices that changed their address since the last applied target (plan §2.3: "DNS-derived
+// hostname-set entries keyed on the old address are re-keyed"). An element (A, x) of a device that now has
+// the address B too, or instead, is written as (B, x) with the time it has left, into every set whose sources
+// hold B: the device keeps its cached answer after a "force new IP", and its connections to x keep their
+// rules and faults without a new query. The element (A, x) is taken out when A went to another device (the
+// new holder wins, as it does in the identity map) or when it left a device that has other addresses: the
+// old address carries no connection any more, and a device that is given it later must not inherit the
+// answers. An address that only stays mapped for its connections keeps its elements. It runs after every
+// apply that succeeded, full or incremental, with the identity that apply used.
+func (h *hostSets) rekey(ctx context.Context, id *domain.Identity) {
+	if id == nil {
+		return
+	}
+	now := h.e.cfg.Clock.Now()
+	w := &hostWrite{id: map[string][]executor.DNSElement{}, names: map[string]map[hostKey][]string{}, done: make(chan error, 1)}
+	h.mu.Lock()
+	prev := h.owner
+	h.owner = make(map[netip.Addr]string, len(id.Owner))
+	for a, d := range id.Owner {
+		h.owner[a] = d
+	}
+	add := func(set string, k hostKey, el executor.DNSElement, names []string) {
+		w.id[set] = append(w.id[set], el)
+		if w.names[set] == nil {
+			w.names[set] = map[hostKey][]string{}
+		}
+		w.names[set][k] = append(w.names[set][k], names...)
+	}
+	for set, m := range h.elems {
+		info, ok := h.sets[set]
+		if !ok {
+			continue
+		}
+		keys := make([]hostKey, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			if keys[i].client != keys[j].client {
+				return keys[i].client.Less(keys[j].client)
+			}
+			return keys[i].addr.Less(keys[j].addr)
+		})
+		for _, k := range keys {
+			el := m[k]
+			left := el.expires.Sub(now)
+			dev := prev[k.client]
+			if dev == "" || left <= 0 {
+				continue
+			}
+			for _, b := range id.Addresses[dev] {
+				if b == k.client || !b.Is4() || !inPrefixes(info.sources, b) {
+					continue
+				}
+				nk := hostKey{b, k.addr}
+				cur := m[nk]
+				if cur != nil && !cur.expires.Before(el.expires) {
+					continue // the device asked from its new address already
+				}
+				secs := int((left + time.Second - 1) / time.Second)
+				add(set, nk, executor.DNSElement{Client: b.String(), Addr: k.addr.String(), TimeoutSeconds: min(secs, executor.MaxDNSTimeout),
+					Replace: cur != nil && cur.expires.After(now)}, el.names)
+			}
+			if holder := id.Owner[k.client]; holder != dev && (holder != "" || len(id.Addresses[dev]) > 0) {
+				add(set, k, executor.DNSElement{Client: k.client.String(), Addr: k.addr.String(), Delete: true}, nil)
+			}
+		}
+	}
+	h.mu.Unlock()
+	if len(w.id) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, hostWriteTimeout)
+	defer cancel()
+	if err := h.write(ctx, w); err != nil {
+		h.e.cfg.Log.Warn("re-keying DNS-derived set elements after an address change failed: the devices get them again with their next query",
+			"error", err)
 	}
 }
 

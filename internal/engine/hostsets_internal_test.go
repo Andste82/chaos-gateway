@@ -11,6 +11,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/apply/kernelsim"
 	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
+	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/linux"
 	"github.com/Andste82/chaos-gateway/internal/store"
@@ -254,4 +255,94 @@ func TestALargeBatchOfElementsIsSplitIntoRequestsTheExecutorTakes(t *testing.T) 
 	if got := splitDNSUpdates(executor.NftDNSElements{}); len(got) != 0 {
 		t.Errorf("%v", got)
 	}
+}
+
+// Plan §2.3: the DNS-derived set elements keyed on a device's old address are re-keyed when it gets a new one. The element
+// goes to the new address with the time it has left (the device keeps its cached answer, so its connections must keep
+// their faults without a new query), stays on the old address while that is still the device's (it carries connections),
+// and goes when the old address is another device's or nobody's.
+func TestTheElementsOfADeviceFollowItToItsNewAddress(t *testing.T) {
+	e, ex, clk := hostEngine(t)
+	e.hosts.applied(targetWithSet("dns_0123456789_aaaaaa"), nil)
+	a, b, c := netip.MustParseAddr("10.10.0.5"), netip.MustParseAddr("10.10.0.9"), netip.MustParseAddr("10.10.0.12")
+	x := netip.MustParseAddr("203.0.113.7")
+	ident := func(addrs map[string][]netip.Addr) *domain.Identity {
+		id := &domain.Identity{Addresses: addrs, Owner: map[netip.Addr]string{}}
+		for d, as := range addrs {
+			for _, ip := range as {
+				id.Owner[ip] = d
+			}
+		}
+		return id
+	}
+	elements := func() []executor.DNSElement {
+		ex.mu.Lock()
+		defer ex.mu.Unlock()
+		var out []executor.DNSElement
+		for _, u := range ex.updates {
+			out = append(out, u.Elements...)
+		}
+		ex.updates = nil
+		return out
+	}
+	ctx := context.Background()
+	e.hosts.rekey(ctx, ident(map[string][]netip.Addr{"dev1": {a}}))
+	if err := report(e, x.String()); err != nil {
+		t.Fatal(err)
+	}
+	elements()
+	clk.Advance(time.Minute)
+
+	// the device has the new address, and keeps the old one while it carries connections: the element is copied
+	e.hosts.rekey(ctx, ident(map[string][]netip.Addr{"dev1": {a, b}}))
+	got := elements()
+	if len(got) != 1 || got[0] != (executor.DNSElement{Client: b.String(), Addr: x.String(), TimeoutSeconds: 540}) {
+		t.Fatalf("the element was not copied to the new address with the time it has left: %+v", got)
+	}
+	for _, client := range []netip.Addr{a, b} {
+		if n := e.HostNames(client, x); len(n) != 1 || n[0] != "broker.example.com" {
+			t.Errorf("%s: %v", client, n)
+		}
+	}
+	// nothing changes: nothing is written
+	e.hosts.rekey(ctx, ident(map[string][]netip.Addr{"dev1": {a, b}}))
+	if got := elements(); len(got) != 0 {
+		t.Errorf("written again: %+v", got)
+	}
+	// a report from the new address is not written again either: the set holds the element
+	if err := report2(e, b, x); err != nil {
+		t.Fatal(err)
+	}
+	if got := elements(); len(got) != 0 {
+		t.Errorf("the re-keyed element was written again on a report: %+v", got)
+	}
+
+	// the old address is another device's now: its holder must not inherit the answers
+	e.hosts.rekey(ctx, ident(map[string][]netip.Addr{"dev1": {b}, "dev2": {a}}))
+	got = elements()
+	if len(got) != 1 || got[0] != (executor.DNSElement{Client: a.String(), Addr: x.String(), Delete: true}) {
+		t.Fatalf("the element of the old address was not taken out: %+v", got)
+	}
+	if n := e.HostNames(a, x); len(n) != 0 {
+		t.Errorf("the new holder of the old address has the element: %v", n)
+	}
+
+	// a move to an address that the old one is left behind by, held by nobody: the old element goes as well
+	e.hosts.rekey(ctx, ident(map[string][]netip.Addr{"dev1": {c}, "dev2": {a}}))
+	got = elements()
+	if len(got) != 2 || got[0] != (executor.DNSElement{Client: c.String(), Addr: x.String(), TimeoutSeconds: 540}) ||
+		got[1] != (executor.DNSElement{Client: b.String(), Addr: x.String(), Delete: true}) {
+		t.Fatalf("%+v", got)
+	}
+	// an address outside the sources of the selector gets nothing
+	e.hosts.rekey(ctx, ident(map[string][]netip.Addr{"dev1": {c, netip.MustParseAddr("192.168.7.3")}, "dev2": {a}}))
+	if got := elements(); len(got) != 0 {
+		t.Errorf("%+v", got)
+	}
+}
+
+func report2(e *Engine, client, addr netip.Addr) error {
+	_, err := e.RecordResolutions(context.Background(), []HostResolution{{Set: "dns_0123456789", Client: client,
+		Name: "broker.example.com", TTL: time.Minute, Addrs: []netip.Addr{addr}}})
+	return err
 }

@@ -321,6 +321,77 @@ func TestADeviceFaultStaysAttachedAfterTheForcedNewIPOnTheRealKernel(t *testing.
 	}
 }
 
+// Plan §2.3 on the real kernel (P5-AUDIT-01, M20): a hostname fault of a device still acts after the forced new IP without a new
+// DNS query. The device asked for the broker's name at its old address (the report the DNS proxy makes before it answers), keeps the
+// cached answer, and after the move its traffic to the broker is still delayed: the element of the DNS-derived set followed it.
+func TestAHostnameFaultStillActsAfterTheForcedNewIPWithoutANewQueryOnTheRealKernel(t *testing.T) {
+	b := actionsBed(t)
+	b.apply(func(c *model.Configuration) {
+		setDHCP(c, tIoT, &model.DhcpScope{LeaseTime: ptrS("6s")})
+		setDHCP(c, labID, &model.DhcpScope{LeaseTime: ptrS("60s")})
+		withClients(c)
+	})
+	log := b.udhcpc(b.top.A, 12)
+	line, ok := waitLine(t, log, "bound", 1, 30*time.Second)
+	if !ok {
+		t.Fatal("the client got no lease")
+	}
+	old := field(line, "ip")
+	b.top.A.Must("ip", "route", "replace", "default", "via", testbed.LAN0Gateway)
+	b.waitDevice(testbed.ClientAMAC, 20*time.Second, func(d *engine.DeviceState) bool { return contains(addrStrings(d.Addresses), old) })
+
+	b.put("target: {device: " + devAID + "}\nfault: {latency: 150ms, destination: {hostname: broker.test}}")
+	var set string
+	deadline := time.Now().Add(10 * time.Second)
+	for set == "" && time.Now().Before(deadline) {
+		for _, s := range b.e.Snapshot().DNSSets {
+			set = s.ID
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if set == "" {
+		t.Fatal("the fault has no DNS-derived set")
+	}
+	// what the DNS proxy reports when it answers the device: the one and only resolution in this test
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := b.e.RecordResolutions(ctx, []engine.HostResolution{{Set: set, Client: netip.MustParseAddr(old), Name: "broker.test",
+		TTL: time.Minute, Addrs: []netip.Addr{netip.MustParseAddr(testbed.ServerAddr)}}}); err != nil {
+		t.Fatal(err)
+	}
+	if rtt := testbed.MustPing(t, b.top.A, testbed.ServerAddr, 3, 200*time.Millisecond).Median(); rtt < 250*time.Millisecond {
+		t.Fatalf("setup: the hostname fault does not delay the device (median %v)", rtt)
+	}
+
+	res := b.put("target: {device: " + devAID + "}\ndhcp: {action: force_new_ip}")
+	moved := derefS(res.Overlay.Dhcp.Ip)
+	if _, ok := waitLine(t, log, "bound", 2, 30*time.Second); !ok {
+		t.Fatalf("the client never got a new address: %q", clientLines(log))
+	}
+	b.top.A.Must("ip", "route", "replace", "default", "via", testbed.LAN0Gateway)
+	b.waitDevice(testbed.ClientAMAC, 20*time.Second, func(d *engine.DeviceState) bool { return contains(addrStrings(d.Addresses), moved) })
+	name := ""
+	for _, s := range b.e.Snapshot().DNSSets {
+		name = s.Name
+	}
+	want := moved + " . " + testbed.ServerAddr
+	deadline = time.Now().Add(10 * time.Second)
+	var listing string
+	for time.Now().Before(deadline) {
+		listing, _ = b.top.GW.Run(context.Background(), "nft", "list", "set", "inet", "chaosgw", name)
+		if strings.Contains(listing, want) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !strings.Contains(listing, want) {
+		t.Fatalf("the set does not hold %q after the move from %s:\n%s", want, old, listing)
+	}
+	if rtt := testbed.MustPing(t, b.top.A, testbed.ServerAddr, 3, 200*time.Millisecond).Median(); rtt < 250*time.Millisecond {
+		t.Errorf("the hostname fault does not act at the new address %s without a new query (median %v)", moved, rtt)
+	}
+}
+
 // M23 test: the options of an action are what the client is told: the network's options for the clients of the network and
 // the device's for the device, whose options are the configured ones with its own.
 func TestSetOptionsChangeWhatTheClientIsToldOnTheRealKernel(t *testing.T) {

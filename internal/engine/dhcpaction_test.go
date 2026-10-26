@@ -1,6 +1,7 @@
 package engine_test
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 	"slices"
@@ -270,6 +271,53 @@ func TestADeviceFaultStaysAttachedAfterTheForcedNewIPAndTheDeviceFollowsItsAddre
 	after := h.e.Snapshot().Faults
 	if len(after) != 1 || after[0].ID != faults[0].ID {
 		t.Errorf("the fault of the device after the move: %+v, before %+v", after, faults)
+	}
+}
+
+// Plan §2.3 (P5-AUDIT-01): the DNS-derived set elements of a device follow it to the address the forced new IP gave it, through the
+// apply loop: the device keeps its cached answer, so its connections to the broker keep the hostname fault without a new query, and the
+// old address, once it is not the device's any more, holds nothing (a device given it later must not inherit the answers).
+func TestTheDNSDerivedElementsOfADeviceFollowItAfterTheForcedNewIP(t *testing.T) {
+	h, f, sid := dhcpActionHarness(t)
+	f.setLeases(lease("10.10.0.150", macCfg, sid))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.150", macCfg)})
+	h.observe()
+	h.mustPut(alice, "target: {device: esp32-42}\nfault: {latency: 150ms, destination: {hostname: broker.example.com}}")
+	sets := h.barrier().DNSSets
+	if len(sets) != 1 {
+		t.Fatalf("%+v", sets)
+	}
+	set := sets[0]
+	if _, err := h.e.RecordResolutions(context.Background(), []engine.HostResolution{{Set: set.ID, Client: netip.MustParseAddr("10.10.0.150"),
+		Name: "broker.example.com", TTL: time.Minute, Addrs: []netip.Addr{netip.MustParseAddr("203.0.113.7")}}}); err != nil {
+		t.Fatal(err)
+	}
+	holds := func(client string) bool {
+		for _, el := range h.k.SetElements(set.Name) {
+			if strings.Contains(el, `"`+client+`"`) && strings.Contains(el, `"203.0.113.7"`) {
+				return true
+			}
+		}
+		return false
+	}
+	if !holds("10.10.0.150") {
+		t.Fatalf("setup: the set holds %v", h.k.SetElements(set.Name))
+	}
+
+	res := h.mustPut(alice, "target: {device: esp32-42}\ndhcp: {action: force_new_ip}")
+	moved := derefS(res.Overlay.Dhcp.Ip)
+	f.setLeases(lease(moved, macCfg, sid))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor(moved, macCfg)})
+	h.observe()
+	h.barrier()
+	if !holds(moved) {
+		t.Errorf("the element did not follow the device to %s: the set holds %v", moved, h.k.SetElements(set.Name))
+	}
+	if holds("10.10.0.150") {
+		t.Errorf("the old address still holds the element: %v", h.k.SetElements(set.Name))
+	}
+	if got := h.e.HostNames(netip.MustParseAddr(moved), netip.MustParseAddr("203.0.113.7")); len(got) != 1 || got[0] != "broker.example.com" {
+		t.Errorf("the names of the new address: %v", got)
 	}
 }
 

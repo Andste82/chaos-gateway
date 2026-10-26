@@ -255,6 +255,12 @@ func (o NftDNSElements) validate() error {
 					return fmt.Errorf("updates[%d].elements[%d]: %s %q is not a unicast IPv4 address", i, j, field, v)
 				}
 			}
+			if e.Delete {
+				if e.TimeoutSeconds != 0 || e.Replace {
+					return fmt.Errorf("updates[%d].elements[%d]: a delete carries no timeout and no replace", i, j)
+				}
+				continue
+			}
 			if e.TimeoutSeconds < 1 || e.TimeoutSeconds > MaxDNSTimeout {
 				return fmt.Errorf("updates[%d].elements[%d]: timeout %d s out of range", i, j, e.TimeoutSeconds)
 			}

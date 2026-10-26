@@ -58,6 +58,9 @@ func TestARuleOfTheCommandLineBecomesAnHTTPRule(t *testing.T) {
 		{"host=a.example.com;host=b.example.com;block", "given twice"},
 		{"request-header=NoColon", "is not Name:Value"},
 		{"request-header=:value", "needs a header name"},
+		// an empty value would take the header away in the API: that is what remove-request-header says
+		{"request-header=X-Chaos:", "remove-request-header=X-Chaos"},
+		{"response-header=Server: ", "remove-response-header=Server"},
 		{"request-header=A:1;request-header=a:2", "named twice"},
 		{"request-header=A:1;remove-request-header=A", "named twice"},
 		{"replace=nothing", "SEARCH=>REPLACEMENT"},

@@ -105,6 +105,10 @@ func parseHTTPRule(spec string) (map[string]any, error) {
 				return fmt.Errorf("%s=%s is not Name:Value", kind, v)
 			}
 			value = strings.TrimPrefix(value, " ")
+			// the API's empty value takes the header away: a header meant to be set must not become that by a missing value
+			if strings.TrimSpace(name) != "" && value == "" {
+				return fmt.Errorf("%s=%s has no value: give one, or take the header away with remove-%s=%s", kind, v, kind, strings.TrimSpace(name))
+			}
 		}
 		name = strings.TrimSpace(name)
 		if name == "" {

@@ -782,3 +782,40 @@ func TestTheCapabilitiesListTheInterception(t *testing.T) {
 		t.Errorf("%d %s", r.Status, r.Body)
 	}
 }
+
+// The second guard of `keylog: false` (P5-AUDIT-04): a batch of key lines whose overlay names an interception case that keeps the secrets
+// in, or no interception case in force, does not reach a running capture; a batch of a case that gives them does.
+func TestAKeyLogBatchOfACaseWithoutKeyLogOrOfNoCaseReachesNoCapture(t *testing.T) {
+	g, _ := capGateway(t)
+	svc := tlsServiceToken(g)
+	admin := g.token
+	gives := g.mustCreateOverlay(`{"target":{"device":"esp32-42"},"tls":{"case":"intercept","ports":[443]}}`)["id"].(string)
+	keeps := g.mustCreateOverlay(`{"target":{"device":"esp32-42"},"tls":{"case":"intercept","ports":[8443],"intercept":{"keylog":false}}}`)["id"].(string)
+	expired := g.mustCreateOverlay(`{"target":{"device":"esp32-42"},"tls":{"case":"expired","ports":[9443]}}`)["id"].(string)
+	capture := g.mustStartCapture(map[string]any{"name": "dev", "scope": map[string]any{"device": "esp32-42"}})["id"].(string)
+
+	g.token = svc
+	for overlay, line := range map[string]string{
+		keeps:                                  "CLIENT_RANDOM keeps keeps",
+		expired:                                "CLIENT_RANDOM expired expired",
+		"99999999-9999-4999-8999-999999999999": "CLIENT_RANDOM unknown unknown",
+	} {
+		r := g.do("POST", "/internal/intercept/keylog", []any{map[string]any{"client": "10.10.0.31", "overlay": overlay, "lines": []string{line}}}, nil, nil)
+		if r.Status != 204 {
+			t.Fatalf("%d %s", r.Status, r.Body)
+		}
+	}
+	g.token = admin
+	if c := g.capture(capture); c["keylog"] != false || c["sensitive"] != false {
+		t.Fatalf("a capture took secrets that no case gives: %v", c)
+	}
+	g.token = svc
+	if r := g.do("POST", "/internal/intercept/keylog", []any{map[string]any{"client": "10.10.0.31", "overlay": strings.ToUpper(gives), "lines": []string{"CLIENT_RANDOM gives gives"}}}, nil, nil); r.Status != 204 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	g.token = admin
+	r := g.do("GET", "/captures/"+capture+"/download?part=keylog", nil, nil, nil)
+	if r.Status != 200 || string(r.Body) != "CLIENT_RANDOM gives gives\n" {
+		t.Errorf("the key log of the capture: %d %q", r.Status, r.Body)
+	}
+}

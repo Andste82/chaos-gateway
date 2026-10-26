@@ -101,7 +101,8 @@ func StartProxy(python string, o ProxyOptions) (*Proxy, error) {
 	if o.Dir == "" || o.Listen == "" || o.CADir == "" {
 		return nil, errors.New("testbed: the proxy needs a directory, an address and the CA directory")
 	}
-	args := []string{"-m", "chaosgw_tlsproxy.launcher", "--listen", o.Listen, "--ca-dir", o.CADir, "--confdir", filepath.Join(o.Dir, "mitmproxy")}
+	// the namespace check (plan §3.8) is for the container in the holder's namespace: a test's namespace has no service address
+	args := []string{"-m", "chaosgw_tlsproxy.launcher", "--listen", o.Listen, "--ca-dir", o.CADir, "--confdir", filepath.Join(o.Dir, "mitmproxy"), "--no-namespace-check"}
 	if o.API != "" {
 		args = append(args, "--api", o.API)
 	}

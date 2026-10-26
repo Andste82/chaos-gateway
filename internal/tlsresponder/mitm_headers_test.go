@@ -57,6 +57,34 @@ func TestTheRequestHeadersOfAModifyRuleReachTheServer(t *testing.T) {
 	}
 }
 
+// The response headers of a `modify` rule are on the answer a later terminal rule makes, a `status` answer as a `block` one: the back-off
+// of a device is tested with `modify` Retry-After: 30 and `status` 503 (P5-AUDIT-05). Neither answer reaches the server, and the length
+// is the answer's own.
+func TestTheResponseHeadersOfAModifyRuleAreOnTheAnswerOfAStatusOrBlockRule(t *testing.T) {
+	ir := newInterceptRig(t, riglOpt{})
+	backoff := rule("modify", map[string]any{"modify": map[string]any{"response_headers": map[string]any{"Retry-After": "30"}}})
+	ir.gw.setRules(backoff, rule("status", map[string]any{"match": matchPath("/busy"), "status": 503}), rule("block", map[string]any{"match": matchPath("/blocked")}))
+	ir.gw.waitApplied(t)
+	dev := ir.device(ir.roots, nil)
+	for path, status := range map[string]int{"/busy": 503, "/blocked": 403} {
+		resp, body, err := ir.get(dev, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != status || resp.Header.Get("Retry-After") != "30" || resp.ContentLength != int64(len(body)) {
+			t.Errorf("%s: %d, Retry-After %q, length %d for %d bytes", path, resp.StatusCode, resp.Header.Get("Retry-After"), resp.ContentLength, len(body))
+		}
+	}
+	if n := ir.upHits.Load(); n != 0 {
+		t.Errorf("%d requests reached the server", n)
+	}
+	for _, f := range ir.gw.waitFlows(t, 2) {
+		if a, _ := f["actions"].([]any); len(a) != 2 || a[0] != "modify" {
+			t.Errorf("the report: %v", f)
+		}
+	}
+}
+
 // With block_quic (on unless the case turns it off) the proxy takes the advertisements of HTTP/3 out of the `Alt-Svc` header of the
 // responses, so a client that would try QUIC next time does not learn of it; the other entries stay, and the header goes when
 // nothing is left. A case that keeps QUIC leaves the header as the server sent it.

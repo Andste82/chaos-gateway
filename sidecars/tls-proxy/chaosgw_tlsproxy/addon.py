@@ -50,6 +50,14 @@ HEADER_DEVICE = "X-Chaosgw-Device"
 
 MAX_PATH = 1024
 
+# how long a connection or a request waits for the case that decides it: the responder decides against the API's current snapshot,
+# and the proxy learns of a new case by its long poll a moment later (or, after a start, with its first configuration)
+CASE_WAIT = 5.0
+
+# what the addon answers, and reports, for a connection whose case it does not know (decisions 12 and 14: nothing passes the proxy
+# that the rules of its case did not decide, and no secret of a case with `keylog: false` leaves it)
+UNKNOWN_CASE = "the case of the connection is not known to the proxy"
+
 
 def now_iso(ts: float | None = None) -> str:
     return datetime.fromtimestamp(ts if ts is not None else time.time(), timezone.utc).isoformat().replace("+00:00", "Z")
@@ -189,8 +197,9 @@ class KeylogSink:
 
 
 class Addon:
-    def __init__(self, api: ServiceClient | None, control: Control | None, poll: float = 40.0):
+    def __init__(self, api: ServiceClient | None, control: Control | None, poll: float = 40.0, case_wait: float = CASE_WAIT):
         self.api = api
+        self.case_wait = case_wait
         self.control = control
         self.cases: dict[str, CaseConfig] = {}
         self.loaded = threading.Event()
@@ -250,19 +259,38 @@ class Addon:
         log.info("the configuration is in use: generation %s, %d interception cases", cfg.get("generation"), len(cases))
 
     async def case_of(self, o: Origin | None) -> CaseConfig | None:
-        if not self.loaded.is_set():
-            # the first configuration is on its way: a request must not pass before the rules that decide it are known
-            await asyncio.to_thread(self.loaded.wait, 5.0)
+        """The case that decides the connection. A request must not pass before the rules that decide it are known: while the first
+        configuration is on its way, or the overlay the responder named is not in the configuration yet (the long poll brings a new
+        case a moment after the responder decided with it), it waits for up to `case_wait` seconds. None is a connection that no case
+        the proxy knows decides, which every caller refuses."""
+        if o is None or not o.overlay:
+            return None
+        deadline = time.monotonic() + self.case_wait
+        while True:
+            if self.loaded.is_set():
+                case = self.cases.get(o.overlay.lower())
+                if case is not None:
+                    return case
+            if time.monotonic() >= deadline:
+                return None
+            await asyncio.sleep(0.05)
+
+    def known_case(self, o: Origin | None) -> CaseConfig | None:
+        """The case of the connection as the configuration in use has it, without waiting."""
         if o is None or not o.overlay:
             return None
         return self.cases.get(o.overlay.lower())
+
+    def _refused(self, o: Origin | None, host: str) -> None:
+        log.warning("%s: the connection of %s to %s is refused (overlay %r)", UNKNOWN_CASE, o.client if o else "?", host, o.overlay if o else "")
+        self._report_flow(o, {"protocol": "tcp", "host": host[:253], "error": UNKNOWN_CASE, "time": now_iso()})
 
     # ---- connections
 
     def origin(self, client) -> Origin | None:
         return self.origins.get(client.id)
 
-    def http_connect(self, flow: http.HTTPFlow) -> None:
+    async def http_connect(self, flow: http.HTTPFlow) -> None:
         h = flow.request.headers
         o = Origin(
             connection=h.get(HEADER_CONNECTION, ""),
@@ -273,6 +301,11 @@ class Addon:
             sni=h.get("X-Chaosgw-Sni", ""),
         )
         self.origins[flow.client_conn.id] = o
+        if await self.case_of(o) is None:
+            # no case the proxy knows decides the connection: it is not taken to the server (the responder resets the device's
+            # connection when the proxy refuses it)
+            self._refused(o, o.sni or flow.request.host)
+            flow.response = http.Response.make(503, UNKNOWN_CASE.encode() + b"\n", {"Content-Type": "text/plain; charset=utf-8", "Connection": "close"})
 
     def client_disconnected(self, client) -> None:
         self.flush_keylines([client.id])
@@ -302,15 +335,25 @@ class Addon:
         of the connection changed. This addon is before mitmproxy's own in the chain, so the connection is made here by calling the hook
         of mitmproxy's `tlsconfig` addon (which then finds it made and leaves it), and its trust store (and whether the certificate is
         verified at all) is replaced; nothing else of the connection is."""
+        if data.is_dtls:
+            return
         o = self.origin(data.context.client)
         case = await self.case_of(o)
-        if case is None or case.upstream is None or data.is_dtls:
+        if case is not None and case.upstream is None:
             return
         tlsconfig = ctx.master.addons.get("tlsconfig")
         if tlsconfig is None:
             raise RuntimeError("mitmproxy has no tlsconfig addon: the upstream policy of a case cannot be applied")
         if data.ssl_conn is None:
             tlsconfig.tls_start_server(data)
+        if case is None:
+            # no case the proxy knows decides the connection, so no policy may be assumed, the installation's included: every
+            # certificate is refused
+            apply_upstream_plan(data.ssl_conn, R.UpstreamPlan(verify=True, refuse=True))
+            if o is not None:
+                o.upstream_note = UNKNOWN_CASE
+            log.warning("%s: the connection to %s is refused", UNKNOWN_CASE, data.conn.sni or data.conn.address)
+            return
         try:
             plan = R.upstream_plan(case.upstream, bool(ctx.options.ssl_insecure), ctx.options.ssl_verify_upstream_trusted_ca or None)
             if plan is None:
@@ -372,6 +415,9 @@ class Addon:
         case = await self.case_of(o)
         flow.metadata["cg_start"] = time.time()
         if case is None:
+            # the case went away while the connection lasted, or was never known: no rule decides the request, so it does not pass
+            self._report_http(flow, error=UNKNOWN_CASE)
+            flow.kill()
             return
         d = R.decide(case.rules, flow.request.pretty_host, flow.request.path, flow.request.method)
         flow.metadata["cg"] = d
@@ -418,8 +464,11 @@ class Addon:
             return
         flow.metadata["cg_headers_done"] = True
         d: R.Decision | None = flow.metadata.get("cg")
-        if d is not None and (d.terminal is None or d.terminal[0] != "status"):
+        if d is not None:
             R.apply_headers(flow.response.headers, d.response_headers)
+            if d.terminal is not None and d.terminal[0] in ("status", "block"):
+                # the answer the rules made has a body of their own (empty for `status`): a header change does not change its length
+                flow.response.headers["Content-Length"] = str(len(flow.response.raw_content or b""))
         if d is not None:
             o = self.origin(flow.client_conn)
             case = self.cases.get(o.overlay.lower()) if o and o.overlay else None
@@ -511,6 +560,8 @@ class Addon:
         flow.metadata["cg_start"] = time.time()
         flow.metadata["cg_up"] = flow.metadata["cg_down"] = 0
         if case is None:
+            self._report_tcp(flow, UNKNOWN_CASE)
+            flow.kill()
             return
         host = flow.client_conn.sni or (o.sni if o else "") or (flow.server_conn.address[0] if flow.server_conn.address else "")
         d = R.decide_connection(case.rules, host)
@@ -564,8 +615,9 @@ class Addon:
         o = self.origins.get(conn_id)
         if o is None:
             return
-        case = self.cases.get(o.overlay.lower()) if o.overlay else None
-        if case is not None and not case.keylog:
+        case = self.known_case(o)
+        if case is None or not case.keylog:
+            # the lines of a connection whose case the proxy does not know, or whose case keeps the secrets in, never leave it
             return
         o.keylines.append(line)
         if len(o.keylines) >= 200:

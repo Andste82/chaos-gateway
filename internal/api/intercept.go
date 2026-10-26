@@ -234,7 +234,9 @@ func (s *Server) ListInterceptFlows(c *gin.Context, params model.ListInterceptFl
 }
 
 // PostInterceptKeylog implements POST /internal/intercept/keylog: the TLS secrets of the proxy's connections go into the
-// key log of every running capture that covers the client. Nothing is kept when no capture does.
+// key log of every running capture that covers the client. Nothing is kept when no capture does, and nothing of a batch whose
+// overlay names no interception case in force or one with `keylog: false` (the proxy keeps those lines in; this is the second
+// guard of the promise, P5-AUDIT-04).
 func (s *Server) PostInterceptKeylog(c *gin.Context) {
 	var batches []model.InterceptKeylogBatch
 	if p := decodeJSON(c, &batches); p != nil {
@@ -250,6 +252,8 @@ func (s *Server) PostInterceptKeylog(c *gin.Context) {
 		lines  []string
 	}
 	var work []entry
+	snap := s.cfg.Engine.Snapshot()
+	dropped := 0
 	for i, b := range batches {
 		client, err := netip.ParseAddr(b.Client)
 		if err != nil || !client.Is4() || b.Lines == nil {
@@ -262,7 +266,14 @@ func (s *Server) PostInterceptKeylog(c *gin.Context) {
 				return
 			}
 		}
+		if b.Overlay != nil && !keylogAllowed(snap, b.Overlay.String()) {
+			dropped++
+			continue
+		}
 		work = append(work, entry{client.Unmap(), b.Lines})
+	}
+	if dropped > 0 {
+		s.log.Warn("key log batches of an overlay without an interception case that gives its secrets were dropped", "batches", dropped)
 	}
 	if s.captures != nil {
 		for _, w := range work {
@@ -287,6 +298,23 @@ func (s *Server) RegenerateTestCa(c *gin.Context) {
 	s.record(c, "tls.ca_regenerate", &audit.Object{Kind: "tls_ca", ID: "test-ca", Name: "test CA"}, 0, "")
 	c.Header("Content-Disposition", `attachment; filename="chaos-gateway-test-ca.pem"`)
 	c.Data(200, "application/x-pem-file", pem)
+}
+
+// keylogAllowed reports whether an interception case of the overlay is in force in the applied configuration and gives the
+// secrets of its connections (`keylog` is not false).
+func keylogAllowed(snap *engine.Snapshot, overlay string) bool {
+	if snap == nil {
+		return false
+	}
+	for _, c := range snap.TLSCases {
+		if c.Case.Case != model.TlsCaseCaseIntercept || !strings.EqualFold(c.Overlay, overlay) {
+			continue
+		}
+		if c.Case.Intercept == nil || c.Case.Intercept.Keylog == nil || *c.Case.Intercept.Keylog {
+			return true
+		}
+	}
+	return false
 }
 
 // hasInterceptCase reports whether a case of the kind `intercept` is in force in the applied configuration.

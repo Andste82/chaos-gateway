@@ -143,8 +143,9 @@ vm-exec: ## run a command in the persistent VM — CMD='nft list ruleset'
 test-privileged: ## the namespace testbed directly (level 1; needs privileges)
 	$(GO) run ./tools/testvm run -mode direct $(ARGS)
 
+# internal/api takes six to ten minutes under qemu-user on the CI runner (351 s to 585 s, then over 600 s in CI run 40412746566)
 test-arm64: ## the unit tests as arm64 binaries under qemu-user
-	GOARCH=arm64 CGO_ENABLED=0 $(GO) test -count=1 -exec qemu-aarch64 ./...
+	GOARCH=arm64 CGO_ENABLED=0 $(GO) test -count=1 -timeout 30m -exec qemu-aarch64 ./...
 
 # The preview server listens on E2E_PORT (default 4173); give each worktree its own port to run
 # them side by side (`make test-e2e E2E_PORT=4174`). E2E_REUSE=1 reuses a server already running

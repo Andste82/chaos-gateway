@@ -489,6 +489,55 @@ test('the table is live: it follows the gateway, can be paused, and shows older 
   await expect(page.getByTestId('flow-live')).toHaveText('Live');
 });
 
+test('an exchange no rule acted on comes with the poll, one a rule acted on with its event, before the next poll', async ({ page }) => {
+  const gw = MockGateway.sample();
+  gw.interceptFlows = [flow(30, { path: '/p/old' })];
+  await gw.install(page);
+  await page.goto('/interception');
+  const rows = page.getByTestId('flow-row');
+  const first = () => rows.first().getByTestId('flow-request');
+  await expect(first()).toHaveText('GET api.example.com/p/old');
+
+  // no event announces an exchange nothing acted on: the table reads the log every 3 s (the default wait of the assertion is 10 s)
+  gw.interceptFlows.push(flow(2, { path: '/p/polled' }));
+  await expect(first()).toHaveText('GET api.example.com/p/polled');
+
+  // the event reads the log at once: right after a poll the next one is 3 s away, so a row that comes within 2 s came with the event
+  const polls = () => gw.requestsTo('GET', '/intercept/flows').length;
+  const seen = polls();
+  await expect.poll(polls, { timeout: 10_000 }).toBeGreaterThan(seen);
+  gw.interceptFlows.push(flow(0, { path: '/p/by-event', actions: ['block'], status: 403 }));
+  await gw.emit(page, { type: 'http_fault_triggered', data: {} });
+  await expect(first()).toHaveText('GET api.example.com/p/by-event', { timeout: 2_000 });
+});
+
+test('a case in force is edited and removed on the Interception screen', async ({ page }) => {
+  const gw = MockGateway.sample();
+  gw.overlays.push(
+    overlay(CASE, { target: { device: ESP }, tls: { case: 'intercept', ports: [443], intercept: { http_rules: [{ action: 'status', status: 503, match: { host: 'api.example.com' } }] } }, ttl: '1h', expires_at: new Date(Date.now() + 3_000_000).toISOString() }),
+  );
+  await gw.install(page);
+  await page.goto('/interception');
+  const row = page.getByTestId('active-fault');
+  await expect(row).toContainText('TLS intercept · 443 · 1 HTTP rule');
+  await row.getByRole('button', { name: /^Edit / }).click();
+  const d = faultDialog(page);
+  await expect(d.getByLabel('Case', { exact: true })).toHaveValue('intercept');
+  await expect(d.getByTestId('http-rule')).toHaveCount(1);
+  await rule(page, 1).getByLabel('Status code').fill('429');
+  await d.getByRole('button', { name: 'Apply fault' }).click();
+  await expect(toast(page, 'Fault active on ESP32-42')).toBeVisible();
+  expect((sentOverlays(gw)[0] as { tls: { intercept: unknown } }).tls.intercept).toEqual({ http_rules: [{ action: 'status', status: 429, match: { host: 'api.example.com' } }] });
+  // the same selection is the same overlay: the screen still lists one case, with the new status
+  await expect(page.getByTestId('active-fault')).toHaveCount(1);
+
+  await page.getByTestId('active-fault').getByRole('button', { name: /^Remove / }).click();
+  await expect(toast(page, 'Fault removed')).toBeVisible();
+  expect(gw.requests.filter((r) => r.method === 'DELETE')).toHaveLength(1);
+  await expect(page.getByTestId('no-cases')).toBeVisible();
+  await expect(page.getByTestId('active-fault')).toHaveCount(0);
+});
+
 test('the exchanges that cannot be loaded say so', async ({ page }) => {
   const gw = MockGateway.sample();
   gw.failing['/intercept/flows'] = 500;

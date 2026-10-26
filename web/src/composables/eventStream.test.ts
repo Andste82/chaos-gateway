@@ -78,6 +78,13 @@ describe('the event stream', () => {
     expect(keys(invalidate)).not.toContainEqual(['networks']);
   });
 
+  it('reads the exchanges of the interception proxy again when a rule acts, and nothing else (M23c)', () => {
+    const { es, invalidate } = setup();
+    es.send('http_fault_triggered', { message: 'a rule acted' });
+    expect(keys(invalidate)).toEqual([['intercept']]);
+    expect(keys(invalidate)).not.toContainEqual(['captures']);
+  });
+
   it('reads the groups again when a revision changes the configuration, so their names stay current', () => {
     const { es, invalidate } = setup();
     for (const t of ['applied', 'revision_applied', 'revision_confirmed', 'revision_rolled_back']) {

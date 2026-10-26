@@ -43,7 +43,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
 - **Phase 5** (M20–M23c, M20 to M23a merged to `main` with PR #120, the rest on the branch `phase-5b`, PR #121): audited on
   2026-10-26 at `eab804c` (CI run 40270141299 green). The result is in [Phase 5 audit result](#phase-5-audit-result), right before
   the Phase 5 open items: 10 items of major and 33 of minor severity, P5-AUDIT-01 to P5-AUDIT-43. The round after the audit
-  (2026-10-26, branch `phase-5b`, PR #121, not merged) closed 42 of them: 38 fixed, four fixed differently (P5-AUDIT-09, -15, -26,
+  (2026-10-26, branch `phase-5b`, PR #121, not merged; CI run 40335480067 on `9bfd4cf` green in every job) closed 42 of them: 38 fixed, four fixed differently (P5-AUDIT-09, -15, -26,
   -35), none rejected or left undone, see the verdict table and
   [the remaining points](#phase-5-audit-result-of-the-round-and-remaining-points). One item stays open because it needs the
   maintainer: P5-AUDIT-10 (what a test network without a `dhcp` block means), see
@@ -2478,8 +2478,9 @@ gateway's current rule through one shared helper until the decision. The choices
 of the round" below. The Fix column starts with the outcome and the commit; the audit's own proposal follows as *Audit proposal*.
 Not run in the round (no KVM, no netns, no Docker): the level 1 tests, among them the ones the round added or changed for
 P5-AUDIT-01, -04, -05, -12 and -43 (vetted with `-tags testbed` and listed below, for CI to run), and the new step of
-`deploy/smoke-tlsproxy.sh` (P5-AUDIT-04, -06; it runs in the CI job `tlsproxy-image`). The fix commits after `eab804c` are not
-pushed yet, so no CI run covers them.
+`deploy/smoke-tlsproxy.sh` (P5-AUDIT-04, -06; it runs in the CI job `tlsproxy-image`). CI ran them on the final commit of the
+round: run 40335480067 on `9bfd4cf` (PR #121) is green in every job, the level 1 tests in the privileged container and in the VM
+and the job `tlsproxy-image` with the new smoke step included; it needed no fix round.
 
 | Verdict | Items |
 |---|---|
@@ -2615,8 +2616,9 @@ P5-AUDIT-04, -05 and -21 and the API client test of P5-AUDIT-18, ran here. The s
 skipped) passed, and so did the web app: `npm run typecheck`, vitest (562 tests in 44 files) and the full Playwright suite (317
 tests, `E2E_PORT=4571`). Nothing failed that needed a fix.
 
-Not run here (for CI, the first run on the final commit, and the nightly kernel matrix after the merge), the level 1 tests the round
-added or changed, all vetted with `-tags testbed`:
+Not run here, the level 1 tests the round added or changed, all vetted with `-tags testbed`. CI run 40335480067 on `9bfd4cf` ran
+each of them in the privileged container and in the VM job and every one passed (none skipped); the nightly kernel matrix runs them
+after the merge:
 
 - `TestAHostnameFaultStillActsAfterTheForcedNewIPWithoutANewQueryOnTheRealKernel` (new, `internal/engine/integration_dhcpactions_test.go`,
   added to `M20_LEVEL1`, P5-AUDIT-01). Its assumption: the engine report it sends directly (what the DNS proxy posts) gives the same
@@ -2640,7 +2642,8 @@ added or changed, all vetted with `-tags testbed`:
   in the CI job `tlsproxy-image`; its embedded scripts were checked here against the real launcher and mitmproxy.
 
 The nightly kernel matrix ran every Phase 5 level 1 list green on `eab804c` (run 40314226553, 6.8.0-142-generic and
-7.0.0-38-generic); it did not cover the fix commits after `eab804c`, which are not pushed yet.
+7.0.0-38-generic); it did not cover the fix commits after `eab804c`, which CI run 40335480067 on `9bfd4cf` covers (green in every
+job).
 
 Decisions taken by best practice, not by the maintainer:
 

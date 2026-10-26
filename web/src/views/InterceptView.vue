@@ -172,7 +172,7 @@ useApiScreen('the interception', () => [
         </label>
       </div>
 
-      <p v-if="flows.isLoading.value && !flows.data.value" class="m-0 text-sm text-text-2" role="status">Loading the exchanges…</p>
+      <p v-if="flows.isPending.value && !flows.data.value" class="m-0 text-sm text-text-2" role="status">Loading the exchanges…</p>
       <LoadError v-else-if="flows.error.value && !flows.data.value" :error="flows.error.value" what="The exchanges are not loaded" :retry="flows.refetch" />
       <EmptyState v-else-if="items.length === 0 && filtered(applied)" text="No exchange matches these filters." data-testid="flows-none-match">
         <button type="button" class="btn" @click="clearFilters">Clear the filters</button>

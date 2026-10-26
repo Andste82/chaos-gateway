@@ -51,6 +51,8 @@ type tlsState struct {
 	// profile. It lives in memory, like the log; epoch changes with every start of the API.
 	hits  map[string]int64
 	epoch int64
+	// hitsOf is the snapshot hits was last pruned to (pruneHits)
+	hitsOf *engine.Snapshot
 }
 
 // loggedHandshake is a handshake as the API keeps it: the report and what the API made of it.
@@ -341,16 +343,27 @@ func (s *Server) countTLS(overlay string) {
 	s.tls.hits[strings.ToLower(overlay)]++
 }
 
-// tlsHitsSnapshot copies the counters of the TLS overlays and their epoch.
-func (s *Server) tlsHitsSnapshot() (map[string]int64, int64) {
+// tlsHitsSnapshot copies the counters of the overlays in the snapshot's TLS lists and their epoch; the counters of
+// overlays that are not in the store any more are forgotten when the snapshot is a new one (P5-AUDIT-15).
+func (s *Server) tlsHitsSnapshot(snap *engine.Snapshot) (map[string]int64, int64) {
 	s.tls.logMu.Lock()
 	defer s.tls.logMu.Unlock()
 	if s.tls.epoch == 0 {
 		s.tls.epoch = s.clk.Now().UnixMilli()
 	}
-	out := make(map[string]int64, len(s.tls.hits))
-	for k, v := range s.tls.hits {
-		out[k] = v
+	if snap == nil {
+		return nil, s.tls.epoch
+	}
+	if s.tls.hitsOf != snap {
+		pruneHits(s.tls.hits, snap.Overlays)
+		s.tls.hitsOf = snap
+	}
+	out := make(map[string]int64, len(snap.TLSCases))
+	for _, c := range snap.TLSCases {
+		id := strings.ToLower(c.Overlay)
+		if v, ok := s.tls.hits[id]; ok {
+			out[id] = v
+		}
 	}
 	return out, s.tls.epoch
 }

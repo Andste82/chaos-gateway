@@ -57,6 +57,8 @@ type dnsState struct {
 	// a profile. It lives in memory, like the log; epoch changes with every start of the API.
 	faultHits map[string]int64
 	epoch     int64
+	// hitsOf is the snapshot faultHits was last pruned to (pruneHits)
+	hitsOf *engine.Snapshot
 }
 
 // addrPair is a client and an address it got in an answer.
@@ -522,16 +524,44 @@ func (s *Server) countFault(overlay string) {
 	s.dns.faultHits[strings.ToLower(overlay)]++
 }
 
-// dnsHitsSnapshot copies the counters of the DNS faults and their epoch.
-func (s *Server) dnsHitsSnapshot() (map[string]int64, int64) {
+// dnsHitsSnapshot copies the counters of the overlays in the snapshot's DNS lists and their epoch; the counters of
+// overlays that are not in the store any more are forgotten when the snapshot is a new one (P5-AUDIT-15).
+func (s *Server) dnsHitsSnapshot(snap *engine.Snapshot) (map[string]int64, int64) {
 	s.dns.logMu.Lock()
 	defer s.dns.logMu.Unlock()
 	if s.dns.epoch == 0 {
 		s.dns.epoch = s.clk.Now().UnixMilli()
 	}
-	out := make(map[string]int64, len(s.dns.faultHits))
-	for k, v := range s.dns.faultHits {
-		out[k] = v
+	if snap == nil {
+		return nil, s.dns.epoch
+	}
+	if s.dns.hitsOf != snap {
+		pruneHits(s.dns.faultHits, snap.Overlays)
+		s.dns.hitsOf = snap
+	}
+	out := make(map[string]int64, len(snap.DNSFaults))
+	for _, f := range snap.DNSFaults {
+		id := strings.ToLower(f.Overlay)
+		if v, ok := s.dns.faultHits[id]; ok {
+			out[id] = v
+		}
 	}
 	return out, s.dns.epoch
+}
+
+// pruneHits forgets the counters of the overlays that are not in the store: an overlay that is there keeps its
+// count while it is overridden and in no list, so its counter goes on when it is back (same epoch).
+func pruneHits(hits map[string]int64, overlays []model.Overlay) {
+	if len(hits) == 0 {
+		return
+	}
+	in := make(map[string]bool, len(overlays))
+	for _, o := range overlays {
+		in[strings.ToLower(o.Id.String())] = true
+	}
+	for id := range hits {
+		if !in[id] {
+			delete(hits, id)
+		}
+	}
 }

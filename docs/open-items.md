@@ -2679,7 +2679,9 @@ Remaining points of minor weight that the round left, none of them a new item:
 - P5-AUDIT-02: a case that selects by a network, the uplink or a host name keeps a passed-through connection (documented in M21
   decisions 5 and 7).
 - `internal/api` needs a `-timeout` above the Makefile's 20 minutes under `-race` on a loaded small machine (829 s here, earlier
-  runs of the round hit 10 minutes with the default timeout).
+  runs of the round hit 10 minutes with the default timeout). Under `qemu-user` the same package took 351 s to 585 s in the job
+  `arm64` and passed the default 10 minutes of `go test` in CI run 40412746566 on `e771b60`; `make test-arm64` now gives it
+  `-timeout 30m`.
 - `TestForceNewIPMovesTheClientAtItsRenewalOnTheRealKernel` (`M23_LEVEL1`) failed in the VM job of CI run 40351451158 on
   `66a06cc` (a commit that changed only docs; the rerun of the job passed) and again in run 40393245421 on `2d42d10`: the client
   had its new address, but no renewal of it came within 15 s. The client's log, which the check now prints, showed the cause:

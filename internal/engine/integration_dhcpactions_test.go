@@ -266,7 +266,7 @@ func TestForceNewIPMovesTheClientAtItsRenewalOnTheRealKernel(t *testing.T) {
 	}
 	// a client that has the address stays with it at the next renewal while the overlay lasts
 	if l, ok := waitLine(t, log, "renew", 1, 15*time.Second); !ok || field(l, "ip") != moved {
-		t.Errorf("the renewal of the new address: %q", l)
+		t.Errorf("the renewal of the new address: %q (client log %q)", l, clientLines(log))
 	}
 }
 

@@ -2680,6 +2680,11 @@ Remaining points of minor weight that the round left, none of them a new item:
   decisions 5 and 7).
 - `internal/api` needs a `-timeout` above the Makefile's 20 minutes under `-race` on a loaded small machine (829 s here, earlier
   runs of the round hit 10 minutes with the default timeout).
+- `TestForceNewIPMovesTheClientAtItsRenewalOnTheRealKernel` (`M23_LEVEL1`) failed once in the VM job of CI run 40351451158 on
+  `66a06cc`, a commit that changed only docs: the client had its new address, but no renewal of it came within 15 s. The rerun of
+  the job passed, and the test passed in both testbed jobs of run 40335480067 on `9bfd4cf` and in every earlier run. The cause is
+  not known; the check now prints the client's log, as the test's other checks do, so that a next failure shows what the client
+  did.
 
 ### Phase 5 audit items for the maintainer
 

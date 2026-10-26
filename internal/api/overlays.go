@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"net/netip"
@@ -82,12 +84,9 @@ func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) over
 	if oc.snap.Config != nil {
 		oc.world, _ = domain.NewWorld(oc.snap.Config, oc.snap.Overlays)
 	}
-	if len(oc.snap.DNSFaults) > 0 {
-		oc.dnsHits, oc.dnsEpoch = s.dnsHitsSnapshot()
-	}
-	if len(oc.snap.TLSCases) > 0 {
-		oc.tlsHits, oc.tlsEpoch = s.tlsHitsSnapshot()
-	}
+	// every read prunes the counters of overlays that went (once per snapshot), with or without a DNS fault or TLS case in force
+	oc.dnsHits, oc.dnsEpoch = s.dnsHitsSnapshot(oc.snap)
+	oc.tlsHits, oc.tlsEpoch = s.tlsHitsSnapshot(oc.snap)
 	if withCounters && (len(oc.snap.Faults) > 0 || len(oc.snap.PMTU) > 0 || oc.snap.Access != nil || len(oc.snap.WGActions) > 0 || len(oc.snap.Forwards) > 0) {
 		cs, err := s.cfg.Engine.ReadCounters(ctx)
 		if err != nil {
@@ -183,8 +182,28 @@ func (oc overlayContext) withDNS(c *model.Counter, id string) *model.Counter {
 		out = *c
 	}
 	out.Packets += oc.dnsHits[strings.ToLower(id)]
-	out.Epoch = max(out.Epoch, oc.dnsEpoch)
+	out.Epoch = mixEpochs(out.Epoch, oc.dnsEpoch)
 	return &out
+}
+
+// mixEpochs is the epoch of a counter that adds two parts with their own epochs: it changes whenever either part's
+// changes, so a reader never subtracts two readings across a restart of one part (P5-AUDIT-13). The kernel part's epoch is
+// an engine generation and the DNS or TLS part's the start of the API in milliseconds: the larger of the two (what the
+// counter carried before) was always the latter and hid a kernel fault that was made anew. Only equality has a meaning
+// (spec: "changes when counters restart"); a part without an epoch (0) leaves the other's as it is.
+func mixEpochs(a, b int64) int64 {
+	switch {
+	case a == 0:
+		return b
+	case b == 0 || a == b:
+		return a
+	}
+	var buf [16]byte
+	binary.BigEndian.PutUint64(buf[:8], uint64(a))
+	binary.BigEndian.PutUint64(buf[8:], uint64(b))
+	h := fnv.New64a()
+	_, _ = h.Write(buf[:])
+	return int64(h.Sum64() >> 1) // positive, as the epochs of the other counters are
 }
 
 // withTLS adds the handshakes of the overlay to its counter (a TLS overlay's, or the tls part of an activated
@@ -206,7 +225,7 @@ func (oc overlayContext) withTLS(c *model.Counter, id string) *model.Counter {
 		out = *c
 	}
 	out.Packets += oc.tlsHits[strings.ToLower(id)]
-	out.Epoch = max(out.Epoch, oc.tlsEpoch)
+	out.Epoch = mixEpochs(out.Epoch, oc.tlsEpoch)
 	return &out
 }
 

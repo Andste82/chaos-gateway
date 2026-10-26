@@ -261,9 +261,10 @@ test('a TLS case: handshake cases, the default ports, a device that trusts the t
   await d.getByRole('button', { name: 'Apply fault' }).click();
   await expect(toast(page, 'Fault active on Network IoT').last()).toBeVisible();
   // the key of a case is its selection: the new ports are a new overlay and the old one is removed
+  // (the first toast is still on the screen, so the removal of the old overlay is waited for, not assumed)
+  await expect.poll(() => gw.requests.filter((r) => r.method === 'DELETE').length).toBe(1);
   expect(sentOverlays(gw)[1]).toEqual({ target: { network: IOT }, tls: { case: 'self_signed', ports: [443] } });
   expect(gw.overlays.filter((o) => o.kind === 'tls')).toHaveLength(1);
-  expect(gw.requests.filter((r) => r.method === 'DELETE')).toHaveLength(1);
 });
 
 test('the gateway\'s refusal of a TLS case stands under the field it names', async ({ page }) => {

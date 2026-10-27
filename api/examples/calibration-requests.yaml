@@ -1,0 +1,6 @@
+# Example `POST /probes/{probeId}/calibrate` bodies (schema `CalibrationRequest`, plan §2.12): the self-test "measure this profile".
+- {profile: bad-lte, host: 203.0.113.10}
+- {profile: lte, host: 203.0.113.10, port: 9001, duration: 60s}
+- {fault: {upload: {latency: 50ms, jitter: 5ms}, download: {loss: 2%}}, host: 203.0.113.10, duration: 30s}
+- {fault: {rate: 2Mbit}, host: 203.0.113.10}
+- {host: 203.0.113.10, duration: 10s}

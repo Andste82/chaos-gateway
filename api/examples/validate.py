@@ -70,6 +70,9 @@ for i, capture in enumerate(yaml.safe_load((HERE / "capture-requests.yaml").read
 for i, req in enumerate(yaml.safe_load((HERE / "diagnostic-requests.yaml").read_text())):
     expect_valid(f"diagnostic-requests.yaml[{i}]", "DiagnosticRequest", req)
 
+for i, req in enumerate(yaml.safe_load((HERE / "calibration-requests.yaml").read_text())):
+    expect_valid(f"calibration-requests.yaml[{i}]", "CalibrationRequest", req)
+
 # Things the schema itself must reject.
 expect_invalid("loss without %", "NetemParams", {"loss": "10"})
 expect_invalid("duration without unit", "NetemParams", {"latency": "200"})

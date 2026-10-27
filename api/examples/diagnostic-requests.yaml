@@ -8,3 +8,4 @@
 - {type: tls, host: broker.example.com, port: 8883, sni: broker.example.com}
 - {type: path, host: broker.example.com, port: 8883}
 - {type: path, host: 10.10.0.20, port: 1883, tls: false, from: {gateway: true}}
+- {type: ping, host: 203.0.113.10, count: 20, from: {probe: probe-a}}

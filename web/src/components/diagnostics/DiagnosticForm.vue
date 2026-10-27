@@ -4,7 +4,7 @@
 // under *Advanced* the timeout, the number of echoes, the SNI, the datagram, the TLS step of a path. Each message stands
 // under its field and Run stays disabled until the form is valid; the gateway's refusal is put under the field it names.
 import { computed, ref, useId, watch } from 'vue';
-import type { DiagnosticRequest } from '../../api/generated/model';
+import type { DiagnosticRequest, ProbeView } from '../../api/generated/model';
 import {
   diagnosticErrors,
   diagnosticFieldOf,
@@ -26,6 +26,8 @@ const props = defineProps<{
   disabled?: boolean;
   /** The fields the gateway refused the last request for. */
   refusal?: { path?: string; message?: string }[];
+  /** The probes a diagnostic can run from (M25); the choice *From* is shown when there are any. */
+  probes?: ProbeView[];
 }>();
 const form = defineModel<DiagnosticForm>('form', { required: true });
 const emit = defineEmits<{ run: [request: DiagnosticRequest] }>();
@@ -60,7 +62,7 @@ const errors = computed(() => ({ ...serverErrors.value, ...clientErrors.value })
 function setType(t: string) {
   const old = form.value;
   // the host and the timeout stay when the type changes; what belongs to one type does not
-  form.value = { ...emptyDiagnosticForm(t as DiagnosticType), host: old.host, port: old.port, timeout: old.timeout };
+  form.value = { ...emptyDiagnosticForm(t as DiagnosticType), from: old.from, host: old.host, port: old.port, timeout: old.timeout };
 }
 
 function submit() {
@@ -78,6 +80,18 @@ const hostPlaceholder = computed(() => (form.value.type === 'dns' ? 'broker.exam
       <span class="label">Diagnostic</span>
       <SegmentedControl :model-value="form.type" label="Diagnostic" :options="diagnosticTypes.map((t) => ({ value: t.value, label: t.label }))" @update:model-value="setType" />
       <p class="mt-1.5 mb-0 text-[13px] text-text-2" data-testid="diagnostic-hint">{{ info?.hint }}</p>
+    </div>
+
+    <div v-if="probes?.length">
+      <label class="label" :for="`${uid}-from`">From</label>
+      <select :id="`${uid}-from`" v-model="form.from" class="input w-full max-w-[360px]" data-testid="diagnostic-from">
+        <option value="">The gateway</option>
+        <option v-for="p in probes" :key="p.id" :value="p.id">Probe {{ p.config.name }}{{ (p.observed.addresses ?? []).length ? ` · ${p.observed.addresses?.[0]}` : '' }}</option>
+      </select>
+      <p v-if="errors.from" class="mt-1 mb-0 text-xs text-block-text" role="alert">{{ errors.from }}</p>
+      <p class="mt-1.5 mb-0 text-[13px] text-text-2" data-testid="diagnostic-from-hint">
+        {{ form.from ? 'The probe’s traffic takes the path of a device’s: the faults, rules and profiles that target the probe act on it.' : 'The gateway’s own address: the faults of a device do not apply.' }}
+      </p>
     </div>
 
     <div class="grid grid-cols-[minmax(0,1fr)_140px] items-start gap-3 max-sm:grid-cols-1">
@@ -118,7 +132,7 @@ const hostPlaceholder = computed(() => (form.value.type === 'dns' ? 'broker.exam
 
     <div class="flex items-center gap-3">
       <button type="submit" class="btn btn-primary" :disabled="!valid || busy || disabled" data-testid="run-diagnostic">{{ busy ? 'Running…' : 'Run' }}</button>
-      <span class="text-xs text-text-3">From the gateway's own address: the faults of a device do not apply.</span>
+      <span v-if="!form.from" class="text-xs text-text-3">From the gateway's own address: the faults of a device do not apply.</span>
     </div>
   </form>
 </template>

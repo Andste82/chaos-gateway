@@ -62,6 +62,9 @@ import type {
   WireGuardPeerStatus,
   DiagnosticRequest,
   DiagnosticResult,
+  CalibrationRequest,
+  CalibrationResult,
+  ProbeView,
 } from '../src/api/generated/model';
 
 export const IOT = '0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21';
@@ -537,6 +540,14 @@ export class MockGateway {
    */
   diagnose?: (req: DiagnosticRequest) => DiagnosticResult | { refuse: { status: number; code: string; detail: string; errors?: ValidationError[] } };
   diagnosticDelay = 0;
+  /** The probes (GET /probes; the feature `probes` of the capabilities makes the operations available). */
+  probes: ProbeView[] = [];
+  /**
+   * What POST /probes/{id}/calibrate answers for a request: a result, or a refusal of the gateway. Without it the
+   * measurement is within the tolerances. `calibrationDelay` holds the answer back, in ms.
+   */
+  calibrate?: (probe: ProbeView, req: CalibrationRequest) => CalibrationResult | { refuse: { status: number; code: string; detail: string; errors?: ValidationError[] } };
+  calibrationDelay = 0;
   /** The exchanges the interception proxy saw, oldest first (GET /intercept/flows lists them newest first). */
   interceptFlows: InterceptFlow[] = [];
   /** The next POST /tls/ca/regenerate is refused with this status; the number of replacements so far. */
@@ -931,6 +942,25 @@ export class MockGateway {
       const req = body as DiagnosticRequest;
       const answer = this.diagnose ? this.diagnose(req) : defaultDiagnostic(req, new Date(this.now()).toISOString());
       if (this.diagnosticDelay) await new Promise((r) => setTimeout(r, this.diagnosticDelay));
+      if ('refuse' in answer) {
+        const r = answer.refuse;
+        if (r.errors) return json(r.status, { type: 'about:blank', title: r.code, status: r.status, code: r.code, detail: r.detail, errors: r.errors });
+        return problem(r.status, r.code, r.detail);
+      }
+      return json(200, answer);
+    }
+    if (path === '/probes' && method === 'GET') {
+      if (!this.capabilities.features.includes('probes')) return problem(422, 'unsupported_feature', 'this operation is not available in this build; it arrives with milestone M25');
+      return json(200, this.page(this.probes, url));
+    }
+    const calibration = /^\/probes\/([^/]+)\/calibrate$/.exec(path);
+    if (calibration && method === 'POST') {
+      if (!this.capabilities.features.includes('probes')) return problem(422, 'unsupported_feature', 'this operation is not available in this build; it arrives with milestone M25');
+      const probe = this.probes.find((p) => p.id === calibration[1] || p.config.name === decodeURIComponent(calibration[1]!));
+      if (!probe) return problem(404, 'not_found', 'no such probe');
+      const req = body as CalibrationRequest;
+      const answer = this.calibrate ? this.calibrate(probe, req) : defaultCalibration(req);
+      if (this.calibrationDelay) await new Promise((r) => setTimeout(r, this.calibrationDelay));
       if ('refuse' in answer) {
         const r = answer.refuse;
         if (r.errors) return json(r.status, { type: 'about:blank', title: r.code, status: r.status, code: r.code, detail: r.detail, errors: r.errors });
@@ -1715,7 +1745,7 @@ export class MockGateway {
 
 /** A diagnostic that succeeded, as the gateway would answer the request (the default of MockGateway.diagnose). */
 export function defaultDiagnostic(req: DiagnosticRequest, startedAt: string): DiagnosticResult {
-  const base = { type: req.type, from: 'gateway', ok: true, started_at: startedAt, duration_ms: 12.5 };
+  const base = { type: req.type, from: req.from?.probe ? 'probe:cgp-3a1f7c52' : 'gateway', ok: true, started_at: startedAt, duration_ms: 12.5 };
   switch (req.type) {
     case 'ping':
       return { ...base, ping: { sent: req.count ?? 5, received: req.count ?? 5, loss_percent: 0, rtt_min_ms: 0.4, rtt_avg_ms: 0.6, rtt_max_ms: 1.1, rtt_mdev_ms: 0.2 } };
@@ -1759,5 +1789,32 @@ export function tlsOf(verified: boolean): NonNullable<DiagnosticResult['tls']> {
         dns_names: ['broker.example.com'],
       },
     ],
+  };
+}
+
+/** A probe as GET /probes lists it. */
+export function sampleProbe(over: Partial<ProbeView> & { name?: string; address?: string; network?: string } = {}): ProbeView {
+  const { name = 'probe-a', address = '10.10.0.77', network = '0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21', ...rest } = over;
+  return {
+    id: '3a1f7c52-6b0e-4d83-9c2a-1e4d5f60a7b8',
+    config: { name, network },
+    observed: { addresses: address ? [address] : [], macs: ['02:28:b4:ce:f6:08'], online: !!address, sources: ['probe', 'dhcp'] },
+    ...rest,
+  };
+}
+
+/** A measurement that matched, as the gateway would answer the request (the default of MockGateway.calibrate). */
+export function defaultCalibration(req: CalibrationRequest): CalibrationResult {
+  const delayed = !!req.profile;
+  return {
+    within_tolerance: true,
+    expected: { rtt_ms: delayed ? 101 : 1, loss_percent: 0 },
+    measured: { baseline_rtt_ms: 1, rtt_median_ms: delayed ? 102.3 : 1.1, rtt_p95_ms: delayed ? 104 : 1.4, loss_percent: 0, loss_ci99: [0, 0.3] },
+    samples: { sent: 2000, received: 2000 },
+    checks: [
+      { name: 'latency', ok: true, detail: 'the median round trip is 102.30 ms against 1.00 ms unimpaired: 101.30 ms added, 100.00 ms expected (tolerance ±7.00 ms)' },
+      { name: 'loss', ok: true, detail: '0 of 2000 datagrams were lost (0.00 %); 0.00 % expected' },
+    ],
+    detail: 'latency: ok; loss: ok',
   };
 }

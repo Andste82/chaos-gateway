@@ -5,6 +5,7 @@
 import { useQueries, useQuery } from '@tanstack/vue-query';
 import { computed, watch } from 'vue';
 import { listDevices, listInterceptFlows, listLeases } from '../api/generated/hooks/devices/devices';
+import { listProbes } from '../api/generated/hooks/diagnostics/diagnostics';
 import { listWireGuardClients } from '../api/generated/hooks/wireguard/wireguard';
 import { listAccessRules, listFaults, listGroups, listNetworks, listPortForwards, listProfiles, listScenarios } from '../api/generated/hooks/config/config';
 import { getCaptureStorage, listCaptures } from '../api/generated/hooks/captures/captures';
@@ -12,7 +13,7 @@ import { getRun, listRuns } from '../api/generated/hooks/runs/runs';
 import { listOverlays } from '../api/generated/hooks/overlays/overlays';
 import { getActiveRevision, getGetActiveRevisionQueryKey } from '../api/generated/hooks/revisions/revisions';
 import { getCapabilities, useGetHealth, useGetState, useGetSystemInfo } from '../api/generated/hooks/system/system';
-import type { AccessRuleView, Capture, DeviceView, InterceptFlowPage, ListInterceptFlowsParams, DhcpLease, FaultView, GroupView, ListRunsParams, NetworkView, Overlay, PortForwardView, ProfileView, Run, ScenarioView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
+import type { AccessRuleView, Capture, DeviceView, ProbeView, InterceptFlowPage, ListInterceptFlowsParams, DhcpLease, FaultView, GroupView, ListRunsParams, NetworkView, Overlay, PortForwardView, ProfileView, Run, ScenarioView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
 import { describeMatch, describeScope, describeTunnel, faultChips, overlayChips, type Names } from '../lib/faults';
 import { scopeLink } from '../lib/links';
 import { isRunOf, mergeRuns } from '../lib/runs';
@@ -235,6 +236,31 @@ export function useCanCapture() {
   const caps = useCapabilities();
   return computed<boolean | undefined>(() => {
     if (caps.data.value) return caps.data.value.features.includes('captures');
+    return caps.error.value ? true : undefined;
+  });
+}
+
+/**
+ * The probes of the active revision with the address they got (plan §2.12, M25). Their key starts like the devices', so the
+ * events that change a device (an address, online or offline, an applied revision) read them again.
+ */
+export function useProbes(enabled: () => boolean = () => true) {
+  return useQuery({
+    queryKey: ['devices', 'probes'],
+    queryFn: ({ signal }) => fetchAll<ProbeView>((cursor) => listProbes({ limit: 500, cursor }, { signal }), signal),
+    enabled: computed(enabled),
+    refetchInterval: 5_000,
+  });
+}
+
+/**
+ * Whether this gateway has probes (M25): its features list `probes`. Undefined until the capabilities are known; capabilities
+ * that cannot be read do not take them away (the gateway answers `unsupported_feature` itself).
+ */
+export function useCanProbe() {
+  const caps = useCapabilities();
+  return computed<boolean | undefined>(() => {
+    if (caps.data.value) return caps.data.value.features.includes('probes');
     return caps.error.value ? true : undefined;
   });
 }

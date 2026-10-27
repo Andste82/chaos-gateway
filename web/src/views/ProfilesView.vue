@@ -15,12 +15,14 @@ import { errorMessage } from '../api/fetcher';
 import { createOverlay, deleteOverlay } from '../api/generated/hooks/overlays/overlays';
 import type { OverlayRequest, Profile, ProfileActivation, ProfileView } from '../api/generated/model';
 import PageHeader from '../components/layout/PageHeader.vue';
+import CalibrateDialog from '../components/diagnostics/CalibrateDialog.vue';
 import ProfileDialog from '../components/profiles/ProfileDialog.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import FaultChip from '../components/ui/FaultChip.vue';
 import LoadError from '../components/ui/LoadError.vue';
 import ScopeSelect from '../components/ui/ScopeSelect.vue';
-import { firstError, useActiveConfig, useGatewayState, useGroups, useNames, useProfiles } from '../composables/gateway';
+import { firstError, useActiveConfig, useCanProbe, useGatewayState, useGroups, useNames, useProbes, useProfiles } from '../composables/gateway';
+import { measurableProfiles } from '../lib/probes';
 import { useNow } from '../composables/useNow';
 import { durations, scopeOf, targetOf } from '../lib/faultForm';
 import { describeScope } from '../lib/faults';
@@ -34,6 +36,12 @@ import { useToastStore } from '../stores/toasts';
 import { refocusAfterSwap } from '../lib/focus';
 
 const profiles = useProfiles();
+// "Measure with probe" (M25): the self-test of a profile on a probe
+const canProbe = useCanProbe();
+const probesQuery = useProbes(() => canProbe.value !== false);
+const probes = computed(() => probesQuery.data.value ?? []);
+const measurable = computed(() => measurableProfiles(profiles.data.value ?? []));
+const measuring = ref<{ open: boolean; profile?: string }>({ open: false });
 const { names, devices, networks } = useNames();
 const groups = useGroups();
 const state = useGatewayState();
@@ -264,6 +272,18 @@ const retry = () => Promise.all([profiles.refetch(), active.refetch()]);
         >
           {{ here(c.p).length ? 'Deactivate' : 'Activate' }} on {{ scopeName }}
         </button>
+        <button
+          v-if="canProbe !== false && c.p.config.parts.impairment && !c.deleted"
+          type="button"
+          class="btn btn-sm"
+          :disabled="!probes.length || connection.offline || pending(c)"
+          :title="probes.length ? undefined : 'No probe: add a probe to the configuration to measure a profile.'"
+          :aria-label="`Measure ${c.title} with a probe`"
+          data-testid="profile-measure"
+          @click="measuring = { open: true, profile: c.p.id }"
+        >
+          Measure with probe
+        </button>
         <template v-if="!c.p.builtin">
           <button
             v-if="c.deleted"
@@ -299,4 +319,5 @@ const retry = () => Promise.all([profiles.refetch(), active.refetch()]);
   </div>
 
   <ProfileDialog v-model:open="editorOpen" :profile="editing" :names="allNames" />
+  <CalibrateDialog v-model:open="measuring.open" :probes="probes" :profiles="measurable" :profile="measuring.profile" />
 </template>

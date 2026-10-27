@@ -121,6 +121,8 @@ type Server struct {
 	captures *capturemgr.Manager
 	// diagnostics runs POST /diagnostics (M24)
 	diagnostics *diagnostics
+	// calibrating holds the probes whose calibration runs (M25)
+	calibrating calibrations
 }
 
 var _ apiserver.ServerInterface = (*Server)(nil)

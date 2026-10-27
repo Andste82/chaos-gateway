@@ -199,6 +199,8 @@ type Target struct {
 	Bird       *BirdTarget   `json:"bird,omitempty"`
 	// Service is the service namespace; nil when the gateway runs no service.
 	Service *ServiceNS `json:"service,omitempty"`
+	// Probes are the virtual clients: ports of the bridges of their networks (plan §2.12, M25), sorted by namespace.
+	Probes []ProbeTarget `json:"probes,omitempty"`
 	// Kea is the DHCP configuration; nil when no network has DHCP switched on.
 	Kea *KeaTarget `json:"kea,omitempty"`
 	// IdentityMap is the nftables map that holds every known device's current addresses mapped to
@@ -407,6 +409,7 @@ func Compile(in Input) *Target {
 		netByID[t.Bridges[i].NetworkID] = &t.Bridges[i]
 	}
 	sort.Slice(t.WireGuard, func(i, j int) bool { return t.WireGuard[i].Name < t.WireGuard[j].Name })
+	t.compileProbes(idx)
 
 	t.finishManagementSources()
 	t.compileHostState()

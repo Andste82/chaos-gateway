@@ -174,6 +174,14 @@ func (s *Scope) Check(op Operation) error {
 			return err
 		}
 		return s.needNotOSOwned(o.HostIf)
+	case *ProbeNS:
+		if o.Action == "ensure" {
+			if err := s.need(o.Bridge); err != nil {
+				return err
+			}
+			return s.needNotOSOwned(o.Bridge)
+		}
+		return nil
 	case *Bird:
 		return nil // no interface: the instance is a name inside the executor's own BIRD directory
 	case *Sysctl:

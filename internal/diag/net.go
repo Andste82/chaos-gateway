@@ -60,6 +60,10 @@ func (h HostNet) ListenICMP() (net.PacketConn, bool, error) {
 	return pc, datagram, err
 }
 
+// InNamespace runs f with the calling thread in the named network namespace (empty: its own), which the sockets f makes
+// keep; the probes' DHCP client and echo measurement (M25) make their sockets this way.
+func InNamespace(name string, f func() error) error { return inNamespace(name, f) }
+
 // inNamespace runs f with the calling thread in the named network namespace (/run/netns/<name>), which the sockets f
 // makes keep. The thread goes back to its own namespace afterwards; a thread that cannot is not given back to the Go
 // runtime.

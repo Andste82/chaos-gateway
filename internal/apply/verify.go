@@ -76,6 +76,20 @@ func Verify(t *compiler.Target, s *State) []Mismatch {
 		}
 	}
 
+	// the probes
+	wantProbes := map[string]bool{}
+	for _, p := range t.Probes {
+		wantProbes[p.Namespace] = true
+		if why := probeDiffers(p, s); why != "" {
+			bad("probes", "%s (%s): %s", p.Namespace, p.Name, why)
+		}
+	}
+	for n := range s.Probes {
+		if !wantProbes[n] {
+			bad("probes", "%s is not wanted", n)
+		}
+	}
+
 	// links
 	for _, b := range t.Bridges {
 		l, ok := s.Links[b.Name]

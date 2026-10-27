@@ -28,6 +28,8 @@ const (
 	TypeBird              = "bird"
 	TypeConntrackDelete   = "conntrack_delete"
 	TypeServiceNS         = "service_ns"
+	TypeProbeNS           = "probe_ns"
+	TypeProbeRun          = "probe_run"
 	TypeRead              = "read"
 )
 
@@ -560,6 +562,10 @@ func Decode(data []byte) (Operation, error) {
 		op = &ConntrackDelete{}
 	case TypeServiceNS:
 		op = &ServiceNS{}
+	case TypeProbeNS:
+		op = &ProbeNS{}
+	case TypeProbeRun:
+		op = &ProbeRun{}
 	case TypeRead:
 		op = &Read{}
 	default:

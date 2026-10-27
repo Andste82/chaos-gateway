@@ -6545,6 +6545,111 @@ ping and does not touch the gateway's).
 | The diagnostics of the gateway do not pass through device faults (§2.12) | level 1 `TestDiagnosticsFromTheGatewayDoNotPassThroughTheFaultsOfDevices` |
 | The design is added to §2.17 | plan §2.17, the row "Diagnostics" of the table of screens; "Not yet designed" no longer lists it (probes stay) |
 
+## Probes and calibration (M25)
+
+Plan §2.12 and M25. A probe is a virtual client: a network namespace whose veth interface is a port of the bridge of a test network (spike S12), with an
+address from the network's DHCP like a real device's. It is a device of the namespace (plan §2.3), so rules, faults and profiles target it, a diagnostic of M24
+runs from it, and the self-test "measure this profile" compares what it measures with what the profile should produce within the tolerances of plan §4.3.
+`GET /probes`, `POST /probes/{probeId}/calibrate`, `from.probe` of `POST /diagnostics`, the packages `internal/probe` and `internal/calibrate`, the executor operations
+`probe_ns` and `probe_run`, and the Probes card of the Diagnostics screen.
+
+### How it works
+
+- **The probe in the kernel.** The configuration's `probes` (name, network, `trusts_test_ca`) compile to `Target.Probes` (`compiler.ProbeTarget`): the namespace `cgp-xxxxxxxx` and
+  the gateway's end `pvxxxxxxxx` take the first eight hex digits of the probe's UUID (two probes whose ids start alike are a compile error, `probe_name_clash`), the end in the
+  namespace is `eth0` with a MAC derived from the id (`02:` and five bytes of a hash: the same after a restart or a re-creation, so a lease or a reservation by MAC stays), the host name
+  sent by the DHCP client is the probe's name as a DNS label. A probe of a network that has no bridge in the target (a WireGuard network, which validation refuses, or a network with an
+  error) is left out. The plan (`apply.probeOps`) comes after the links step, when the bridges exist: a probe that is gone from the target is deleted; one that is missing, not a port of its
+  bridge, down, with another MAC or without a DHCP client is ensured. `executor.ProbeNS ensure` runs fixed commands only (`ip netns add`, `ip link add pv.. type veth peer name eth0 address MAC
+  netns cgp-..`, `ip link set master`, `ethtool -K .. gro off gso off tso off lro off` on both ends, the links up) and starts the client; `delete` stops the client and removes the pair and the
+  namespace. The gateway's end is not among the assigned interfaces (it is not Chaos Gateway's in the sense of tc and routing: the traffic of a probe is classified on the bridge and the uplink like
+  a device's, S12) and `apply.ReadState` takes it out of the links, so the preview and the verify of a bridge's ports do not see it; `Verify` checks the probes by `ReadProbes`
+  (`probes: ...` mismatches). The executor refuses a bridge that is not assigned or is OS-owned, and a namespace or interface that does not follow the pattern.
+- **The address.** The DHCP client is `internal/probe.Client`, a DHCPv4 client in Go (RFC 2131): DISCOVER, OFFER, REQUEST, ACK with the broadcast flag and the client id, the retry with the doubling wait,
+  renewing by unicast at T1, rebinding by broadcast at T2, the loss of the lease when it runs out or the server says NAK, an infinite lease kept for ever. Its socket is UDP port 68 bound to
+  `eth0` inside the namespace (`ListenDHCP`, `SO_BINDTODEVICE`, `SO_BROADCAST`), made on a thread that entered the namespace. The executor runs one client per probe in its own process
+  (`probeClients`) and configures the interface with the lease: `ip addr replace` (the old address is deleted), the default route via the lease's router. A client that is gone (the executor
+  restarted) is started again by the next apply (the read `probes` says `dhcp: false`). Why not `udhcpc` as the testbed's clients do: the production image has no busybox, and a client
+  in Go is a unit of logic that level 0 tests with a scripted server and a fake clock.
+- **Observation and identity.** `ReadProbes` (a read of the executor) lists the gateway ends with their namespaces, the MAC, the addresses and the lease; the engine feeds `Observed.Probes`
+  (the MAC and the IPs by probe id) to the identity resolution that M6a prepared, so the probe's address is a claim of the device (and its MAC keeps the lease from becoming a "discovered"
+  device); the device state has the probe's MAC, the lease of Kea and the sources `probe`, `dhcp`. `GET /probes` is the devices of the origin `probe` joined with their configuration.
+- **A diagnostic from a probe.** `POST /diagnostics` with `from.probe` (a probe of the active revision, by id or name) asks the executor for a `probe_run` of the kind `diagnostic`: the
+  executor runs `diag.Runner` on `diag.HostNet{Namespace: cgp-..}` because the API (unprivileged) cannot enter a namespace. The request carries the DNS servers of the probe's network (its
+  gateway address) as the fallback, the executor prefers the servers of the probe's lease, as a device does; the roots of the certificate check are the system's plus the test CA only
+  when the probe has `trusts_test_ca`. The result says `from: probe:cgp-xxxxxxxx`. A probe that does not exist is `404 not_found`, one that is not built or has no address is `503
+  unavailable` (the reason names DHCP).
+- **The self-test.** `POST /probes/{probeId}/calibrate` (scope `overlays`, audited as `probe.calibrate`): (1) the request is decoded (`domain.DecodeCalibrationRequest`; the code
+  `invalid_calibration` is a host that is no IPv4 address; the others are `mutually_exclusive` for a profile and a fault together, `invalid_duration` for a duration outside 5 s to 5 min,
+  and the codes of the impairment validation for a `fault`), the probe and the profile are looked up, one calibration of a probe runs at a time (`409 target_busy`); (2) the unimpaired
+  reference: 100 UDP datagrams, 10 ms apart, from the **gateway's own namespace** to the same echo server (`probe_run` of the kind `echo` without a probe): the faults of a device do not
+  touch the gateway's traffic (plan §2.12), so this is the path without any fault, wherever the probe's faults come from; (3) with a `profile` or `fault`, an overlay owned by the caller
+  targets the probe (a TTL of the duration plus three minutes as the net behind the explicit removal), `PutOverlay` returns when it is applied and verified; without either, the
+  expectation is the impairment that wins for the probe's traffic to the echo server now (`domain.World.Resolve`); (4) the probe sends numbered datagrams, one every 10 ms (at most 20 000;
+  2000 in the 20 s the loss statistic needs) and times the answers; with a rate limit in the expectation the last third of the duration is a TCP echo loaded as fast as the path allows
+  (`probe.Rate`: the bytes that come back in the last three quarters of the run); (5) the overlay is removed whatever happened, also when the caller has gone; (6) `calibrate.Evaluate`:
+  - **delay**: the median of the round trips minus the reference median is the added delay; it must lie within ±(2 ms + 5 % of the configured added delay) of the sum of the delays of the two
+    directions (upload and download are both on the round trip);
+  - **jitter**: the 95th percentile minus the median is at most the sum of the two jitters plus the delay's tolerance;
+  - **loss**: the number of datagrams without an answer must lie in the 99.9 % acceptance interval of the binomial distribution of the datagrams sent and the round trip loss `1 - (1-p_up)(1-p_down)`
+    (exact, by the summed probability mass); fewer than 2000 datagrams are said to be indicative only; correlated loss (`loss_correlation`, `burst_loss`: the steady-state share of the Gilbert-Elliott
+    model) gets the wider tolerance of ±max(2 points, half the expected loss), because bursts are not independent; flapping has no rate and is not judged;
+  - **rate**: the throughput of the TCP echo within ±10 % of the smaller limit of the two directions;
+  - reordering, duplication and corruption are named in `detail` as not measured. `loss_ci99` is the 99 % Wilson interval of the measured loss, the verdict uses the 99.9 % interval of the expectation.
+- **The echo server** is an RFC 862 echo (UDP and TCP on one port, 7 by default) at an IPv4 address that lies beyond the gateway: the faults of the upload act on the egress of the uplink (or of
+  another test network's bridge), so an echo on the probe's own bridge would see none of them. The testbed's server namespace has one (`testbed.StartPlainEcho`). The gateway runs none
+  of its own.
+- **The screen.** Plan §2.17 "Probes": the card on the Diagnostics screen (`components/diagnostics/ProbesCard.vue`), the choice *From* in `DiagnosticForm.vue` (the query `?from=<name or id>`), the dialog
+  `CalibrateDialog.vue` (`lib/calibration.ts` mirrors the gateway's checks), **Measure with probe** on the profile cards (`ProfilesView.vue`). The probes are read with the key `['devices', 'probes']`, so the events
+  that change a device read them again; the card and the button are there only when `GET /capabilities` lists the feature `probes`.
+
+### Decisions
+
+Taken by best practice where the plan leaves room; the one that needs the maintainer is P6-M25-01 in `docs/open-items.md`:
+
+1. **The client is in Go and runs in the executor,** not `udhcpc` in a process per probe: no new package in the image, and the lease logic is tested at level 0.
+2. **The probe's MAC is derived from its id,** not random per creation: a probe keeps its lease and any reservation across restarts.
+3. **The gateway's end of the pair is not an assigned interface** and is not among the ports of the bridge in the configuration's sense: probes come and go with the configuration and are read by
+   their own read, so the preview of a bridge shows the ports of the configuration only.
+4. **The unimpaired reference is the gateway's own echo,** not a measurement before the overlay: the probe may have faults of its own before the calibration, and the gateway's traffic never meets them.
+5. **The verdict of the loss uses the binomial interval of the expectation (plan §4.3),** and the field `loss_ci99` of the spec stays the 99 % interval of the measurement; both are in the answer.
+6. **The datagram interval is fixed at 10 ms** (100 per second): 2000 datagrams in 20 s; a duration under 20 s still runs and is marked indicative.
+7. **A calibration needs the scope `overlays`** like the overlays it makes; a token with that scope removes its own overlay (the engine removes it with no owner limit, as the call made it).
+8. **The probe_run operation is a read for the executor** (it changes nothing in the kernel): it runs beside the writer on a reader slot and does not wait for an apply that is running.
+9. **Probes are configured, not created by a dedicated operation:** the spec has `probes` in the configuration and no `POST /probes`; the web UI lists, diagnoses and measures them (P6-M25-01 is the form).
+
+### Tests
+
+Level 0, run here. Go: `internal/probe` (the DHCP client against a scripted server and a fake clock: the four messages, the retry with the doubling wait, renewal by unicast at T1, rebinding by
+broadcast at T2, the loss of the lease and the new discover, NAK, an infinite lease, the server's T1 and T2, messages that are no replies; the real socket on the loopback; the echo and the rate
+measurement against servers on the loopback with a delay, a loss and a throttle), `internal/calibrate` (the expectation of flat and per-direction parameters, burst loss, flapping, the exact binomial interval
+against the normal approximation and by simulation, the Wilson interval, every verdict: inside and outside of each tolerance), `internal/executor/probe_test.go` (the operations decoded strictly, the commands of
+`probe_ns`, the scope, the read, the client's start and stop, the lease configuring the interface, the diagnostic with the servers of the lease, the runs from the stack of a probe and beside the writer),
+`internal/apply/probes_test.go` (the plan, the verify, the healing and the removal against the simulated kernel), `internal/domain/calibration_test.go`, `internal/api/probes_test.go` (the list, paging, the
+address and the device, a diagnostic from a probe in the namespace the simulated kernel has, the test CA only for the probe that trusts it, the self-test of a delay, a loss and a rate against a stack
+that delays, drops and throttles like netem, the current faults, every refusal, one calibration at a time, the scopes, the audit entry), `misc_test.go` (the operations belong to M25 in the build). Web unit tests
+(`make test-web`): `lib/calibration.test.ts`, `lib/probes.test.ts` and the probe cases of `lib/diagnostics.test.ts`. Playwright against the mocked API (`e2e/probes.spec.ts`, 14 tests).
+
+Level 1 (the list `M25_LEVEL1`), run on the emulated VM here (kernel 6.8.0-142, software emulation: the accuracy assertions of §4.3 did not run, the functional ones did; CI runs them natively):
+`internal/engine/integration_probes_test.go` against the real Kea (`TestAProbeGetsALeaseFromKeaAndReachesTheGatewayADeviceAndTheServer`, `TestAProbeSurvivesApplysAndIsRemovedWithItsConfiguration`,
+`TestFaultsAndRulesTargetTheProbeAndNobodyElse`, `TestTheEchoRunOfAProbeSeesTheDelayOfItsFaultAndTheGatewayDoesNot`) and `internal/api/e2e_probes_test.go` over the API
+(`TestAProbeRunsDiagnosticsAgainstTheServerOnTheRealKernel`, `TestAFaultOnTheProbeIsSeenByItsDiagnosticsAndNotByTheGatewaysOnTheRealKernel`, `TestTheMeasurementOfAProfileMatchesItsParametersOnTheRealKernel`: the delay, the
+loss and the rate of a profile within the tolerances under KVM or native execution, recorded in the measurement record like the other accuracy assertions).
+
+### Acceptance map (plan M25 "Scope" and "Tests")
+
+| Plan M25 | Test |
+|---|---|
+| Scope: virtual clients as bridge ports of test networks (S12) | `TestAProbeIsABridgePortWithItsOwnNamespaceAndMAC`, `TestAProbeIsMadeFromFixedCommandsAndItsBridgeMustBeAssigned`, level 1 `TestAProbeGetsALeaseFromKeaAndReachesTheGatewayADeviceAndTheServer` |
+| Scope: DHCP address | `internal/probe/dhcp_test.go`, `TestTheLeaseOfTheClientConfiguresTheProbesInterface`, level 1 `TestAProbeGetsALeaseFromKeaAndReachesTheGatewayADeviceAndTheServer` (Kea's lease with the host name) |
+| Scope: targeting by rules/faults | level 1 `TestFaultsAndRulesTargetTheProbeAndNobodyElse`, `TestAFaultOnTheProbeIsSeenByItsDiagnosticsAndNotByTheGatewaysOnTheRealKernel` |
+| Scope: diagnostics of M24 run from a probe | `TestADiagnosticFromAProbeRunsInTheProbesNamespace`, `TestAProbeTrustsTheTestCAOnlyWhenItSaysSo`, `TestAProbeRunMeasuresFromTheProbesStack`, level 1 `TestAProbeRunsDiagnosticsAgainstTheServerOnTheRealKernel` |
+| Scope: self-test "measure this profile" | `internal/calibrate`, `TestAProfileIsMeasuredOnTheProbeAndTheOverlayIsRemoved`, `TestLossOfAFaultIsComparedWithItsBinomialInterval`, `TestARateLimitIsMeasuredWithATCPEcho`, `e2e/probes.spec.ts` |
+| Tests: a probe reaches the gateway address, devices and the server | level 1 `TestAProbeGetsALeaseFromKeaAndReachesTheGatewayADeviceAndTheServer`, `TestAProbeRunsDiagnosticsAgainstTheServerOnTheRealKernel` |
+| Tests: its measurement matches the configured profile within the §4.3 tolerances | level 1 `TestTheMeasurementOfAProfileMatchesItsParametersOnTheRealKernel` (delay, loss and rate; accuracy under KVM or native), `TestTheEchoRunOfAProbeSeesTheDelayOfItsFaultAndTheGatewayDoesNot`; level 0 `TestAProfileThatDoesNotProduceWhatItSaysFailsTheSelfTest` |
+| The faults of a device do not touch the gateway's diagnostics (§2.12) | level 1 `TestFaultsAndRulesTargetTheProbeAndNobodyElse` (the gateway's ping next to the probe's), `TestTheEchoRunOfAProbeSeesTheDelayOfItsFaultAndTheGatewayDoesNot` |
+| The design is added to §2.17 | plan §2.17, the row "Probes"; "Not yet designed" no longer lists them |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -6580,9 +6685,9 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
+Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
 tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of packet captures (M17: the AF_PACKET sockets
-need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of the DNS faults and hostname selectors (M20, with the executor's netlink connection), those of the TLS responder (M21), those of the interception proxy (M22, with the real mitmproxy, which the level 0 job installs too and requires), those of the DHCP test actions (M23, udhcpc and the real Kea), those of Kea's packet socket after a link flap
+need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of the DNS faults and hostname selectors (M20, with the executor's netlink connection), those of the TLS responder (M21), those of the interception proxy (M22, with the real mitmproxy, which the level 0 job installs too and requires), those of the DHCP test actions (M23, udhcpc and the real Kea), those of the probes and the calibration (M25, the real Kea, the real executor and the real netem), those of Kea's packet socket after a link flap
 (issue #64), the tests against the real Kea (I64-05) and those of the observed state of a device (the acceptance of
 issue #79, issue #92) must each pass, so one that is renamed, skips or is no
 longer built fails the job. `tools/ciconfig` checks that every job passes every list of the file and that the list quoted here names them all

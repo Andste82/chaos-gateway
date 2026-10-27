@@ -1,6 +1,7 @@
 // Diagnostics in the UI (plan §2.12, §2.17 "Diagnostics"; M24): the form of a diagnostic with the checks the gateway makes
 // (domain.ValidateDiagnosticRequest), the request it becomes, the field a refusal names, and the result in words: one
-// sentence per type, and the steps of a path ("DNS ✓  Route ✓  TCP ✓  TLS ✗ (certificate has expired)").
+// sentence per type, and the steps of a path ("DNS ✓  Route ✓  TCP ✓  TLS ✗ (certificate has expired)"). Since M25 a diagnostic
+// runs from the gateway or from a probe, whose traffic meets the faults of a device.
 import type { DiagnosticRequest, DiagnosticResult } from '../api/generated/model';
 import type { DotTone } from '../components/ui/StatusDot.vue';
 import { durationMs } from './format';
@@ -30,6 +31,8 @@ export function isDiagnosticType(s: string | undefined): s is DiagnosticType {
 
 export interface DiagnosticForm {
   type: DiagnosticType;
+  /** The probe the diagnostic runs from (its id or name); empty is the gateway's own address. */
+  from: string;
   /** The host to reach; the name to resolve for `dns`; unused for `http`. */
   host: string;
   /** Required for path, TCP and UDP; for DNS the server's port and for TLS the port, with their defaults when empty. */
@@ -45,10 +48,10 @@ export interface DiagnosticForm {
   tls: boolean;
 }
 
-export type DiagnosticField = 'host' | 'port' | 'count' | 'timeout' | 'server' | 'url' | 'sni' | 'payload';
+export type DiagnosticField = 'host' | 'port' | 'count' | 'timeout' | 'server' | 'url' | 'sni' | 'payload' | 'from';
 
 export function emptyDiagnosticForm(type: DiagnosticType = 'path'): DiagnosticForm {
-  return { type, host: '', port: '', count: '', timeout: '', server: '', url: '', sni: '', payload: '', tls: true };
+  return { type, from: '', host: '', port: '', count: '', timeout: '', server: '', url: '', sni: '', payload: '', tls: true };
 }
 
 /** What the form of a type has: the fields it shows, and for the port whether it is required. */
@@ -141,6 +144,7 @@ export function diagnosticErrors(f: DiagnosticForm): Partial<Record<DiagnosticFi
 /** The request the form becomes. */
 export function formToDiagnosticRequest(f: DiagnosticForm): DiagnosticRequest {
   const req: DiagnosticRequest = { type: f.type, host: f.host.trim() };
+  if (f.from.trim() !== '') req.from = { probe: f.from.trim() };
   const fields = fieldsOf(f.type);
   if (f.type === 'http') {
     const url = f.url.trim();
@@ -168,6 +172,7 @@ export function formFromQuery(q: Record<string, unknown>): DiagnosticForm {
   const f = emptyDiagnosticForm(type);
   f.host = one('host');
   f.port = one('port');
+  f.from = one('from');
   return f;
 }
 
@@ -177,6 +182,9 @@ export function diagnosticFieldOf(path: string | undefined): DiagnosticField | u
     case '/host':
     case '/dns_name':
       return 'host';
+    case '/from':
+    case '/from/probe':
+      return 'from';
     case '/port':
     case '/count':
     case '/timeout':

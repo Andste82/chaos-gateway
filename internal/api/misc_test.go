@@ -121,7 +121,7 @@ func specOps(t *testing.T) (m5, later []struct {
 				Method, Path, Milestone string
 				Internal                bool
 			}{m, path, o.Milestone, o.Internal}
-			if o.Milestone == "M5" || o.Milestone == "M6a" || o.Milestone == "M6b" || o.Milestone == "M8a" || o.Milestone == "M9" || o.Milestone == "M11" || o.Milestone == "M14" || o.Milestone == "M35a" || o.Milestone == "M12" || o.Milestone == "M15" || o.Milestone == "M17" || o.Milestone == "M20" || o.Milestone == "M21" || o.Milestone == "M22" || o.Milestone == "M23a" || o.Milestone == "M24" { // implemented in this build
+			if o.Milestone == "M5" || o.Milestone == "M6a" || o.Milestone == "M6b" || o.Milestone == "M8a" || o.Milestone == "M9" || o.Milestone == "M11" || o.Milestone == "M14" || o.Milestone == "M35a" || o.Milestone == "M12" || o.Milestone == "M15" || o.Milestone == "M17" || o.Milestone == "M20" || o.Milestone == "M21" || o.Milestone == "M22" || o.Milestone == "M23a" || o.Milestone == "M24" || o.Milestone == "M25" { // implemented in this build
 				m5 = append(m5, e)
 			} else {
 				later = append(later, e)
@@ -134,7 +134,7 @@ func specOps(t *testing.T) (m5, later []struct {
 func TestOperationsOfLaterMilestonesAreUnsupported(t *testing.T) {
 	g := ready(t)
 	_, later := specOps(t)
-	if len(later) < 4 { // 5 today (6 until M24 took running a diagnostic, 7 until M23a, 8 until M22 took the regeneration of the test CA, 11 until M21 took the download of the test CA and the three operations of the TLS responder, 17 until M17 took six, 29 until M15 took twelve): one operation may move into a milestone, a bigger drop is a mistake
+	if len(later) < 3 { // 3 today (5 until M25 took the probes and their calibration, 6 until M24 took running a diagnostic, 7 until M23a, 8 until M22 took the regeneration of the test CA, 11 until M21 took the download of the test CA and the three operations of the TLS responder, 17 until M17 took six, 29 until M15 took twelve): one operation may move into a milestone, a bigger drop is a mistake
 		t.Fatalf("only %d operations of later milestones", len(later))
 	}
 	g.badRequest = true // every operation here is probed generically with an empty body
@@ -166,7 +166,7 @@ func TestOperationsOfLaterMilestonesAreUnsupported(t *testing.T) {
 func TestEveryOperationOfThisMilestoneExists(t *testing.T) {
 	g := ready(t)
 	m5, _ := specOps(t)
-	if len(m5) != 97 { // 97 since M24 added running a diagnostic, 96 since M23a added the storage of the captures, 95 since M22 added the regeneration of the test CA, the exchanges of the proxy and their log and the key log, 91 since M21 took the download of the test CA and the three operations of the TLS responder, 87 since M20 took the resolutions of the proxy, 86 since M17 added the six operations of the captures, 80 since M15 added the twelve operations of the scenarios and runs, 68 before; 62 until M14 added the rollback and the Linux state, 64 until P3-M14-03 added the Linux view of one object, 65 until M35a added the port forwards, 67 until issue #63 added the uplink traffic
+	if len(m5) != 99 { // 99 since M25 added the probes and their calibration, 97 since M24 added running a diagnostic, 96 since M23a added the storage of the captures, 95 since M22 added the regeneration of the test CA, the exchanges of the proxy and their log and the key log, 91 since M21 took the download of the test CA and the three operations of the TLS responder, 87 since M20 took the resolutions of the proxy, 86 since M17 added the six operations of the captures, 80 since M15 added the twelve operations of the scenarios and runs, 68 before; 62 until M14 added the rollback and the Linux state, 64 until P3-M14-03 added the Linux view of one object, 65 until M35a added the port forwards, 67 until issue #63 added the uplink traffic
 		t.Fatalf("%d operations of M5", len(m5))
 	}
 	g.badRequest = true // every operation here is probed generically with an empty body

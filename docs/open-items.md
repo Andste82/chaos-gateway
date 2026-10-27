@@ -2674,9 +2674,11 @@ Remaining points of minor weight that the round left, none of them a new item:
   `TestALeaseClassGivesItsClientsTheirOwnLeaseTimeAndNoOtherClient` (an offer of 8 s where the lease class gives 9 s). The cause
   is Kea 3's lease caching, on by default: a client that asks again within a quarter of its lease is answered with what is
   left, in whole seconds, so the answer depends on a second boundary between two messages, and a short lease renewed soon was
-  shorter than the action said. Fixed on `main` after the merge of PR #121: the rendered configuration switches caching off
-  (`docs/development.md`, Kea), with `TestAClientThatAsksAgainSoonGetsTheWholeLeaseTimeNotWhatIsLeft` (in `M23_LEVEL1`), which
-  fails without the fix every time.
+  shorter than the action said. Fixed on `main` after the merge of PR #121, with PR #122 on 2026-10-27 (`3b87aac`; CI run
+  40456176789 on `3b87aac` green in every job): the rendered configuration switches caching off (`docs/development.md`, Kea),
+  with `TestAClientThatAsksAgainSoonGetsTheWholeLeaseTimeNotWhatIsLeft` (in `M23_LEVEL1`), which fails without the fix every
+  time. The nightly run 40476181292 on `3b87aac` (started by hand) passed every job, both tests on 6.8.0-142-generic and on
+  7.0.0-38-generic included.
 - P5-AUDIT-10 was decided by the maintainer on 2026-10-27 (option (b)) and is fixed (below): the network form writes a `dhcp`
   block whenever DHCP is on, so a LAN added with the defaults is served; a configuration written by hand without the block still
   has no DHCP, as the spec now says.
@@ -2766,7 +2768,7 @@ Further observations of the lenses that are not defects:
 
 ## Phase 5 open items
 
-Phase 5 (M20 to M23c, application layer) is implemented: M20 to M23a are on `main` (PR #120; CI run 40196370688 on `6a0ec5e` green), the rest is on the branch `phase-5b` (PR #121; CI run 40258339299 on `aebbae8` green). Items below are what the implementation found that no later milestone of the plan completes and that needed a decision of the maintainer. The maintainer decided all nine on 2026-10-25:
+Phase 5 (M20 to M23c, application layer) is implemented: M20 to M23a are on `main` (PR #120; CI run 40196370688 on `6a0ec5e` green), the rest (M21, M22, M23b, M23c) was implemented on the branch `phase-5b` and merged to `main` with PR #121 on 2026-10-27 (`1c969c4`; CI run 40434567365 on `1c969c4` green). Items below are what the implementation found that no later milestone of the plan completes and that needed a decision of the maintainer. The maintainer decided all nine on 2026-10-25:
 
 - **Closed:** P5-M20-01 (option (a), the approximation is accepted), P5-M20-02, P5-M21-01 and P5-M23-01 (option (b) each, the forms are the new milestone M23b), P5-M22-01 (option (b), the interception UI is the new milestone M23c), P5-M22-04 (option (a), left for V1), P5-M21-02 (option (b), implemented: a passed-on connection reaches the test networks and the tunnels) and P5-M22-03 (option (b), the per-case field `upstream`). All of it is built on the branch `phase-5b` (PR #121, merged to `main` on 2026-10-27, `1c969c4`) and ran in CI run 40258339299 on `aebbae8`, green: M21, M22, M23b and M23c are done. The two small points the review of M23b found, P5-M23b-01 and P5-M23b-02, are closed too (neither needed the maintainer).
 - **Waiting for H1:** P5-M22-02 (the proxy is part of H1; the release notes say that it is not validated on ARM64 until the measurement exists).

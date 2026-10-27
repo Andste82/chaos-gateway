@@ -2750,11 +2750,12 @@ components:
           description: Router inside the network's subnet.
     DhcpScope:
       type: object
-      description: One Kea subnet per network (plan §2.7). Reservations come from devices with `fixed_ip`.
+      description: One Kea subnet per network (plan §2.7). Reservations come from devices with `fixed_ip`. The block switches DHCP on, an empty block with the defaults; a network without it has no DHCP (the gateway gives Kea no subnet for it).
       properties:
         enabled:
           type: boolean
           default: true
+          description: Inside the block DHCP is on unless this is false. It does not apply to a network without the block, which has no DHCP.
         pools:
           type: array
           description: Default - the second half of the subnet up to the last usable address, without the gateway's address (a gateway inside it splits it into the range before and the range after it).

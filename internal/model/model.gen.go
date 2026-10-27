@@ -3839,8 +3839,9 @@ type DhcpPool struct {
 	Start Ipv4 `json:"start"`
 }
 
-// DhcpScope One Kea subnet per network (plan §2.7). Reservations come from devices with `fixed_ip`.
+// DhcpScope One Kea subnet per network (plan §2.7). Reservations come from devices with `fixed_ip`. The block switches DHCP on, an empty block with the defaults; a network without it has no DHCP (the gateway gives Kea no subnet for it).
 type DhcpScope struct {
+	// Enabled Inside the block DHCP is on unless this is false. It does not apply to a network without the block, which has no DHCP.
 	Enabled *bool `json:"enabled,omitempty"`
 
 	// LeaseTime Must be at least 1s.
@@ -5003,7 +5004,7 @@ type LanNetwork struct {
 	Address     Ipv4Interface `json:"address"`
 	Description *Description  `json:"description,omitempty"`
 
-	// Dhcp One Kea subnet per network (plan §2.7). Reservations come from devices with `fixed_ip`.
+	// Dhcp One Kea subnet per network (plan §2.7). Reservations come from devices with `fixed_ip`. The block switches DHCP on, an empty block with the defaults; a network without it has no DHCP (the gateway gives Kea no subnet for it).
 	Dhcp *DhcpScope  `json:"dhcp,omitempty"`
 	Dns  *NetworkDns `json:"dns,omitempty"`
 

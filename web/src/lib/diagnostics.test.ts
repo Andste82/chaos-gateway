@@ -107,6 +107,14 @@ describe('the request of the form', () => {
   });
 });
 
+describe('the request from a probe (M25)', () => {
+  it('names the probe, and leaves the field out for the gateway', () => {
+    const f = { ...emptyDiagnosticForm('ping'), host: '203.0.113.10' };
+    expect(formToDiagnosticRequest(f)).toEqual({ type: 'ping', host: '203.0.113.10' });
+    expect(formToDiagnosticRequest({ ...f, from: ' probe-a ' })).toEqual({ type: 'ping', host: '203.0.113.10', from: { probe: 'probe-a' } });
+  });
+});
+
 describe('the form from the address', () => {
   it('takes a known type, a host and a port, and falls back to a path', () => {
     expect(formFromQuery({ type: 'ping', host: '10.10.0.42' })).toMatchObject({ type: 'ping', host: '10.10.0.42', port: '' });
@@ -114,6 +122,12 @@ describe('the form from the address', () => {
     expect(formFromQuery({ type: 'traceroute', host: 'a.test' })).toMatchObject({ type: 'path', host: 'a.test' });
     expect(formFromQuery({})).toMatchObject({ type: 'path', host: '', port: '' });
     expect(formFromQuery({ host: ['a', 'b'] })).toMatchObject({ host: '' });
+  });
+
+  it('takes the probe to run from (M25), by name or id', () => {
+    expect(formFromQuery({ type: 'ping', host: '10.10.0.42', from: 'probe-a' })).toMatchObject({ from: 'probe-a' });
+    expect(formFromQuery({ host: 'a.test' }).from).toBe('');
+    expect(formFromQuery({ from: ['a', 'b'] }).from).toBe('');
   });
 
   it('knows the fields each type shows', () => {
@@ -131,6 +145,8 @@ describe('the field a refusal names', () => {
     expect(diagnosticFieldOf('/port')).toBe('port');
     expect(diagnosticFieldOf('/timeout')).toBe('timeout');
     expect(diagnosticFieldOf('/url')).toBe('url');
+    expect(diagnosticFieldOf('/from')).toBe('from');
+    expect(diagnosticFieldOf('/from/probe')).toBe('from');
     expect(diagnosticFieldOf('/type')).toBeUndefined();
     expect(diagnosticFieldOf(undefined)).toBeUndefined();
   });

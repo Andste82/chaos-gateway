@@ -1062,7 +1062,7 @@ M27/M30.
 - Severity: low
 - Reason: needs-decision. M13 Scope lists "profile cards"; the prototype has a "New profile" button, plan §2.17's Profiles
   row does not. Custom profiles are objects of the configuration (P2-M11-02), so an editor would be a form over the draft
-  like the fault dialog (parts per family). "Measure with probe" waits for the probes (M25).
+  like the fault dialog (parts per family). "Measure with probe" is on the profile cards since M25.
 - Evidence: `web/src/views/ProfilesView.vue`; plan §2.17 "Profiles", §5 M13, M25.
 - Task: implemented — the cards show built-in and custom profiles, activate and deactivate; custom profiles are made through
   the API. Options: (a) a profile editor (impairment and MTU parts) over the draft in M14 or later; (b) leave it to the API and
@@ -2919,7 +2919,7 @@ Phase 5 (M20 to M23c, application layer) is implemented: M20 to M23a are on `mai
 
 ## Phase 6 open items
 
-Phase 6 (M24 to M26, diagnostics and observability) is under way: M24 is implemented on the branch `worktree-phase-6` (not merged yet). Items below are what the implementation of a milestone found that no later milestone of the plan completes and that needs a decision of the maintainer.
+Phase 6 (M24 to M26, diagnostics and observability) is under way: M24 and M25 are implemented and closed after their reviews on the branch `worktree-phase-6` (not merged yet). Items below are what the implementation of a milestone found that no later milestone of the plan completes and that needs a decision of the maintainer.
 
 ### P6-M24-01 A diagnostic can be pointed at any address the gateway can reach, by a token with the scope `overlays`
 
@@ -2933,3 +2933,16 @@ Phase 6 (M24 to M26, diagnostics and observability) is under way: M24 is impleme
 - Acceptance: the spec says which scope each destination needs, and a test of the API shows a token with the smaller scope refused for a destination that needs the larger one (for (b) and (c)); or the plan and the spec say that the scope `overlays` may reach every destination (for (a)).
 - Needs maintainer: yes
 - Effort: S
+
+### P6-M25-01 A probe cannot be added, changed or removed in the web UI or with `chaosctl`
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. The plan's Scope for M25 names the probes themselves (virtual clients, DHCP address, targeting, diagnostics, the self-test) and not a form for them. A probe is an object of the configuration (`probes`: name, network, `trusts_test_ca`, labels), like a custom profile or a port forward: it is made with a revision over the API (a merge patch, or the YAML import), and the web UI lists the probes, runs a diagnostic from one and measures a profile with one, but has no dialog that adds one to the draft, edits its network or removes it, and `chaosctl` has no `probe` command. The draft of the web app (`web/src/stores/draft.ts`) keeps one set of functions per kind of object (the changes, the patch, the rebase and the overlap check), so a form for probes is a piece of work of its own, not a dialog over an existing kind.
+- Evidence: `docs/development.md` "Probes and calibration (M25)", decision 9; `web/src/components/diagnostics/ProbesCard.vue` (the empty state names `probes` of the configuration); `api/openapi.yaml` (`probes` of `Configuration`; no `POST /probes`).
+- Task: decide whether a probe can be made in the UI and with `chaosctl` in V1, and in which milestone.
+- Options: (a) a probe dialog over the draft (name, network, trusts the test CA) with Remove and the preview of the changes, plus `chaosctl probe add|remove|list` (an M26 follow-up or a milestone of its own); (b) only the dialog, `chaosctl` keeps `config patch`; (c) as built: probes are configuration, made over the API and the YAML import, until a user asks.
+- Recommendation: (a) after Phase 6: a tester who wants to try a scenario "before the hardware is connected" (plan §2.12) should be able to add the probe where they work, and the draft machinery for it is the same as for the port forwards (M35a).
+- Acceptance: for (a) and (b), a Playwright test adds a probe through the dialog and the drawer, sees it in the list with its address, and removes it; for (a) a `chaosctl` test lists, adds and removes one; for (c) the plan says that probes are made over the API.
+- Needs maintainer: yes
+- Effort: M

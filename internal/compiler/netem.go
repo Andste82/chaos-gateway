@@ -345,3 +345,7 @@ func computedLimit(n Netem, classes int, budget int64) int {
 
 // Summary describes an MTU fault: "mtu 1400 (icmp)".
 func (f PMTUFault) Summary() string { return fmt.Sprintf("mtu %d (%s)", f.Size, f.Mode) }
+
+// NetemOf builds the complete parameter set of one direction from a fault's parameters, as the compiler does for the tc tree;
+// the calibration of a probe (M25) works out what a profile should produce from it.
+func NetemOf(p *model.NetemParams) (Netem, error) { return netemFrom(p) }

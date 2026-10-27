@@ -39,9 +39,11 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/audit"
 	"github.com/Andste82/chaos-gateway/internal/auth"
 	"github.com/Andste82/chaos-gateway/internal/clock"
+	"github.com/Andste82/chaos-gateway/internal/diag"
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/executor"
+	"github.com/Andste82/chaos-gateway/internal/probe"
 	"github.com/Andste82/chaos-gateway/internal/secrets"
 	"github.com/Andste82/chaos-gateway/internal/store"
 	"github.com/Andste82/chaos-gateway/internal/tlsresponder"
@@ -136,6 +138,9 @@ type options struct {
 	captureMinFree float64
 	// diagnostics sets up the diagnostics (M24): the stack and the DNS servers they use
 	diagnostics api.DiagnosticsConfig
+	// probeNet is the stack a measurement from a probe runs on (M25): the tests have no namespaces, so it is a stack of the
+	// loopback; nil leaves the executor's default. The DHCP client of a probe runs on a socket nobody answers.
+	probeNet func(ns string) diag.Net
 }
 
 func newGW(t *testing.T, opts ...func(*options)) *gw {
@@ -180,6 +185,9 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 		o.hostFS = fstest.MapFS{}
 	}
 	eopts = append(eopts, executor.WithHostRoot(o.hostFS))
+	if o.probeNet != nil {
+		eopts = append(eopts, executor.WithProbeNet(o.probeNet), executor.WithProbeSocket(func(string, string) (probe.Socket, error) { return &idleSocket{done: make(chan struct{})}, nil }))
+	}
 	if o.runner != nil && !o.noCaptures {
 		// the testbed: the real executor captures on the real interfaces, in the namespace of the gateway
 		eopts = append(eopts, executor.WithCaptures(filepath.Join(root, "captures"), o.captureMinFree))

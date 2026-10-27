@@ -37,6 +37,14 @@ var fuzzSeeds = []string{
 	`{"type":"bird","action":"apply","instance":"chaosgw","config":"router id 10.10.0.1;\nprotocol device { }\n","import_tables":[10]}`,
 	`{"type":"bird","action":"check","instance":"chaosgw","config":"include \"/etc/shadow\";"}`,
 	`{"type":"read","what":"bird","instance":"chaosgw"}`,
+	// M25: the probes and the measurements from them
+	`{"type":"probe_ns","action":"ensure","name":"cgp-3a1f7c52","host_if":"pv3a1f7c52","bridge":"br-iot","mac":"02:28:b4:ce:f6:08","hostname":"probe-a"}`,
+	`{"type":"probe_ns","action":"delete","name":"cgp-3a1f7c52","host_if":"pv3a1f7c52"}`,
+	`{"type":"probe_ns","action":"ensure","name":"cgp-3a1f7c52","host_if":"pv3a1f7c52","bridge":"br-iot; id","mac":"02:28:b4:ce:f6:08"}`,
+	`{"type":"probe_run","probe":"cgp-3a1f7c52","kind":"diagnostic","request":{"type":"tcp","host":"203.0.113.10","port":80},"servers":["10.10.0.1:53"],"roots_pem":"x"}`,
+	`{"type":"probe_run","namespace":"gw","kind":"echo","host":"203.0.113.10","port":7,"count":100,"interval_us":10000}`,
+	`{"type":"probe_run","probe":"cgp-3a1f7c52","kind":"rate","host":"203.0.113.10","port":7,"duration_ms":10000}`,
+	`{"type":"read","what":"probes"}`,
 	`{"type":"nft_apply","ruleset":{"nftables":[{"flush":{"table":{"family":"ip","name":"nat","Family":"inet","Name":"chaosgw"}}}]}}`,
 	`{"type":"tc","entries":[{"object":"class","action":"replace","dev":"wan0","parent":"1:","classid":"1:10","args":["htb","rate","1mbit"]}]}`,
 	// M8b: the operations of the fault engine, complete netem sets, in-place changes, deletions

@@ -3,16 +3,22 @@
 // request, the details of a TLS handshake, and the path that strings DNS, route, TCP and TLS together, each run from the
 // gateway's own address — so the faults of a device do not apply to it — with a structured result. The form is filled in
 // from the address (`?type=&host=&port=`: the link of a device's page); the runs of the session stay below the last result.
-// Diagnostics from a probe arrive with the probes (M25).
-import { computed, ref } from 'vue';
+// Since M25 a diagnostic runs from a probe as well (plan §2.12): a virtual client whose traffic takes the path of a device's and
+// meets the faults, rules and profiles that target it. The probes are listed under the form, with the self-test "measure with
+// a probe" (a profile is activated on the probe for the run and compared with what it measured).
+import { computed, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import DiagnosticForm from '../components/diagnostics/DiagnosticForm.vue';
+import CalibrateDialog from '../components/diagnostics/CalibrateDialog.vue';
 import DiagnosticResultCard from '../components/diagnostics/DiagnosticResultCard.vue';
+import ProbesCard from '../components/diagnostics/ProbesCard.vue';
 import PageHeader from '../components/layout/PageHeader.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
 import StatusDot from '../components/ui/StatusDot.vue';
-import { useCanDiagnose } from '../composables/gateway';
+import { useCanDiagnose, useCanProbe, useNames, useProbes, useProfiles } from '../composables/gateway';
+import { findProbe, measurableProfiles } from '../lib/probes';
+import type { ProbeView } from '../api/generated/model';
 import { describeTarget, formFromQuery, formatMs, formToDiagnosticRequest, resultTone, type DiagnosticForm as Form } from '../lib/diagnostics';
 import { formatClock } from '../lib/format';
 import { useApiScreen } from '../stores/apiPanel';
@@ -25,7 +31,25 @@ const canDiagnose = useCanDiagnose();
 const connection = useConnectionStore();
 const store = useDiagnosticsStore();
 
+const canProbe = useCanProbe();
+const probesQuery = useProbes(() => canProbe.value !== false);
+const probes = computed(() => probesQuery.data.value ?? []);
+const { networks } = useNames();
+const profiles = useProfiles();
+const networkNames = computed(() => Object.fromEntries((networks.data.value ?? []).map((n) => [n.id, (n.config as { name?: string }).name ?? n.id])) as Record<string, string>);
+const measurable = computed(() => measurableProfiles(profiles.data.value ?? []));
+
 const form = ref<Form>(formFromQuery(route.query));
+// the probe the address names (by name or id) is chosen by its id, which the choice holds
+watch(
+  probes,
+  (list) => {
+    const p = form.value.from ? findProbe(list, form.value.from) : undefined;
+    if (p && p.id !== form.value.from) form.value.from = p.id;
+  },
+  { immediate: true },
+);
+const measuring = ref<{ open: boolean; probe?: string }>({ open: false });
 const refusal = ref<{ path?: string; message?: string }[]>();
 const shown = ref<number>();
 
@@ -47,13 +71,26 @@ useApiScreen('the diagnostics', () => [
 
 <template>
   <PageHeader title="Diagnostics" />
-  <p class="-mt-3 mb-0 text-[13px] text-text-3">Ping, TCP, UDP, DNS, HTTP(S) and TLS from the gateway's own address · the faults of a device do not apply</p>
+  <p class="-mt-3 mb-0 text-[13px] text-text-3">Ping, TCP, UDP, DNS, HTTP(S) and TLS from the gateway's own address (the faults of a device do not apply) or from a probe</p>
 
   <EmptyState v-if="canDiagnose === false" text="This gateway has no diagnostics." data-testid="diagnostics-unsupported" />
   <template v-else>
     <SectionCard title="Run a diagnostic">
-      <DiagnosticForm v-model:form="form" :busy="store.running > 0" :disabled="connection.offline" :refusal="refusal" @run="run" />
+      <DiagnosticForm v-model:form="form" :busy="store.running > 0" :disabled="connection.offline" :refusal="refusal" :probes="probes" @run="run" />
     </SectionCard>
+
+    <SectionCard v-if="canProbe !== false" title="Probes">
+      <ProbesCard
+        v-if="probes.length"
+        :probes="probes"
+        :networks="networkNames"
+        :disabled="connection.offline"
+        @diagnose="(p: ProbeView) => (form.from = p.id)"
+        @measure="(p: ProbeView) => (measuring = { open: true, probe: p.id })"
+      />
+      <EmptyState v-else text="No probes: a probe is a virtual client of a test network, added to the configuration under probes." data-testid="probes-empty" />
+    </SectionCard>
+    <CalibrateDialog v-model:open="measuring.open" :probes="probes" :profiles="measurable" :probe="measuring.probe" />
 
     <SectionCard title="Result">
       <template v-if="current">

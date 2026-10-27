@@ -20,6 +20,8 @@ import (
 
 	"github.com/Andste82/chaos-gateway/internal/bird"
 	"github.com/Andste82/chaos-gateway/internal/clock"
+	"github.com/Andste82/chaos-gateway/internal/diag"
+	"github.com/Andste82/chaos-gateway/internal/probe"
 
 	"github.com/Andste82/chaos-gateway/internal/linux"
 	"github.com/Andste82/chaos-gateway/internal/preflight"
@@ -73,6 +75,12 @@ type Executor struct {
 	// hostFS is the host's root file system, read for its netplan, NetworkManager and systemd-networkd configuration
 	// (ReadHostNet); nil reads the executor's own root
 	hostFS fs.FS
+	// probes are the DHCP clients of the probes (probe.go); probeSock opens their sockets, probeNet gives the stack a probe run
+	// uses and probeRetry shortens the clients' wait for an answer (tests)
+	probes     probeClients
+	probeSock  func(ns, ifname string) (probe.Socket, error)
+	probeNet   func(ns string) diag.Net
+	probeRetry time.Duration
 
 	// queue holds the requests that wait. Identity updates (incremental set elements, plan §2.3,
 	// §3.11) go before queued plans; within a class the order is the arrival order. One worker takes
@@ -191,6 +199,7 @@ func (e *Executor) Close() {
 	})
 	<-e.stopped
 	e.rwg.Wait()
+	e.stopProbeClients()
 	_ = e.sets.Close()
 }
 
@@ -273,7 +282,9 @@ func isReadOnly(ops []Operation) bool {
 		return false
 	}
 	for _, op := range ops {
-		if _, ok := op.(*Read); !ok {
+		switch op.(type) {
+		case *Read, *ProbeRun: // a probe run changes nothing in the kernel; it takes a reader slot for as long as it runs
+		default:
 			return false
 		}
 	}
@@ -521,6 +532,8 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 		return nil, e.assign(o.Devs, o.OSOwned)
 	case *Read:
 		return e.read(ctx, o)
+	case *ProbeRun:
+		return e.runProbe(ctx, o)
 	}
 	if l, ok := op.(*Links); ok {
 		if err := e.checkBridges(ctx, l); err != nil {
@@ -553,6 +566,12 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 	}
 	if s, ok := op.(*ServiceNS); ok && s.Action == "delete" {
 		if err := e.checkKind(ctx, s.Target, s.HostIf, "veth"); err != nil {
+			return nil, err
+		}
+	}
+	if p, ok := op.(*ProbeNS); ok && p.Action == "delete" {
+		e.stopProbeClient(p.Name)
+		if err := e.checkKind(ctx, p.Target, p.HostIf, "veth"); err != nil {
 			return nil, err
 		}
 	}
@@ -607,6 +626,9 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 	}
 	if o, ok := op.(*Offloads); ok {
 		return nil, e.verifyOffloads(ctx, o)
+	}
+	if p, ok := op.(*ProbeNS); ok && p.Action == "ensure" {
+		return nil, e.startProbeClient(p)
 	}
 	return nil, nil
 }
@@ -800,6 +822,13 @@ func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 	}
 	if o.What == ReadHostNet {
 		return json.Marshal(e.hostNet())
+	}
+	if o.What == ReadProbes {
+		st, err := e.readProbes(ctx, o.Target)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(st)
 	}
 	if o.What == ReadBird {
 		st, err := e.readBird(ctx, o.Instance)

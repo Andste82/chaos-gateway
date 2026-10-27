@@ -182,13 +182,17 @@ func New() *Kernel {
 func (k *Kernel) ServiceNamespace(name string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	k.initSvc()
+	k.svcNames[name] = true
+}
+
+func (k *Kernel) initSvc() {
 	if k.svcNames == nil {
 		k.svcNames = map[string]bool{}
 		k.svc = map[string]*Kernel{}
 		k.holders = map[int]uint64{}
 		k.nextInode = 4026531000
 	}
-	k.svcNames[name] = true
 }
 
 // AddHolder registers a process whose network namespace can be attached and returns the namespace's
@@ -570,6 +574,11 @@ func (k *Kernel) run(ctx context.Context, c executor.Command) (res executor.Resu
 }
 
 func (k *Kernel) dispatch(ctx context.Context, c executor.Command) (executor.Result, error) {
+	if strings.HasPrefix(c.NS, executor.ProbeNSPrefix) {
+		// the namespaces of probes need no announcement: their names say what they are
+		k.initSvc()
+		k.svcNames[c.NS] = true
+	}
 	if c.NS != "" && k.svcNames[c.NS] {
 		sub := k.svc[c.NS]
 		if sub == nil {
@@ -673,13 +682,20 @@ func (k *Kernel) ipRead(a []string) (executor.Result, error) {
 	case len(a) >= 2 && a[0] == "addr" && a[1] == "show":
 		var out []map[string]any
 		for _, l := range k.sortedLinks() {
+			if len(a) >= 4 && a[2] == "dev" && l.name != a[3] {
+				continue
+			}
 			var infos []map[string]any
 			for _, ad := range l.addrs {
 				ip, plen, _ := strings.Cut(ad, "/")
 				n, _ := strconv.Atoi(plen)
 				infos = append(infos, map[string]any{"family": "inet", "local": ip, "prefixlen": n})
 			}
-			out = append(out, map[string]any{"ifindex": l.index, "ifname": l.name, "addr_info": infos})
+			flags := []string{"BROADCAST", "MULTICAST"}
+			if l.up {
+				flags = append(flags, "UP", "LOWER_UP")
+			}
+			out = append(out, map[string]any{"ifindex": l.index, "ifname": l.name, "flags": flags, "address": l.mac, "addr_info": infos})
 		}
 		return jsonOut(out)
 	case len(a) >= 2 && a[0] == "neigh" && a[1] == "show":
@@ -769,6 +785,10 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 	}
 	switch a[0] + " " + a[1] {
 	case "netns add", "netns attach":
+		if len(a) >= 3 && strings.HasPrefix(a[2], executor.ProbeNSPrefix) {
+			k.initSvc()
+			k.svcNames[a[2]] = true
+		}
 		if len(a) < 3 || !k.svcNames[a[2]] {
 			return fail("netns: unknown namespace")
 		}
@@ -847,6 +867,20 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 			l := k.addLink(a[2], fmt.Sprintf("02:ee:00:00:00:%02x", k.nextIdx+1), "veth", false)
 			l.peerNS, l.peerName = a[9], a[7]
 			sub.addLink(a[7], fmt.Sprintf("02:ee:00:01:00:%02x", sub.nextIdx+1), "veth", false)
+			return ok2()
+		}
+		// ip link add X type veth peer name Y address MAC netns NS (a probe: the end in the namespace has the MAC)
+		if len(a) == 12 && a[3] == "type" && a[4] == "veth" && a[5] == "peer" && a[6] == "name" && a[8] == "address" && a[10] == "netns" {
+			if _, exists := k.links[a[2]]; exists {
+				return fail("RTNETLINK answers: File exists")
+			}
+			sub := k.svc[a[11]]
+			if sub == nil {
+				return fail("Cannot open network namespace \"%s\": No such file or directory", a[11])
+			}
+			l := k.addLink(a[2], fmt.Sprintf("02:ee:00:00:00:%02x", k.nextIdx+1), "veth", false)
+			l.peerNS, l.peerName = a[11], a[7]
+			sub.addLink(a[7], a[9], "veth", false)
 			return ok2()
 		}
 		// ip link add name X type ifb

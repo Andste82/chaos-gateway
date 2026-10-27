@@ -15,6 +15,11 @@ const state = computed(() => resultTone(props.result));
 const typeLabel = computed(() => diagnosticTypes.find((t) => t.value === props.result.type)?.label ?? props.result.type);
 const steps = computed(() => (props.result.type === 'path' ? pathSteps(props.result) : []));
 const headers = computed(() => Object.entries(props.result.http?.headers ?? {}).sort(([a], [b]) => a.localeCompare(b)));
+/** "the gateway", or "the probe probe-a" for `probe:cgp-...` (the namespace) when the request named the probe. */
+function fromText(from: string | undefined): string {
+  if (!from || from === 'gateway') return 'the gateway';
+  return props.request.from?.probe ? `the probe ${props.request.from.probe}` : 'a probe';
+}
 const when = (iso: string | undefined) => (iso ? iso.slice(0, 10) : '—');
 </script>
 
@@ -24,7 +29,7 @@ const when = (iso: string | undefined) => (iso ? iso.slice(0, 10) : '—');
       <StatusDot :tone="state.tone" :label="state.label" data-testid="diagnostic-state" />
       <span class="text-sm font-medium">{{ typeLabel }} <span class="mono text-text-2">{{ describeTarget(request) }}</span></span>
       <span v-if="result.address" class="text-[13px] text-text-2" data-testid="diagnostic-address">resolved to <span class="mono">{{ result.address }}</span></span>
-      <span class="ml-auto text-xs text-text-3">{{ formatClock(at) }} · {{ formatMs(result.duration_ms) }} · from the {{ result.from ?? 'gateway' }}</span>
+      <span class="ml-auto text-xs text-text-3">{{ formatClock(at) }} · {{ formatMs(result.duration_ms) }} · from {{ fromText(result.from) }}</span>
     </div>
     <p class="m-0 text-sm" :class="result.ok ? 'text-text' : 'text-block-text'" data-testid="diagnostic-sentence">{{ resultSentence(result) }}</p>
 

@@ -350,6 +350,11 @@ func buildPlan(t *compiler.Target, s *State, ns string, retire bool, mem map[str
 		add("links: "+strings.Join(words, "; "), &executor.Links{Target: tg, Entries: ups})
 	}
 
+	// ---- the probes: ports of the bridges, which exist now ----------------------------------
+	for _, po := range probeOps(t, s, tg) {
+		add("probe "+po.words, po.op)
+	}
+
 	// the executor adds before it deletes within one operation: no gap between old and new
 	fresh.Routes = append(fresh.Routes, late.Routes...)
 	fresh.Rules = append(fresh.Rules, late.Rules...)
@@ -462,6 +467,60 @@ func buildPlan(t *compiler.Target, s *State, ns string, retire bool, mem map[str
 		add("interfaces assigned: "+strings.Join(wantAssigned, ", "), &executor.AssignInterfaces{Target: tg, Devs: wantAssigned, OSOwned: t.OSOwned})
 	}
 	return p, nil
+}
+
+type probeOp struct {
+	op    executor.Operation
+	words string
+}
+
+// probeOps are the operations that make the probes what the target wants: the ones that are gone from the target are
+// deleted, the ones that are missing or wrong (not a port of their bridge, down, another MAC, no DHCP client) are
+// ensured.
+func probeOps(t *compiler.Target, s *State, tg executor.Target) []probeOp {
+	var ops []probeOp
+	want := map[string]bool{}
+	for _, p := range t.Probes {
+		want[p.Namespace] = true
+	}
+	var have []string
+	for n := range s.Probes {
+		have = append(have, n)
+	}
+	sortStrings(have)
+	for _, n := range have {
+		if !want[n] {
+			ops = append(ops, probeOp{&executor.ProbeNS{Target: tg, Action: "delete", Name: n, HostIf: s.Probes[n].HostIf}, "delete " + n})
+		}
+	}
+	for _, p := range t.Probes {
+		if why := probeDiffers(p, s); why != "" {
+			ops = append(ops, probeOp{&executor.ProbeNS{Target: tg, Action: "ensure", Name: p.Namespace, HostIf: p.HostIf, Bridge: p.Bridge, MAC: p.MAC, Hostname: p.Hostname},
+				fmt.Sprintf("%s (%s): %s", p.Namespace, p.Name, why)})
+		}
+	}
+	return ops
+}
+
+// probeDiffers says what is wrong with a probe; empty when nothing is. The address is not part of it: the DHCP client gets
+// it when the server answers, which an apply does not wait for.
+func probeDiffers(p compiler.ProbeTarget, s *State) string {
+	st, ok := s.Probes[p.Namespace]
+	switch {
+	case !ok:
+		return "missing"
+	case st.HostIf != p.HostIf:
+		return "its pair is " + st.HostIf + ", want " + p.HostIf
+	case st.Master != p.Bridge:
+		return fmt.Sprintf("a port of %q, want %s", st.Master, p.Bridge)
+	case !st.HostUp || !st.PeerUp:
+		return "down"
+	case !strings.EqualFold(st.MAC, p.MAC):
+		return fmt.Sprintf("has the MAC %s, want %s", st.MAC, p.MAC)
+	case !st.DHCP:
+		return "has no DHCP client"
+	}
+	return ""
 }
 
 // serviceOp returns the operation that makes the service namespace what the target wants, with the

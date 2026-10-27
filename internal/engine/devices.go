@@ -67,6 +67,9 @@ type observation struct {
 	At        time.Time
 	Leases    []model.DhcpLease
 	Neighbors []domain.Neighbor
+	// Probes are the MAC and the addresses of the probes' interfaces, by probe id (plan §2.12): the executor reads them in the
+	// probes' namespaces. A probe that is not made yet (or whose read failed) is not in it.
+	Probes map[string]domain.ProbeObservation
 	// Active are the source addresses that have connections (conntrack). It is carried over when
 	// conntrack was not read; it decides identity, not online state.
 	Active map[netip.Addr]bool
@@ -454,7 +457,7 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 		ps := model.WireGuardPeerStatus{Online: p.Online}
 		peers[id] = ps
 	}
-	o := domain.Observed{Leases: obs.Leases, Neighbors: obs.Neighbors, Peers: peers, Discovered: disc, ActiveSources: obs.Active}
+	o := domain.Observed{Leases: obs.Leases, Neighbors: obs.Neighbors, Probes: obs.Probes, Peers: peers, Discovered: disc, ActiveSources: obs.Active}
 	id := domain.ResolveIdentity(cfg, o, t.prev)
 	idx, _ := domain.BuildIndex(cfg)
 
@@ -504,6 +507,9 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 			for _, m := range *d.Device.Identifiers.Macs {
 				st.MACs = append(st.MACs, strings.ToLower(m))
 			}
+		}
+		if p, ok := obs.Probes[did]; ok && p.MAC != "" {
+			st.MACs = append(st.MACs, strings.ToLower(p.MAC))
 		}
 		var peer *PeerStatus
 		if p, ok := obs.Peers[did]; ok {

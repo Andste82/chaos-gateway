@@ -101,6 +101,10 @@ func Plan(op Operation) ([]Step, error) {
 		return planLinks(o), nil
 	case *ServiceNS:
 		return planServiceNS(o), nil
+	case *ProbeNS:
+		return planProbeNS(o), nil
+	case *ProbeRun:
+		return nil, nil // handled by the executor itself: the measurement runs in this process, in the probe's namespace
 	case *Sysctl:
 		var steps []Step
 		for _, e := range o.Entries {

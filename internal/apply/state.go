@@ -48,6 +48,9 @@ type State struct {
 	Bird *executor.BirdState
 	// Service is the service namespace; nil when none was asked for.
 	Service *ServiceState
+	// Probes are the probes the executor reports (plan §2.12, M25), by namespace. Their gateway ends are not in Links: they are
+	// ports of the bridges that are not the bridge's ports of the configuration.
+	Probes map[string]executor.ProbeNSState
 	// TC is the tc state of every interface that holds a qdisc tree of Chaos Gateway's own (a root
 	// qdisc with the handle 1:), whole and with counters; an interface without one is not in the map.
 	TC map[string]*linux.NormTree
@@ -219,6 +222,21 @@ func ReadState(ctx context.Context, ex Exec, ns string, want Want) (*State, erro
 
 	if want.ServiceNS != "" {
 		s.Service = readService(ctx, ex, want.ServiceNS, want.ServicePeerIf, want.ServiceHolderPID)
+	}
+
+	// the probes: their gateway ends are taken out of the links, so that nothing mistakes them for the ports of a bridge
+	pout, err := ex.Do(ctx, read(ns, executor.ReadProbes, ""))
+	if err != nil {
+		return nil, fmt.Errorf("read the probes: %w", err)
+	}
+	probes, err := decode[[]executor.ProbeNSState](pout, 0, "probes")
+	if err != nil {
+		return nil, err
+	}
+	s.Probes = map[string]executor.ProbeNSState{}
+	for _, p := range probes {
+		s.Probes[p.Name] = p
+		delete(s.Links, p.HostIf)
 	}
 
 	// per-interface reads only for interfaces that exist

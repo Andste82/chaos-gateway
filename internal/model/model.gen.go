@@ -147,6 +147,30 @@ func (e BlockingReferenceKind) Valid() bool {
 	}
 }
 
+// Defines values for CalibrationCheckName.
+const (
+	Jitter  CalibrationCheckName = "jitter"
+	Latency CalibrationCheckName = "latency"
+	Loss    CalibrationCheckName = "loss"
+	Rate    CalibrationCheckName = "rate"
+)
+
+// Valid indicates whether the value is a known member of the CalibrationCheckName enum.
+func (e CalibrationCheckName) Valid() bool {
+	switch e {
+	case Jitter:
+		return true
+	case Latency:
+		return true
+	case Loss:
+		return true
+	case Rate:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CaptureFormat.
 const (
 	CaptureFormatPcap   CaptureFormat = "pcap"
@@ -3099,8 +3123,46 @@ type Busy struct {
 // ByteSize Example: 5GiB
 type ByteSize = string
 
-// CalibrationRequest Activates `profile` or `fault` on the probe for the measurement (an overlay owned by the caller, removed afterwards), or measures the probe's current faults if neither is given.
+// CalibrationCheck defines model for CalibrationCheck.
+type CalibrationCheck struct {
+	Detail string               `json:"detail"`
+	Name   CalibrationCheckName `json:"name"`
+	Ok     bool                 `json:"ok"`
+}
+
+// CalibrationCheckName defines model for CalibrationCheck.Name.
+type CalibrationCheckName string
+
+// CalibrationExpected What the parameters should make of the probe's round trip to the echo server.
+type CalibrationExpected struct {
+	// LossPercent The chance that a round trip is lost; absent when the parameters flap.
+	LossPercent *float32 `json:"loss_percent,omitempty"`
+
+	// RateBps The smaller limit of the two directions.
+	RateBps *int64 `json:"rate_bps,omitempty"`
+
+	// RttMs The unimpaired round trip plus the delay of both directions.
+	RttMs *float32 `json:"rtt_ms,omitempty"`
+}
+
+// CalibrationMeasured defines model for CalibrationMeasured.
+type CalibrationMeasured struct {
+	// BaselineRttMs The median round trip from the gateway to the echo server, which no fault of a device touches.
+	BaselineRttMs *float32 `json:"baseline_rtt_ms,omitempty"`
+
+	// LossCi99 99 % confidence interval of the loss rate in percent (Wilson score).
+	LossCi99    *[]float32 `json:"loss_ci99,omitempty"`
+	LossPercent *float32   `json:"loss_percent,omitempty"`
+
+	// RateBps Throughput of the TCP echo; present when the parameters have a rate limit.
+	RateBps     *int64   `json:"rate_bps,omitempty"`
+	RttMedianMs *float32 `json:"rtt_median_ms,omitempty"`
+	RttP95Ms    *float32 `json:"rtt_p95_ms,omitempty"`
+}
+
+// CalibrationRequest Activates `profile` or `fault` on the probe for the measurement (an overlay owned by the caller, removed afterwards), or measures the probe's current faults if neither is given. Not both.
 type CalibrationRequest struct {
+	// Duration 5 s to 5 min. The loss check is a statistic from 2000 datagrams, one every 10 ms, so it needs at least 20 s.
 	Duration *Duration `json:"duration,omitempty"`
 
 	// Fault Flat `NetemParams` apply to both directions. Alternatively `upload` and/or `download`
@@ -3109,7 +3171,7 @@ type CalibrationRequest struct {
 	// packets in the connection's original direction (of the initiator), download = replies.
 	Fault *ImpairmentParams `json:"fault,omitempty"`
 
-	// Host Echo target (TCP/UDP echo on `port`, e.g. the testbed server).
+	// Host Echo target, an IPv4 address (UDP and TCP echo on `port`, e.g. the testbed server).
 	Host string `json:"host"`
 	Port *int   `json:"port,omitempty"`
 
@@ -3119,23 +3181,28 @@ type CalibrationRequest struct {
 
 // CalibrationResult defines model for CalibrationResult.
 type CalibrationResult struct {
-	Detail   *string `json:"detail,omitempty"`
-	Expected *struct {
-		LossPercent *float32 `json:"loss_percent,omitempty"`
-		RateBps     *int64   `json:"rate_bps,omitempty"`
-		RttMs       *float32 `json:"rtt_ms,omitempty"`
-	} `json:"expected,omitempty"`
-	Measured *struct {
-		BaselineRttMs *float32 `json:"baseline_rtt_ms,omitempty"`
+	// Checks One check for each of delay, jitter, loss and rate that the parameters ask for.
+	Checks *[]CalibrationCheck `json:"checks,omitempty"`
 
-		// LossCi99 99 % confidence interval of the loss rate in percent.
-		LossCi99    *[]float32 `json:"loss_ci99,omitempty"`
-		LossPercent *float32   `json:"loss_percent,omitempty"`
-		RateBps     *int64     `json:"rate_bps,omitempty"`
-		RttMedianMs *float32   `json:"rtt_median_ms,omitempty"`
-		RttP95Ms    *float32   `json:"rtt_p95_ms,omitempty"`
-	} `json:"measured,omitempty"`
+	// Detail The checks in a sentence each, and what the parameters ask for that the calibration does not measure (reordering, duplication, corruption).
+	Detail *string `json:"detail,omitempty"`
+
+	// Expected What the parameters should make of the probe's round trip to the echo server.
+	Expected *CalibrationExpected `json:"expected,omitempty"`
+	Measured *CalibrationMeasured `json:"measured,omitempty"`
+	Samples  *CalibrationSamples  `json:"samples,omitempty"`
+
+	// WithinTolerance Every check that applies to the parameters passed.
 	WithinTolerance bool `json:"within_tolerance"`
+}
+
+// CalibrationSamples defines model for CalibrationSamples.
+type CalibrationSamples struct {
+	// Received Answers that came back.
+	Received int `json:"received"`
+
+	// Sent Datagrams the probe sent.
+	Sent int `json:"sent"`
 }
 
 // Capabilities defines model for Capabilities.
@@ -3862,7 +3929,7 @@ type DiagnosticRequest struct {
 	// DnsName `dns` - the name to resolve; `host` is then the server to ask. Without it `host` is the name and the server is the gateway DNS proxy. No wildcard.
 	DnsName *Hostname `json:"dns_name,omitempty"`
 
-	// From Default - the gateway itself (not subject to device faults). `probe` is accepted from M25 on; until then it is `unsupported_feature`.
+	// From Default - the gateway itself (not subject to device faults). `probe` runs the diagnostic from the probe (a probe of the active revision, by id or name); its traffic meets the faults that target it.
 	From *struct {
 		Gateway *DiagnosticRequestFromGateway `json:"gateway,omitempty"`
 
@@ -3937,7 +4004,7 @@ type DiagnosticResult struct {
 	// Error Why `ok` is false, in a sentence.
 	Error *string `json:"error,omitempty"`
 
-	// From `gateway`.
+	// From `gateway`, or `probe:` and the probe's namespace.
 	From *string `json:"from,omitempty"`
 	Http *struct {
 		Headers *map[string]string `json:"headers,omitempty"`

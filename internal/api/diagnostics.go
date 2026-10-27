@@ -113,10 +113,6 @@ func (s *Server) RunDiagnostic(c *gin.Context) {
 		s.fail(c, err)
 		return
 	}
-	if req.From != nil && req.From.Probe != nil {
-		s.write(c, newProblem(model.ErrorCodeUnsupportedFeature, "a diagnostic from a probe is not available in this build; probes arrive with milestone M25 (see GET /capabilities)"))
-		return
-	}
 	select {
 	case s.diagnostics.running <- struct{}{}:
 		defer func() { <-s.diagnostics.running }()
@@ -126,8 +122,14 @@ func (s *Server) RunDiagnostic(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(contextOf(c), domain.MaxDiagnosticDuration)
 	defer cancel()
-	res, err := s.diagnostics.runner.Run(ctx, *req)
-	if err != nil {
+	var res model.DiagnosticResult
+	if req.From != nil && req.From.Probe != nil {
+		var perr *problem
+		if res, perr = s.runProbeDiagnostic(ctx, req, *req.From.Probe); perr != nil {
+			s.write(c, perr)
+			return
+		}
+	} else if res, err = s.diagnostics.runner.Run(ctx, *req); err != nil {
 		s.fail(c, err)
 		return
 	}

@@ -112,6 +112,7 @@ func (e *Engine) readObservedWait(ctx context.Context, wait, fromTick bool) erro
 			return err
 		}
 	}
+	obs.Probes = e.readProbes(ctx, snap, ns)
 	nets := bridgeNetworks(snap.Bridges)
 	seen := e.neighborsSeen(neigh, obs.At)
 	for _, n := range neigh {
@@ -524,4 +525,42 @@ func intOr(p *int, def int) int {
 		return def
 	}
 	return *p
+}
+
+// readProbes reads the probes' interfaces (plan §2.12): the MAC and the addresses of each configured probe whose namespace
+// exists. A read that fails leaves the probes unobserved until the next one.
+func (e *Engine) readProbes(ctx context.Context, snap *Snapshot, ns executor.Target) map[string]domain.ProbeObservation {
+	if snap.Config == nil || snap.Config.Probes == nil || len(*snap.Config.Probes) == 0 {
+		return nil
+	}
+	out, err := e.cfg.Exec.Do(ctx, &executor.Read{Target: ns, What: executor.ReadProbes})
+	if err != nil || len(out.Data) == 0 {
+		if err != nil {
+			e.logObserveError(err)
+		}
+		return nil
+	}
+	var states []executor.ProbeNSState
+	if json.Unmarshal(out.Data[0], &states) != nil {
+		return nil
+	}
+	byNS := map[string]executor.ProbeNSState{}
+	for _, st := range states {
+		byNS[st.Name] = st
+	}
+	obs := map[string]domain.ProbeObservation{}
+	for id := range *snap.Config.Probes {
+		st, ok := byNS[executor.ProbeNSPrefix+compiler.ProbeShort(id)]
+		if !ok {
+			continue
+		}
+		po := domain.ProbeObservation{MAC: st.MAC}
+		for _, a := range st.Addrs {
+			if p, err := netip.ParsePrefix(a); err == nil {
+				po.IPs = append(po.IPs, p.Addr())
+			}
+		}
+		obs[strings.ToLower(id)] = po
+	}
+	return obs
 }

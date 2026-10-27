@@ -335,7 +335,8 @@ func TestADiagnosticRequestThatCannotRunIsRefused(t *testing.T) {
 		"an unknown type":               {map[string]any{"type": "traceroute", "host": loopback}, 422, "validation_failed"},
 		"an unknown field":              {map[string]any{"type": "ping", "host": loopback, "nope": 1}, 422, "validation_failed"},
 		"a timeout over a minute":       {map[string]any{"type": "tcp", "host": loopback, "port": 80, "timeout": "2m"}, 422, "validation_failed"},
-		"a probe":                       {map[string]any{"type": "ping", "host": loopback, "from": map[string]any{"probe": "p1"}}, 422, "unsupported_feature"},
+		"a probe that does not exist":   {map[string]any{"type": "ping", "host": loopback, "from": map[string]any{"probe": "p1"}}, 404, "not_found"},
+		"two places to run from":        {map[string]any{"type": "ping", "host": loopback, "from": map[string]any{"probe": "p1", "gateway": true}}, 422, "validation_failed"},
 		"malformed JSON":                {`{"type":`, 400, "bad_request"},
 		"no body":                       {nil, 400, "bad_request"},
 	} {
@@ -350,9 +351,9 @@ func TestADiagnosticRequestThatCannotRunIsRefused(t *testing.T) {
 	if e := errs[0].(map[string]any); e["path"] != "/port" || e["code"] != "missing_field" {
 		t.Errorf("%v", errs)
 	}
-	// and the probe's refusal names its milestone
+	// and the refusal of a probe that does not exist names it
 	r = g.diagnose(map[string]any{"type": "ping", "host": loopback, "from": map[string]any{"probe": "p1"}})
-	if !strings.Contains(string(r.Body), "M25") {
+	if !strings.Contains(string(r.Body), `no probe \"p1\"`) {
 		t.Errorf("%s", r.Body)
 	}
 }

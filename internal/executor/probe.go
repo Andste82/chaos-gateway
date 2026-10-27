@@ -230,6 +230,12 @@ func planProbeNS(o *ProbeNS) []Step {
 	off := func(ns, dev string) Step {
 		return Step{Cmd: Command{Tool: ToolEthtool, Args: []string{"-K", dev, "gro", "off", "gso", "off", "tso", "off", "lro", "off"}, NS: ns}}
 	}
+	// The DHCP client has no address and no route while it asks, and the answers of the server come from an address it
+	// cannot reach yet: a host with reverse-path filtering (Ubuntu sets rp_filter to 2) would drop them, so it is off in the
+	// probe's namespace (the value in force is the larger of `all` and the interface's).
+	rpFilter := func(conf string) Step {
+		return Step{Cmd: Command{Tool: ToolSysctl, Args: []string{"-w", "net/ipv4/conf/" + conf + "/rp_filter=0"}, NS: o.Name}}
+	}
 	return []Step{
 		{Guard: &exists, Probe: &nsThere, RunIfProbeOK: false, Cmd: ip("link", "delete", "dev", o.HostIf, "type", "veth")},
 		{Probe: &nsThere, RunIfProbeOK: false, Cmd: Command{Tool: ToolIP, Args: []string{"netns", "add", o.Name}}},
@@ -237,6 +243,8 @@ func planProbeNS(o *ProbeNS) []Step {
 		{Cmd: ip("link", "set", "dev", o.HostIf, "master", o.Bridge)},
 		off(o.NS, o.HostIf),
 		off(o.Name, ProbePeerIf),
+		rpFilter("all"),
+		rpFilter(ProbePeerIf),
 		{Cmd: ip("link", "set", "dev", o.HostIf, "up")},
 		{Cmd: inside("link", "set", "dev", "lo", "up")},
 		{Cmd: inside("link", "set", "dev", ProbePeerIf, "up")},

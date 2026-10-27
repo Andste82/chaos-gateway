@@ -177,6 +177,8 @@ func TestAProbeIsMadeFromFixedCommandsAndItsBridgeMustBeAssigned(t *testing.T) {
 		"ip link set dev " + pIf + " master br-iot",
 		"ethtool -K " + pIf + " gro off gso off tso off lro off",
 		pNS + " ethtool -K eth0 gro off gso off tso off lro off",
+		pNS + " sysctl -w net/ipv4/conf/all/rp_filter=0", // the DHCP client's answers come from an address it has no route to
+		pNS + " sysctl -w net/ipv4/conf/eth0/rp_filter=0",
 		"ip link set dev " + pIf + " up",
 		pNS + " ip link set dev lo up",
 		pNS + " ip link set dev eth0 up",

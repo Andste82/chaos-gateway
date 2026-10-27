@@ -500,6 +500,17 @@ func TestEveryExampleFileIsCheckedByTheDomain(t *testing.T) {
 					t.Errorf("%s[%d]: %v", name, i, err)
 				}
 			}
+		case "diagnostic-requests.yaml":
+			doc, _ := ParseDocument(raw, FormatYAML)
+			for i, item := range doc.([]any) {
+				itemRaw, err := json.Marshal(item)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := DecodeDiagnosticRequest(itemRaw); err != nil {
+					t.Errorf("%s[%d]: %v", name, i, err)
+				}
+			}
 		default:
 			t.Errorf("%s is an example the domain tests do not know: add it", name)
 		}

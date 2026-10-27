@@ -35,6 +35,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/audit` | the append-only audit log (JSON lines) |
 | `internal/linkexport` | what a link's remote side needs besides WireGuard: its BIRD configuration |
 | `internal/appliance` | the harness of test level 2 (M5b): Ubuntu cloud images with checksum verification, the cloud-init seed, the QEMU command line, the host topology (bridges, taps, namespaces), SSH into the VM, log collection |
+| `internal/diag` | the diagnostics (M24): ping (the unprivileged ICMP datagram socket, the raw one as the fallback), TCP and UDP checks, DNS lookups, HTTP(S) requests, TLS handshake details and the path of DNS, route, TCP and TLS, from the stack of the process or of a network namespace; the structured results of `POST /diagnostics` |
 | `internal/tlsresponder` | the TLS responder (M21): the two CAs (the test CA and the unknown CA), the certificates of the cases per name, the ClientHello reader, the connection handling (a case, a passed-through connection, reset on removal), the reports of the handshakes, the hand-over to the interception proxy and the control interface it asks (M22), the client of the internal API |
 | `sidecars/tls-proxy` | the interception proxy (M22): the only Python of the project, a mitmproxy addon (`chaosgw_tlsproxy`: the rules, the API client, the addon, the launcher of the container) with its unit tests; the container is `deploy/compose.tlsproxy.yaml` |
 | `internal/svcapi` | the client of the internal API that the service containers share (service token, the API's certificate from a file) |
@@ -42,7 +43,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/wireguard` | key generation and derivation, provisioning of a configuration's keys, export of client and link configurations (wg-quick `.conf`, QR as PNG/SVG, zip, export once) |
 | `internal/apiserver` | generated Gin server interface (imports the model; the handlers follow in M5) |
 | `tools/testvm` | runs the testbed tests: directly or in a VM |
-| `web/` | the web app (M12; scenarios M19; captures M23a; the forms of the DNS, TLS and DHCP kinds M23b; the interception M23c): Vue 3, Vite, Tailwind 4, TanStack Query, Pinia, Reka UI, Vue Router, uPlot; `web/embed.go` embeds its build into `chaosgw` (tag `webui`) |
+| `web/` | the web app (M12; scenarios M19; captures M23a; the forms of the DNS, TLS and DHCP kinds M23b; the interception M23c; the diagnostics M24): Vue 3, Vite, Tailwind 4, TanStack Query, Pinia, Reka UI, Vue Router, uPlot; `web/embed.go` embeds its build into `chaosgw` (tag `webui`) |
 | `web/e2e`, `web/e2e-testbed` | Playwright: the screens against a mocked API, and the browser flows against the real stack in the testbed |
 | `clients/` | generated TypeScript and Python clients (not committed), and `clients/examples`: the example suites for pytest and Jest and a scenario file (M18) |
 | `deploy/` | the container image (multi-arch) and the compose files of the deployment ([`install.md`](install.md)); `internal/executor/hardening_test.go` pins their hardening |
@@ -499,6 +500,7 @@ problem). The codes are stable; new ones are added, never renamed.
 | `invalid_step_reference` | A scenario step's `remove` names a step that does not exist, created no overlay, or runs later; a `capture: stop` has no `capture: start` of the same target before it. |
 | `invalid_parameter` | A run parameter (`POST /runs`, `parameters`, a dotted path at `/parameters/<path>`) cannot be applied to the scenario document: the path is not a path of dotted field names, or a segment or the value does not fit the document there. |
 | `invalid_capture_limit` | A capture's `max_size` or the `file_size` of its ring buffer is below 64 KiB, or the ring buffer is larger than the quota, or `max_size` is. |
+| `invalid_diagnostic` | A diagnostic request cannot be run as it is: the host is not an IPv4 address or a host name, the `dns_name` is a wildcard, the `url` or the `sni` is not valid, or a ping's echoes and timeout take longer than the 60 s of the request. |
 | `target_widened` | A step's `target` is broader than the scenario's own target. |
 | `invalid_target` | A scope is not valid where it is used (wrong kind for that context); a port forward's target is not a host in a local test network (a WireGuard client, a device of a WireGuard network, the management network, a gateway address, a network or broadcast address). |
 | `tunnel_outside_target` | A tunnel fault or WireGuard action's target is not that WireGuard network or client. |
@@ -6418,6 +6420,131 @@ Level 1 (written and vetted with `-tags testbed`, run by CI with `M22_LEVEL1`): 
 | A level 1 flow only if something needs the kernel and the proxy | `TestChaosctlMakesAnInterceptionCaseAndReadsItsExchangesAndTheCAOnTheRealKernel` (decision 12) |
 | The design is added to §2.17 | plan §2.17, "Interception UI (M23c)", the row "Interception" of the table of screens and the changes to the rows of the device detail and the Add fault dialog |
 
+## Diagnostics (M24)
+
+Plan §2.12 and M24. Ping, a TCP and a UDP check, a DNS lookup, an HTTP(S) request, the details of a TLS handshake and the path that strings DNS, route,
+TCP and TLS together, each run from the gateway's own network stack, with a structured result; `POST /diagnostics`, the package `internal/diag`,
+and the Diagnostics screen. Probes (a diagnostic `from.probe`) are M25; traceroute, path MTU and iperf3 are after V1 (M38).
+
+### How it works
+
+- **The operation.** `POST /diagnostics` (`runDiagnostic`, scope `overlays`, `x-milestone: M24`) takes a `DiagnosticRequest` and answers a
+  `DiagnosticResult` when the diagnostic is done (at most 60 s). The spec had both schemas from the start; M24 added to them, additively
+  (plan §2.15: the version stays `/api/v1`): the request fields `payload` (the text of a UDP datagram) and `tls` (a path without the TLS step), the
+  result fields `address` (the IPv4 address a name resolved to) and `dns.name`, and the text of the descriptions, which says which field belongs
+  to which type, what `ok` means for each and what the 60 s are made of. `GET /capabilities` lists the feature `diagnostics` and
+  `diagnostic_types` (`domain.DiagnosticTypes`).
+- **What is refused and what is a result.** A target that fails (no reply, refused, a name that does not resolve, a certificate that does not verify,
+  a status of 400 or more) is a `200` with `ok: false` and `error`, because the failure is the answer. A request that cannot be run is `422`:
+  `validation_failed` (`domain.DecodeDiagnosticRequest`: the schema, then `ValidateDiagnosticRequest`), `unsupported_feature` for `from.probe`
+  (the problem names M25), `capacity_exceeded` when `api.MaxDiagnostics` (8) run already. The rules the schema cannot say: the host is an IPv4 address or
+  a host name (no URL, port, path, wildcard, IPv6 address or malformed address: `ValidDiagnosticHost`); `tcp`, `udp` and `path` need a `port`; a field
+  that the type does not use is `unexpected_field` (a `count` for a TCP check is a mistake, not something to ignore); `dns_name` has no wildcard; an `http`
+  `url` is http or https with a host and without credentials; the timeout is 10 ms to 60 s; a ping's echoes and its timeout fit the 60 s
+  (`(count-1) × 200 ms + timeout`). The request context carries the 60 s as well, so a `tls` or `path` with long timeouts ends there.
+  The run is recorded in the audit log (`diagnostic.run`, with the type, the target and ok or failed).
+- **Where it runs.** `internal/diag.Runner` takes a `Net` (a dial for TCP and UDP, and the ICMP socket): `HostNet{Namespace}` is the stack of
+  the process, or the network namespace `Namespace` (`Config.Namespace`: the gateway's namespace in the testbed, where the API runs in the root
+  namespace of the VM). The sockets are made on a thread that entered the namespace and stay in it (as the capture and the observer do). In production the API
+  runs in the host's network namespace without a capability, so a diagnostic starts from the gateway's own addresses: it does not take the forward chain
+  of the devices, and with it none of their faults (plan §2.12, risk 15; `TestDiagnosticsFromTheGatewayDoNotPassThroughTheFaultsOfDevices`). The
+  timing of the sockets uses the real clock (`internal/clock`) whatever clock the server has; the server's clock gives `started_at` and the time at which a
+  certificate is verified.
+- **The types** (`ok` in brackets):
+  - `ping` (one reply or more, as `ping(8)`): `count` echoes (5), 200 ms apart, then the wait for the last reply up to `timeout`; a reply ends the wait early.
+    Sent, received, loss, minimum, average, maximum and deviation of the round trip times, as `ping` prints them. The socket is the unprivileged
+    ICMP datagram socket (`net.ipv4.ping_group_range`, see below), with the raw socket as the fallback for a process that has `CAP_NET_RAW`. On a raw socket
+    the identifier and the sender decide which reply is ours; the datagram socket only delivers ours. An ICMP error that comes back (unreachable) is named in the
+    sentence of a ping without a reply.
+  - `tcp` (connected): the time to connect; `connection refused`, `no route to host`, `network is unreachable`, `timed out after 5s` are the kernel's words.
+  - `udp` (a reply came back): sends `payload` (an empty datagram by default) and waits. A closed port answers with ICMP port unreachable, which a connected UDP
+    socket reports as `connection refused`; no answer at all is `no reply within …` and the sentence says why that proves nothing (open or filtered, or a service
+    that ignores this datagram). The check cannot say more than UDP does.
+  - `dns` (NOERROR with an A record): `dns_name` asks the server in `host` (`port`, 53); without it `host` is the name and the server is the gateway's DNS proxy
+    (`169.254.100.2:53` in the service namespace, `Config.Diagnostics.Proxy`). The proxy answers a client outside its networks with the static entries of all of them
+    and its upstream answer, so the gateway sees what a device sees without the faults that name a device. NXDOMAIN, SERVFAIL, REFUSED and an answer without an A
+    record are results; the answers list the A records and the CNAMEs. A truncated UDP answer is asked again over TCP.
+  - `http` (a status below 400): one GET with the user agent `chaos-gateway/<version>`, no proxy from the environment, no redirects followed (the status
+    and `Location` are the result), the headers of the response (the first 64, each cut at 1 KiB), the time until the response arrives.
+  - `tls` (the certificate verifies for the SNI, else the host): connects, makes the handshake and reports the version (down to TLS 1.0, so an old server can be
+    shown), the cipher, the ALPN protocol and the whole chain with its subjects, issuers, validity and DNS names. The handshake does not stop at a certificate that
+    does not verify: it is made without the client's check and verified afterwards, so the details of an expired or unknown certificate are there next to
+    `verify_error`, in the words `certificate has expired`, `certificate is not yet valid`, `certificate signed by unknown authority`, `certificate is valid for
+    a, not b`. A handshake that fails (a server that is no TLS server, a reset, a stall) has no `tls` object and the error says `TLS handshake failed: …`.
+  - `path` (every step): `dns` (an address is nothing to resolve; a name is resolved and the step says by which server and how long it took), `route` (a connected
+    UDP socket sends nothing but makes the kernel find the way: it says the source address, or `network is unreachable`), `tcp`, `tls` (left out with `tls: false`);
+    it stops at the first step that fails, the steps after it are not in the result, and `error` is `<step>: <why>`. The `tls` object is filled when the TLS step ran.
+    The plan's example, `DNS ✓ Route ✓ TCP ✓ TLS ✗ (certificate expired)`, is this result.
+- **Names.** A host name is resolved (IPv4 only, the A record) by the gateway's DNS proxy first and by the uplink's resolvers (`uplink.dns_upstream` of the configuration,
+  else the host's) only when the proxy cannot be reached at all (nothing listens, no route); a slow or negative answer of the proxy is the answer and is not hidden by a
+  second server (`Config.Diagnostics.Servers` replaces the list; the tests give their own). The address that was used is `address` in the result.
+- **Certificates.** The roots are the system's and the test CA of the TLS responder (M21, read from the CA directory at every request, since it can be replaced), so
+  a case signed by the test CA (expired, not yet valid, hostname mismatch) shows its own reason instead of an unknown authority, and the case `untrusted_ca` and
+  `self_signed` show the unknown authority.
+- **The host setup.** The API runs unprivileged in the host's network namespace; the ICMP datagram socket needs its group in `net.ipv4.ping_group_range`, a sysctl of the host.
+  `deploy/host-setup.sh` writes `net.ipv4.ping_group_range=0 2147483647` next to `ip_forward` in `/etc/sysctl.d/90-chaos-gateway.conf` and sets it. A host set up before M24
+  needs the script run again (it is safe to run again) or the sysctl set by hand; until then `ping` answers `cannot open an ICMP socket (…)` as its error and the other types work.
+- **The screen** (`views/DiagnosticsView.vue`, `components/diagnostics/`, `lib/diagnostics.ts`, `stores/diagnostics.ts`): plan §2.17 "Diagnostics". The form chooses the type (a
+  sentence says what it does) and shows the fields of that type; `lib/diagnostics.ts` `diagnosticErrors` mirrors the gateway's rules so that Run waits for a valid form, and the
+  gateway's refusal is put under the field it names. The result card says succeeded or failed (a dot and a word), the sentence (the gateway's `error`, else what was measured),
+  and the part of the type: the four steps of a path with their details (a step after the failed one is "not run"), the echoes, the connection, the answers of DNS, the status
+  and the headers of HTTP, the TLS handshake with each certificate. The runs of the session (the last ten) are kept in the store and listed below; a click shows an earlier one.
+  The device detail has **Diagnose** (a link to `/diagnostics?type=ping&host=<its address>`, for a device with an address); the form is filled in from that query. The `</> API` panel shows
+  the request the form would send, and after a run the one that was sent.
+
+### Decisions
+
+Taken by best practice where the plan leaves room; none needs the maintainer:
+
+1. **A target that fails is `200 ok: false`,** as the spec's response says ("also when the diagnosed target fails"); a `4xx` is a request the gateway cannot run. A client
+   can tell its own mistake from the target's failure by the status.
+2. **The `dns` type reads the spec's description as:** with `dns_name` the host is the server, without it the host is the name and the server is the gateway's proxy ("default the
+   gateway DNS proxy"). `GET /dns/queries` shows the gateway's queries with the client `169.254.100.1`, which no device has.
+3. **No redirects are followed and a status of 400 or more fails the check.** The diagnostic shows what the server answered; following a redirect would hide the 301 that is the
+   answer. A client that wants the final page follows `Location`.
+4. **`tls` fails (`ok: false`) when the certificate does not verify, and still returns the details.** The point of the type is to see what the server presented; a client
+   that wants only the details reads `tls` and ignores `ok`.
+5. **The ping interval is 200 ms,** the smallest an unprivileged `ping` may use, so that ten echoes take two seconds and not ten; the 60 s of the request decide the largest `count`
+   with the timeout (rejected at the request, not cut silently).
+6. **`from.probe` is `unsupported_feature` until M25;** the schema already has the field and the capabilities do not claim it.
+7. **Every run is audited.** A diagnostic opens connections from the gateway to any address its caller names, so a run shows up in the audit log with its target; the scope
+   `overlays` that the spec gives it is for automation tokens as well.
+8. **The sysctl is written by the host setup** and not set by the container: the API shares the host's network namespace, where a container cannot set a sysctl. The value
+   is the Docker and Ubuntu default (every group), not a narrower one, because the API's group is a numeric one that the host setup does not know.
+
+### Tests
+
+Level 0, run here. Go: `internal/diag` (against servers on the loopback, a DNS server of the test, certificates of a test CA, a scripted ICMP socket, a stack that blocks or has no route:
+`connect_test.go` TCP and UDP and the resolution of names, `dns_test.go`, `http_test.go`, `tls_test.go`, `path_test.go`, `ping_test.go`; the ping of the loopback on the real stack skips with its reason
+when the process cannot open an ICMP socket), `internal/domain/diagnostic_test.go` (the request and its refusals, the examples of `api/examples/diagnostic-requests.yaml`),
+`internal/api/diagnostics_test.go` (every type over the API against its target, the TLS cases of the responder with the reasons they show, the test CA trusted and the unknown one not,
+the failure of every type, the refusals with their fields, the scopes, eight at once and a ninth refused, a canceled request, the audit entry and the capabilities) with the response checked against the
+spec like every test of that package, `misc_test.go` (the operation belongs to a milestone in the build), `internal/preflight/hostsetup_test.go` (the sysctl). Web unit tests (`make test-web`):
+`lib/diagnostics.test.ts` and the route in `router.test.ts`. Playwright against the mocked API (`e2e/diagnostics.spec.ts`, 18 tests).
+
+Level 1, **not run here** (no `/dev/kvm`, no namespaces in this container; CI runs them, the list `M24_LEVEL1`):
+`internal/api/e2e_diagnostics_test.go` `TestEveryDiagnosticAgainstTheServerNamespaceOfTheTestbed` (the reference services in the server namespace — TCP, a UDP echo, HTTP, DNS, and TLS with the
+responder's expired and mismatched certificates and one signed by the test CA — against which every type runs from the gateway's namespace, with a host nobody answers for, a closed port, a name
+that does not exist, a 503 and the path of the plan's example) and `TestDiagnosticsFromTheGatewayDoNotPassThroughTheFaultsOfDevices` (a fault that drops everything of the test network stops a device's
+ping and does not touch the gateway's).
+
+### Acceptance map (plan M24 "Scope" and "Tests")
+
+| Plan M24 | Test |
+|---|---|
+| Scope: ping with loss and RTT statistics | `TestPingCountsLossAndMeasuresTheRoundTrips`, `TestPingTheLoopbackOnTheRealStack`, `TestPingOverTheAPI`, level 1 `TestEveryDiagnosticAgainstTheServerNamespaceOfTheTestbed` |
+| Scope: TCP and UDP check | `TestTCPReachesAnOpenPort`, `TestTCPSaysWhyAPortIsNotReachable`, `TestUDPNeedsAReply`, `TestUDPKnowsAClosedPortFromTheICMPErrorAndASilentOneFromTheTimeout` |
+| Scope: DNS | `dns_test.go`, `TestEveryTypeOfDiagnosticRunsAgainstItsTarget` |
+| Scope: HTTP(S) | `http_test.go`, `TestHTTPSVerifiesTheCertificate` |
+| Scope: TLS details | `tls_test.go`, `TestDiagnosticsReportTheTLSCasesOfTheResponder`, `TestDiagnosticsTrustTheTestCAAndNotTheUnknownOne` |
+| Scope: structured results (and the path of §2.12) | the result types in every test above; `path_test.go`, `lib/diagnostics.test.ts` (`the steps of a path`) |
+| Scope: API (OpenAPI, generated clients) | `api/openapi.yaml`, `make check-spec`, `make check-clients`; the contract check of every request and response of `internal/api/diagnostics_test.go` |
+| Scope: UI panel | `e2e/diagnostics.spec.ts` |
+| Tests: each diagnostic against known testbed targets | level 0: servers on the loopback (`internal/diag`, `internal/api/diagnostics_test.go`); level 1: the server namespace (`e2e_diagnostics_test.go`, `M24_LEVEL1`) |
+| Tests: failure cases | `TestTCPSaysWhyAPortIsNotReachable`, `TestTCPTimesOutWhereNobodyAnswers`, `TestANameThatDoesNotResolveIsAResultNotAnError`, `TestDNSFailuresAreResults`, `TestDNSTimeoutAndUnreachableServer`, `TestHTTPFailuresAreResults`, `TestHTTPStatusesFromAndAboveFourHundredFail`, `TestTLSCertificatesThatDoNotVerifyAreResultsWithTheirDetails`, `TestTLSHandshakeFailuresAreResults`, `TestPathStopsAtTheFirstStepThatFails`, `TestPathFindsNoRouteWhereThereIsNone`, `TestPingWithoutAReplyFails`, `TestDiagnosticsOfATargetThatFailsAreAnswersNotErrors` |
+| The diagnostics of the gateway do not pass through device faults (§2.12) | level 1 `TestDiagnosticsFromTheGatewayDoNotPassThroughTheFaultsOfDevices` |
+| The design is added to §2.17 | plan §2.17, the row "Diagnostics" of the table of screens; "Not yet designed" no longer lists it (probes stay) |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -6453,7 +6580,7 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
+Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
 tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of packet captures (M17: the AF_PACKET sockets
 need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of the DNS faults and hostname selectors (M20, with the executor's netlink connection), those of the TLS responder (M21), those of the interception proxy (M22, with the real mitmproxy, which the level 0 job installs too and requires), those of the DHCP test actions (M23, udhcpc and the real Kea), those of Kea's packet socket after a link flap
 (issue #64), the tests against the real Kea (I64-05) and those of the observed state of a device (the acceptance of

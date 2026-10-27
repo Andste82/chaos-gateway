@@ -82,6 +82,8 @@ type Config struct {
 	// and serves the test CA's certificate from it (GET /tls/ca); the responder's container reads the directory,
 	// keys included. Empty for a deployment without one (the download answers `unavailable`).
 	TLSCADir string
+	// Diagnostics sets up the diagnostics of M24; the zero value is the production setup (tests name their own servers).
+	Diagnostics DiagnosticsConfig
 }
 
 // Server implements apiserver.ServerInterface.
@@ -117,6 +119,8 @@ type Server struct {
 	runsTemp string
 	// captures is the manager of the packet captures (M17), nil without a capture volume
 	captures *capturemgr.Manager
+	// diagnostics runs POST /diagnostics (M24)
+	diagnostics *diagnostics
 }
 
 var _ apiserver.ServerInterface = (*Server)(nil)
@@ -156,6 +160,7 @@ func New(cfg Config) (*Server, error) {
 	s.unsubEvents = unsub
 	s.eventsDone = make(chan struct{})
 	go s.auditSystemEvents(events)
+	s.initDiagnostics()
 	s.startTrafficSampler()
 	if err := s.initCaptures(); err != nil {
 		s.stopTrafficSampler()

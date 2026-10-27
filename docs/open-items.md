@@ -2916,3 +2916,20 @@ Phase 5 (M20 to M23c, application layer) is implemented: M20 to M23a are on `mai
 - Acceptance: a Playwright test of a device without a served network shows the card with the new text (or no card), and its buttons are off.
 - Needs maintainer: no (the wording of a text and the choice of (a) or (b) follow the recommendation unless the maintainer prefers the other)
 - Effort: S
+
+## Phase 6 open items
+
+Phase 6 (M24 to M26, diagnostics and observability) is under way: M24 is implemented on the branch `worktree-phase-6` (not merged yet). Items below are what the implementation of a milestone found that no later milestone of the plan completes and that needs a decision of the maintainer.
+
+### P6-M24-01 A diagnostic can be pointed at any address the gateway can reach, by a token with the scope `overlays`
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. The spec gives `POST /diagnostics` the scope `overlays` (the scope of automation: overlays, runs, own reset), and a diagnostic opens its connections from the gateway's own network stack, which in production is the host's (plan §3.8: the API container uses the host network namespace). A token with that scope can therefore make the gateway connect to the loopback of the host, to the management network (which the matrix and the management guard of plan §2.16 keep the test networks out of), to the Docker networks and to every address behind the uplink, and read what comes back: the status line and the headers of an HTTP service that only the gateway can reach, the certificate of a TLS service, whether a port answers. The plan names the scope and says nothing of the destinations; M24 limits none and records each run in the audit log (`diagnostic.run`, with the type and the target).
+- Evidence: `api/openapi.yaml` (`runDiagnostic`, `x-required-scope: overlays`), `internal/api/diagnostics.go`, `docs/development.md` "Diagnostics (M24)", decision 7; plan §2.12 ("diagnostics from the gateway's own address do not pass through device-specific faults"), §2.16.
+- Task: decide whether the destinations of a diagnostic are limited, and by which scope.
+- Options: (a) as built: the scope `overlays`, any destination, audited; (b) the scope `full` for every diagnostic (the CI pipelines that want a ping then need a full token); (c) the scope `overlays` for destinations in the test networks and behind the uplink, and the scope `full` for the loopback, the link-local addresses, the Docker networks and the management network (the API refuses the others with `forbidden` and the reason).
+- Recommendation: (a) for V1: the gateway is a lab appliance whose owner makes the tokens, the audit log records every run, and a destination that is limited by address would also have to follow what the DNS proxy resolves a name to. Look at (c) with the review of the token scopes in Phase 7 (M29, M30), where the other uses of the scopes are decided.
+- Acceptance: the spec says which scope each destination needs, and a test of the API shows a token with the smaller scope refused for a destination that needs the larger one (for (b) and (c)); or the plan and the spec say that the scope `overlays` may reach every destination (for (a)).
+- Needs maintainer: yes
+- Effort: S

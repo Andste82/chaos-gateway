@@ -226,6 +226,15 @@ useApiScreen('this device', () => [
       <template #actions>
         <button type="button" class="btn btn-primary" :disabled="changeBlocked" @click="addFault">Add fault</button>
         <RouterLink class="btn" :to="{ path: '/profiles', query: { scope: `device:${d.id}` } }">Apply profile</RouterLink>
+        <RouterLink
+          v-if="d.observed.addresses?.length"
+          class="btn"
+          :to="{ path: '/diagnostics', query: { type: 'ping', host: d.observed.addresses[0] } }"
+          :aria-label="`Diagnose ${d.name}`"
+          data-testid="diagnose-device"
+        >
+          Diagnose
+        </RouterLink>
         <button v-if="configured" type="button" class="btn" :disabled="changeBlocked" data-focus-key="edit-device" @click="editOpen = true">Edit</button>
         <button
           v-if="configured"

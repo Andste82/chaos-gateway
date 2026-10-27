@@ -134,6 +134,8 @@ type options struct {
 	// captureMinFree is the free space of the capture volume below which the real executor of the testbed refuses and
 	// stops captures (0: 10 percent)
 	captureMinFree float64
+	// diagnostics sets up the diagnostics (M24): the stack and the DNS servers they use
+	diagnostics api.DiagnosticsConfig
 }
 
 func newGW(t *testing.T, opts ...func(*options)) *gw {
@@ -237,6 +239,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 			return []netip.Addr{netip.MustParseAddr("192.0.2.53")}
 		}}
 	capCfg(&apiCfg)
+	apiCfg.Diagnostics = o.diagnostics
 	// the CAs of the TLS responder (M21): the API makes them when it starts, like the daemon
 	apiCfg.TLSCADir = filepath.Join(root, "tlsca")
 	if err := tlsresponder.EnsureCAs(apiCfg.TLSCADir, time.Now()); err != nil {

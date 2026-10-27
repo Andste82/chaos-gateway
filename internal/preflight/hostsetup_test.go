@@ -126,7 +126,7 @@ func TestHostSetupWritesItsFilesAndIsIdempotent(t *testing.T) {
 		}
 	}
 	sysctl, _ := os.ReadFile(filepath.Join(dir, "etc/sysctl.d/90-chaos-gateway.conf"))
-	if !strings.Contains(string(sysctl), "net.ipv4.ip_forward=1\n") {
+	if !strings.Contains(string(sysctl), "net.ipv4.ip_forward=1\n") || !strings.Contains(string(sysctl), "net.ipv4.ping_group_range=0 2147483647\n") {
 		t.Errorf("%s", sysctl)
 	}
 	// netplan is only mentioned, never written

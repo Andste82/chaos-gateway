@@ -1916,6 +1916,14 @@ paths:
       tags: [diagnostics]
       operationId: runDiagnostic
       summary: Run one diagnostic from the gateway or a probe (synchronous, max. 60 s)
+      description: |
+        Runs from the gateway's own network stack, so the traffic does not pass through the faults of a device
+        (plan §2.12). A diagnostic that fails because its target fails (no reply, refused, a certificate that does not
+        verify) is a `200` with `ok: false`; a request that cannot be run is a `422`: `validation_failed`,
+        `unsupported_feature` for `from.probe` (probes: M25), `capacity_exceeded` when eight diagnostics run already.
+        The request must fit the 60 s: for `ping`, `count` echoes 200 ms apart plus `timeout` must not exceed it.
+        Host names are resolved IPv4 only, by the gateway's DNS proxy, and by the uplink's resolvers when the proxy is
+        not reachable at all.
       x-milestone: M24
       x-required-scope: overlays
       requestBody:
@@ -4754,6 +4762,7 @@ components:
           items: {type: string}
         diagnostic_types:
           type: array
+          description: The types `POST /diagnostics` accepts in this build.
           items: {type: string}
         limits:
           type: object
@@ -5840,10 +5849,14 @@ components:
         type:
           type: string
           enum: [ping, tcp, udp, dns, http, tls, path]
-          description: '`path` runs DNS → route → TCP → TLS and reports each step.'
+          description: |
+            `ping` sends ICMP echoes; `tcp` connects to `port`; `udp` sends one datagram (`payload`) to `port` and
+            waits for a reply, an ICMP port unreachable says the port is closed; `dns` asks for an A record; `http`
+            makes one GET request and does not follow redirects; `tls` makes a handshake and reports what the server
+            presented; `path` runs DNS → route → TCP → TLS and reports each step, up to the first one that fails.
         from:
           type: object
-          description: Default - the gateway itself (not subject to device faults).
+          description: Default - the gateway itself (not subject to device faults). `probe` is accepted from M25 on; until then it is `unsupported_feature`.
           minProperties: 1
           maxProperties: 1
           properties:
@@ -5854,37 +5867,60 @@ components:
         host:
           type: string
           maxLength: 253
-          description: Hostname or IPv4 address; for `http` the URL host is used if `url` is set.
-        port: {type: integer, minimum: 1, maximum: 65535}
+          description: Hostname or IPv4 address (not a URL, no port); for `http` the URL host is used if `url` is set. For `dns` with `dns_name` it is the server to ask.
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: Required for `tcp`, `udp` and `path`. Defaults - `dns` 53, `tls` 443. Not used by `ping`; `http` takes it from the URL (or, without `url`, builds `http://host:port/`).
         count:
           type: integer
           minimum: 1
           maximum: 100
           default: 5
-          description: Ping only.
+          description: Ping only - the echoes sent, 200 ms apart.
         timeout:
           allOf: [{$ref: '#/components/schemas/Duration'}]
           default: 5s
+          description: How long to wait for a connection, a reply or a handshake, 60 s at most. For `ping` the wait for the last reply; for `path` the limit of each step.
         dns_name:
           allOf: [{$ref: '#/components/schemas/Hostname'}]
-          description: '`dns` - name to resolve (host is then the server; default the gateway DNS proxy).'
+          description: '`dns` - the name to resolve; `host` is then the server to ask. Without it `host` is the name and the server is the gateway DNS proxy. No wildcard.'
         url:
           type: string
           maxLength: 2048
-          description: '`http` - full URL.'
+          description: '`http` - full http or https URL.'
         sni:
           type: string
-          description: '`tls` - SNI (default `host`).'
+          maxLength: 253
+          description: '`tls` and `path` - SNI (default `host`; none for an address).'
+        payload:
+          type: string
+          maxLength: 1024
+          description: '`udp` - the text sent as the datagram (default an empty datagram, which many services ignore).'
+        tls:
+          type: boolean
+          default: true
+          description: '`path` - false leaves out the TLS step, for a plain TCP service.'
     DiagnosticResult:
       type: object
       required: [type, ok, started_at, duration_ms]
       properties:
         type: {type: string}
-        from: {type: string}
-        ok: {type: boolean}
+        from: {type: string, description: '`gateway`.'}
+        ok:
+          type: boolean
+          description: |
+            `ping` - at least one reply; `tcp` - connected; `udp` - a reply came back; `dns` - NOERROR with an answer;
+            `http` - a response with a status below 400; `tls` - a handshake whose certificate verifies; `path` - every step.
         started_at: {type: string, format: date-time}
         duration_ms: {type: number}
-        error: {type: string}
+        address:
+          type: string
+          description: The IPv4 address the diagnostic ran against, when `host` was a name that resolved.
+        error:
+          type: string
+          description: Why `ok` is false, in a sentence.
         ping:
           type: object
           properties:
@@ -5907,7 +5943,8 @@ components:
         dns:
           type: object
           properties:
-            server: {type: string}
+            name: {type: string, description: The name asked for.}
+            server: {type: string, description: 'The server that answered or was asked, `address:port`.'}
             rcode:
               type: string
               example: NOERROR

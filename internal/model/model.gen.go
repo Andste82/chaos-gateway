@@ -3140,7 +3140,9 @@ type CalibrationResult struct {
 
 // Capabilities defines model for Capabilities.
 type Capabilities struct {
-	CheckTypes      []string      `json:"check_types"`
+	CheckTypes []string `json:"check_types"`
+
+	// DiagnosticTypes The types `POST /diagnostics` accepts in this build.
 	DiagnosticTypes *[]string     `json:"diagnostic_types,omitempty"`
 	FaultFamilies   []FaultFamily `json:"fault_families"`
 
@@ -3854,13 +3856,13 @@ type DhcpScope struct {
 
 // DiagnosticRequest defines model for DiagnosticRequest.
 type DiagnosticRequest struct {
-	// Count Ping only.
+	// Count Ping only - the echoes sent, 200 ms apart.
 	Count *int `json:"count,omitempty"`
 
-	// DnsName `dns` - name to resolve (host is then the server; default the gateway DNS proxy).
+	// DnsName `dns` - the name to resolve; `host` is then the server to ask. Without it `host` is the name and the server is the gateway DNS proxy. No wildcard.
 	DnsName *Hostname `json:"dns_name,omitempty"`
 
-	// From Default - the gateway itself (not subject to device faults).
+	// From Default - the gateway itself (not subject to device faults). `probe` is accepted from M25 on; until then it is `unsupported_feature`.
 	From *struct {
 		Gateway *DiagnosticRequestFromGateway `json:"gateway,omitempty"`
 
@@ -3868,29 +3870,48 @@ type DiagnosticRequest struct {
 		Probe *Ref `json:"probe,omitempty"`
 	} `json:"from,omitempty"`
 
-	// Host Hostname or IPv4 address; for `http` the URL host is used if `url` is set.
+	// Host Hostname or IPv4 address (not a URL, no port); for `http` the URL host is used if `url` is set. For `dns` with `dns_name` it is the server to ask.
 	Host string `json:"host"`
-	Port *int   `json:"port,omitempty"`
 
-	// Sni `tls` - SNI (default `host`).
-	Sni     *string   `json:"sni,omitempty"`
+	// Payload `udp` - the text sent as the datagram (default an empty datagram, which many services ignore).
+	Payload *string `json:"payload,omitempty"`
+
+	// Port Required for `tcp`, `udp` and `path`. Defaults - `dns` 53, `tls` 443. Not used by `ping`; `http` takes it from the URL (or, without `url`, builds `http://host:port/`).
+	Port *int `json:"port,omitempty"`
+
+	// Sni `tls` and `path` - SNI (default `host`; none for an address).
+	Sni *string `json:"sni,omitempty"`
+
+	// Timeout How long to wait for a connection, a reply or a handshake, 60 s at most. For `ping` the wait for the last reply; for `path` the limit of each step.
 	Timeout *Duration `json:"timeout,omitempty"`
 
-	// Type `path` runs DNS → route → TCP → TLS and reports each step.
+	// Tls `path` - false leaves out the TLS step, for a plain TCP service.
+	Tls *bool `json:"tls,omitempty"`
+
+	// Type `ping` sends ICMP echoes; `tcp` connects to `port`; `udp` sends one datagram (`payload`) to `port` and
+	// waits for a reply, an ICMP port unreachable says the port is closed; `dns` asks for an A record; `http`
+	// makes one GET request and does not follow redirects; `tls` makes a handshake and reports what the server
+	// presented; `path` runs DNS → route → TCP → TLS and reports each step, up to the first one that fails.
 	Type DiagnosticRequestType `json:"type"`
 
-	// Url `http` - full URL.
+	// Url `http` - full http or https URL.
 	Url *string `json:"url,omitempty"`
 }
 
 // DiagnosticRequestFromGateway defines model for DiagnosticRequest.From.Gateway.
 type DiagnosticRequestFromGateway bool
 
-// DiagnosticRequestType `path` runs DNS → route → TCP → TLS and reports each step.
+// DiagnosticRequestType `ping` sends ICMP echoes; `tcp` connects to `port`; `udp` sends one datagram (`payload`) to `port` and
+// waits for a reply, an ICMP port unreachable says the port is closed; `dns` asks for an A record; `http`
+// makes one GET request and does not follow redirects; `tls` makes a handshake and reports what the server
+// presented; `path` runs DNS → route → TCP → TLS and reports each step, up to the first one that fails.
 type DiagnosticRequestType string
 
 // DiagnosticResult defines model for DiagnosticResult.
 type DiagnosticResult struct {
+	// Address The IPv4 address the diagnostic ran against, when `host` was a name that resolved.
+	Address *string `json:"address,omitempty"`
+
 	// Connect `tcp` and `udp`.
 	Connect *struct {
 		// Detail Example: connection refused
@@ -3901,19 +3922,31 @@ type DiagnosticResult struct {
 	Dns *struct {
 		Answers *[]string `json:"answers,omitempty"`
 
+		// Name The name asked for.
+		Name *string `json:"name,omitempty"`
+
 		// Rcode Example: NOERROR
-		Rcode  *string  `json:"rcode,omitempty"`
-		RttMs  *float32 `json:"rtt_ms,omitempty"`
-		Server *string  `json:"server,omitempty"`
+		Rcode *string  `json:"rcode,omitempty"`
+		RttMs *float32 `json:"rtt_ms,omitempty"`
+
+		// Server The server that answered or was asked, `address:port`.
+		Server *string `json:"server,omitempty"`
 	} `json:"dns,omitempty"`
 	DurationMs float32 `json:"duration_ms"`
-	Error      *string `json:"error,omitempty"`
-	From       *string `json:"from,omitempty"`
-	Http       *struct {
+
+	// Error Why `ok` is false, in a sentence.
+	Error *string `json:"error,omitempty"`
+
+	// From `gateway`.
+	From *string `json:"from,omitempty"`
+	Http *struct {
 		Headers *map[string]string `json:"headers,omitempty"`
 		RttMs   *float32           `json:"rtt_ms,omitempty"`
 		Status  *int               `json:"status,omitempty"`
 	} `json:"http,omitempty"`
+
+	// Ok `ping` - at least one reply; `tcp` - connected; `udp` - a reply came back; `dns` - NOERROR with an answer;
+	// `http` - a response with a status below 400; `tls` - a handshake whose certificate verifies; `path` - every step.
 	Ok   bool `json:"ok"`
 	Path *[]struct {
 		Detail *string                  `json:"detail,omitempty"`

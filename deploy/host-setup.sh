@@ -8,7 +8,8 @@
 #   - installs Docker Engine and the compose plugin when they are missing (Ubuntu's packages),
 #   - loads the kernel modules Chaos Gateway needs now and at every boot
 #     (/etc/modules-load.d/chaos-gateway.conf),
-#   - enables IPv4 forwarding now and at every boot (/etc/sysctl.d/90-chaos-gateway.conf),
+#   - enables IPv4 forwarding now and at every boot (/etc/sysctl.d/90-chaos-gateway.conf), and lets every group open
+#     the unprivileged ICMP socket the ping of the diagnostics uses (net.ipv4.ping_group_range, M24),
 #   - for every --test-interface: writes the rule that keeps systemd-networkd off it
 #     (/etc/systemd/network/10-chaosgw-<interface>.network, issue #64) and checks it (as --check),
 #   - prints the netplan changes the test interfaces need.
@@ -534,8 +535,10 @@ else
 	say "$PREFIX/etc/modules-load.d/chaos-gateway.conf is up to date"
 fi
 
-# ---- forwarding at boot
-printf '# Written by the Chaos Gateway host setup.\nnet.ipv4.ip_forward=1\n' | if write_if_changed "$PREFIX/etc/sysctl.d/90-chaos-gateway.conf"; then
+# ---- forwarding at boot; the ping of the diagnostics (M24) is a datagram ICMP socket of the unprivileged API, which the
+# kernel allows only to the groups in ping_group_range (the API container shares the network namespace of the host,
+# so the value of the host counts)
+printf '# Written by the Chaos Gateway host setup.\nnet.ipv4.ip_forward=1\nnet.ipv4.ping_group_range=0 2147483647\n' | if write_if_changed "$PREFIX/etc/sysctl.d/90-chaos-gateway.conf"; then
 	say "wrote $PREFIX/etc/sysctl.d/90-chaos-gateway.conf"
 else
 	say "$PREFIX/etc/sysctl.d/90-chaos-gateway.conf is up to date"
@@ -545,6 +548,7 @@ fi
 status=0
 if [ "$MODPROBE" -eq 1 ]; then
 	sysctl -q -w net.ipv4.ip_forward=1
+	sysctl -q -w net.ipv4.ping_group_range="0 2147483647"
 	missing=""
 	for m in $REQUIRED_MODULES; do
 		modprobe -q "$m" 2>/dev/null || missing="$missing $m"

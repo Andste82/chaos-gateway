@@ -60,6 +60,8 @@ import type {
   WireGuardClientView,
   WireGuardNetwork,
   WireGuardPeerStatus,
+  DiagnosticRequest,
+  DiagnosticResult,
 } from '../src/api/generated/model';
 
 export const IOT = '0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21';
@@ -529,6 +531,12 @@ export class MockGateway {
   /** What GET /captures/storage says besides the sum of the sizes of the captures (the quota, the volume). */
   captureStorage: Partial<CaptureStorage> = {};
   private nextCapture = 1;
+  /**
+   * What POST /diagnostics answers for a request: a result, or a refusal of the gateway (`refuse`: a status, a code, a
+   * detail and, for a 422, the fields). Without it every diagnostic succeeds. `diagnosticDelay` holds the answer back, in ms.
+   */
+  diagnose?: (req: DiagnosticRequest) => DiagnosticResult | { refuse: { status: number; code: string; detail: string; errors?: ValidationError[] } };
+  diagnosticDelay = 0;
   /** The exchanges the interception proxy saw, oldest first (GET /intercept/flows lists them newest first). */
   interceptFlows: InterceptFlow[] = [];
   /** The next POST /tls/ca/regenerate is refused with this status; the number of replacements so far. */
@@ -537,11 +545,12 @@ export class MockGateway {
   /** What the gateway can do (GET /capabilities). */
   capabilities: Capabilities = {
     version: 'test',
-    features: ['runs', 'checks', 'captures', 'tls.intercept'],
+    features: ['runs', 'checks', 'captures', 'tls.intercept', 'diagnostics'],
     overlay_kinds: ['fault', 'profile', 'rule', 'dns', 'tls', 'dhcp', 'wireguard'],
     fault_families: ['impairment', 'mtu', 'dns', 'tls', 'dhcp', 'tunnel'],
     step_types: ['profile', 'fault', 'rule', 'dns', 'tls', 'dhcp', 'wireguard', 'capture', 'wait', 'remove', 'restore'],
     check_types: ['reconnected', 'no_connection', 'traffic_seen', 'traffic_not_seen', 'dns_query_seen', 'tls_rejected', 'tls_accepted'],
+    diagnostic_types: ['ping', 'tcp', 'udp', 'dns', 'http', 'tls', 'path'],
   };
   private nextRun = 1;
   uplink: UplinkView = {
@@ -916,6 +925,18 @@ export class MockGateway {
         .filter((f) => !since || new Date(f.time) >= new Date(since))
         .filter((f) => faulted === null || (faulted === 'true') === ((f.actions ?? []).length > 0));
       return json(200, this.page(list, url));
+    }
+    if (path === '/diagnostics' && method === 'POST') {
+      if (!this.capabilities.features.includes('diagnostics')) return problem(422, 'unsupported_feature', 'this operation is not available in this build; it arrives with milestone M24');
+      const req = body as DiagnosticRequest;
+      const answer = this.diagnose ? this.diagnose(req) : defaultDiagnostic(req, new Date(this.now()).toISOString());
+      if (this.diagnosticDelay) await new Promise((r) => setTimeout(r, this.diagnosticDelay));
+      if ('refuse' in answer) {
+        const r = answer.refuse;
+        if (r.errors) return json(r.status, { type: 'about:blank', title: r.code, status: r.status, code: r.code, detail: r.detail, errors: r.errors });
+        return problem(r.status, r.code, r.detail);
+      }
+      return json(200, answer);
     }
     if (path.startsWith('/captures') && !this.capabilities.features.includes('captures')) return problem(422, 'unsupported_feature', 'this deployment cannot capture: the executor has no capture volume (--captures-dir)');
     if (path === '/captures' && method === 'GET') {
@@ -1690,4 +1711,53 @@ export class MockGateway {
     this.state = open.state;
     this.loggedIn = false;
   }
+}
+
+/** A diagnostic that succeeded, as the gateway would answer the request (the default of MockGateway.diagnose). */
+export function defaultDiagnostic(req: DiagnosticRequest, startedAt: string): DiagnosticResult {
+  const base = { type: req.type, from: 'gateway', ok: true, started_at: startedAt, duration_ms: 12.5 };
+  switch (req.type) {
+    case 'ping':
+      return { ...base, ping: { sent: req.count ?? 5, received: req.count ?? 5, loss_percent: 0, rtt_min_ms: 0.4, rtt_avg_ms: 0.6, rtt_max_ms: 1.1, rtt_mdev_ms: 0.2 } };
+    case 'tcp':
+    case 'udp':
+      return { ...base, connect: { reachable: true, rtt_ms: 1.2, detail: req.type === 'tcp' ? 'connected' : 'reply of 4 bytes' } };
+    case 'dns':
+      return { ...base, dns: { name: req.dns_name ?? req.host, server: '169.254.100.2:53', rcode: 'NOERROR', answers: ['203.0.113.10'], rtt_ms: 3.4 } };
+    case 'http':
+      return { ...base, http: { status: 200, rtt_ms: 14.2, headers: { 'Content-Type': 'text/plain', Server: 'testbed' } } };
+    case 'tls':
+      return { ...base, tls: tlsOf(true) };
+    default:
+      return {
+        ...base,
+        path: [
+          { step: 'dns', ok: true, detail: `${req.host} is 203.0.113.10 (asked 169.254.100.2:53, 3.4 ms)` },
+          { step: 'route', ok: true, detail: 'a route to 203.0.113.10 exists, the packets leave from 203.0.113.1' },
+          { step: 'tcp', ok: true, detail: `connected to port ${req.port} in 1.2 ms` },
+          ...(req.tls === false ? [] : [{ step: 'tls' as const, ok: true, detail: 'TLS 1.3, TLS_AES_128_GCM_SHA256' }]),
+        ],
+        ...(req.tls === false ? {} : { tls: tlsOf(true) }),
+      };
+  }
+}
+
+/** The details of a TLS handshake, with a certificate that verifies or has expired. */
+export function tlsOf(verified: boolean): NonNullable<DiagnosticResult['tls']> {
+  return {
+    version: 'TLS 1.3',
+    cipher: 'TLS_AES_128_GCM_SHA256',
+    alpn: 'h2',
+    verified,
+    ...(verified ? {} : { verify_error: 'certificate has expired' }),
+    certificates: [
+      {
+        subject: 'CN=broker.example.com',
+        issuer: 'CN=Chaos Gateway test CA,O=Chaos Gateway',
+        not_before: verified ? '2026-10-01T00:00:00Z' : '2025-07-01T00:00:00Z',
+        not_after: verified ? '2027-10-01T00:00:00Z' : '2025-10-01T00:00:00Z',
+        dns_names: ['broker.example.com'],
+      },
+    ],
+  };
 }

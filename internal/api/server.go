@@ -82,6 +82,8 @@ type Config struct {
 	// and serves the test CA's certificate from it (GET /tls/ca); the responder's container reads the directory,
 	// keys included. Empty for a deployment without one (the download answers `unavailable`).
 	TLSCADir string
+	// ProcDir is where the metrics endpoint reads the load and the memory of the machine (M26); empty takes /proc.
+	ProcDir string
 	// Diagnostics sets up the diagnostics of M24; the zero value is the production setup (tests name their own servers).
 	Diagnostics DiagnosticsConfig
 }

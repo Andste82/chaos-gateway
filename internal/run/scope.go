@@ -329,8 +329,12 @@ func destNeedsNets(d *model.Destination) bool {
 func destNeedsHost(d *model.Destination) bool { return d != nil && d.Hostname != nil }
 
 // flowInScope reports whether the connection's initiator is in the scope's set of devices (or in a
-// network scope's network).
+// network scope's network). A connection that came in through a port forward is not one: its initiator is a peer
+// outside the test networks, and the target device only answers.
 func flowInScope(devices map[string]bool, scope model.Scope, f engine.Flow) bool {
+	if f.Forwarded {
+		return false
+	}
 	if scopeKind(scope) == "network" && lower(f.Network) == lower(*scope.Network) {
 		return true
 	}

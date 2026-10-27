@@ -24,12 +24,27 @@ type Link struct {
 		Kind      string `json:"info_kind"`
 		SlaveKind string `json:"info_slave_kind"`
 	} `json:"linkinfo"`
-	// Stats are the counters of `-s -s`; only the carrier changes are read.
-	Stats *struct {
-		TX struct {
-			CarrierChanges uint64 `json:"carrier_changes"`
-		} `json:"tx"`
-	} `json:"stats64,omitempty"`
+	// Stats are the counters of `-s -s`: the carrier changes (the link follower) and the interface counters
+	// the metrics endpoint reports (M26).
+	Stats *LinkStats `json:"stats64,omitempty"`
+}
+
+// LinkStats is the stats64 object of a link, the kernel's rtnl_link_stats64: what the interface
+// received and sent.
+type LinkStats struct {
+	RX struct {
+		Bytes   uint64 `json:"bytes"`
+		Packets uint64 `json:"packets"`
+		Errors  uint64 `json:"errors"`
+		Dropped uint64 `json:"dropped"`
+	} `json:"rx"`
+	TX struct {
+		Bytes          uint64 `json:"bytes"`
+		Packets        uint64 `json:"packets"`
+		Errors         uint64 `json:"errors"`
+		Dropped        uint64 `json:"dropped"`
+		CarrierChanges uint64 `json:"carrier_changes"`
+	} `json:"tx"`
 }
 
 // CarrierChanges is how often the link's carrier went and came since the device was created (the

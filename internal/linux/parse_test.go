@@ -58,6 +58,23 @@ func TestParseLinkCarrierChanges(t *testing.T) {
 	}
 }
 
+// M26: the interface counters of `-s -s` are read for the metrics endpoint; a link without statistics has none.
+func TestParseLinkInterfaceCounters(t *testing.T) {
+	links, err := ParseLinks([]byte(`[{"ifindex":2,"ifname":"eth0","stats64":{"rx":{"bytes":1000,"packets":10,"errors":2,"dropped":3},` +
+		`"tx":{"bytes":2000,"packets":20,"errors":4,"dropped":5,"carrier_changes":6}}},{"ifindex":3,"ifname":"eth1"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := links[0].Stats
+	if s == nil || s.RX.Bytes != 1000 || s.RX.Packets != 10 || s.RX.Errors != 2 || s.RX.Dropped != 3 ||
+		s.TX.Bytes != 2000 || s.TX.Packets != 20 || s.TX.Errors != 4 || s.TX.Dropped != 5 || s.TX.CarrierChanges != 6 {
+		t.Fatalf("%+v", s)
+	}
+	if links[1].Stats != nil {
+		t.Fatalf("a link without statistics: %+v", links[1].Stats)
+	}
+}
+
 func TestParseAddrs(t *testing.T) {
 	a, err := ParseAddrs(fixture(t, "ip_addr.json"))
 	if err != nil {

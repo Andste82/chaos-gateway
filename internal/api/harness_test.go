@@ -104,6 +104,8 @@ type options struct {
 	// serviceNS is the service namespace of the gateway services; resolvers the DNS proxy's upstream
 	serviceNS string
 	resolvers []netip.Addr
+	// procDir is where the metrics endpoint reads the load and memory of the machine (empty: /proc)
+	procDir string
 	// execWrap, when set, wraps the engine's apply.Exec (fault injection, e.g. a panicking goroutine).
 	execWrap func(apply.Exec) apply.Exec
 	// root reuses an existing data directory instead of a fresh t.TempDir(), to simulate a restart
@@ -248,6 +250,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 		}}
 	capCfg(&apiCfg)
 	apiCfg.Diagnostics = o.diagnostics
+	apiCfg.ProcDir = o.procDir
 	// the CAs of the TLS responder (M21): the API makes them when it starts, like the daemon
 	apiCfg.TLSCADir = filepath.Join(root, "tlsca")
 	if err := tlsresponder.EnsureCAs(apiCfg.TLSCADir, time.Now()); err != nil {

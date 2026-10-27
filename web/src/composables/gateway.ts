@@ -4,7 +4,7 @@
 // the invalidation by event type (eventStream.ts) reaches them.
 import { useQueries, useQuery } from '@tanstack/vue-query';
 import { computed, watch } from 'vue';
-import { listDevices, listInterceptFlows, listLeases } from '../api/generated/hooks/devices/devices';
+import { listDevices, listDnsQueries, listFlows, listInterceptFlows, listLeases } from '../api/generated/hooks/devices/devices';
 import { listProbes } from '../api/generated/hooks/diagnostics/diagnostics';
 import { listWireGuardClients } from '../api/generated/hooks/wireguard/wireguard';
 import { listAccessRules, listFaults, listGroups, listNetworks, listPortForwards, listProfiles, listScenarios } from '../api/generated/hooks/config/config';
@@ -13,7 +13,7 @@ import { getRun, listRuns } from '../api/generated/hooks/runs/runs';
 import { listOverlays } from '../api/generated/hooks/overlays/overlays';
 import { getActiveRevision, getGetActiveRevisionQueryKey } from '../api/generated/hooks/revisions/revisions';
 import { getCapabilities, useGetHealth, useGetState, useGetSystemInfo } from '../api/generated/hooks/system/system';
-import type { AccessRuleView, Capture, DeviceView, ProbeView, InterceptFlowPage, ListInterceptFlowsParams, DhcpLease, FaultView, GroupView, ListRunsParams, NetworkView, Overlay, PortForwardView, ProfileView, Run, ScenarioView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
+import type { AccessRuleView, Capture, DeviceView, DnsQueryLogEntry, Flow, ListFlowsParams, ProbeView, InterceptFlowPage, ListInterceptFlowsParams, DhcpLease, FaultView, GroupView, ListRunsParams, NetworkView, Overlay, PortForwardView, ProfileView, Run, ScenarioView, SystemAccessRule, WireGuardClientView } from '../api/generated/model';
 import { describeMatch, describeScope, describeTunnel, faultChips, overlayChips, type Names } from '../lib/faults';
 import { scopeLink } from '../lib/links';
 import { isRunOf, mergeRuns } from '../lib/runs';
@@ -305,6 +305,30 @@ export function useInterceptFlows(params: () => ListInterceptFlowsParams, enable
       return JSON.stringify(before) === JSON.stringify(now) ? prev : undefined;
     },
     refetchInterval: computed(() => (live() ? 3_000 : false)),
+  });
+}
+
+/**
+ * The connections the gateway tracks (`GET /flows`, M26), every page. Connections come and go without an event, so the list is read
+ * every 3 s while `live` is on (a list that is not live holds what it has) and at once on the events that change a device.
+ */
+export function useFlows(params: () => Omit<ListFlowsParams, 'cursor'> = () => ({}), enabled: () => boolean = () => true, live: () => boolean = () => true) {
+  return useQuery({
+    queryKey: computed(() => ['flows', 'all', params()]),
+    queryFn: ({ signal }) => fetchAll<Flow>((cursor) => listFlows({ ...params(), limit: params().limit ?? 500, cursor }, { signal }), signal),
+    enabled: computed(enabled),
+    refetchInterval: computed(() => (live() ? 3_000 : false)),
+  });
+}
+
+/** The newest queries of the DNS proxy that the parameters select (`GET /dns/queries`, M26), newest first; one page. */
+export function useDnsQueries(params: () => { device?: string; limit?: number }, enabled: () => boolean = () => true) {
+  return useQuery<DnsQueryLogEntry[]>({
+    queryKey: computed(() => ['dns-queries', params()]),
+    queryFn: async ({ signal }) => (await listDnsQueries(params(), { signal })).items,
+    enabled: computed(enabled),
+    // queries come without an event
+    refetchInterval: 5_000,
   });
 }
 

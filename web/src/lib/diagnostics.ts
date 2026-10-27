@@ -73,6 +73,11 @@ export function fieldsOf(type: DiagnosticType): { host: boolean; port: false | '
 const hostPattern = /^([A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?\.)*[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?$/;
 const ipv4Pattern = /^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$/;
 
+/** An IPv4 address in dotted form. */
+export function isIPv4(s: string): boolean {
+  return ipv4Pattern.test(s);
+}
+
 /** An IPv4 address or a host name, without a port, a path or a wildcard. */
 export function isValidHost(s: string): boolean {
   if (ipv4Pattern.test(s)) return true;

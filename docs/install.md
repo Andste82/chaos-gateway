@@ -265,6 +265,26 @@ captures of the run. `settings.retention.runs` of the active configuration (a du
 at least) sets it and takes effect at the next run that ends, also for the runs that ended before. The flag
 `--run-retention` of `chaosgw api` is only the default for a configuration that does not set it.
 
+## Metrics
+
+`GET /api/v1/metrics` answers in the Prometheus text format with the counters of the faults, rules and port forwards, the statistics of the netem queues and
+of the interfaces the gateway applied, the devices and the health of the system (the families are listed in the spec under `/metrics`). It needs a token of the
+scope `read`, made like the one above with `"scope":"read"`. A scrape configuration:
+
+```yaml
+scrape_configs:
+  - job_name: chaos-gateway
+    scheme: https
+    metrics_path: /api/v1/metrics
+    authorization: {credentials_file: /etc/prometheus/chaosgw-token}
+    tls_config: {insecure_skip_verify: true}   # until the gateway has a certificate of its own (M29)
+    static_configs: [{targets: ['gateway.example:8443']}]
+```
+
+A source the gateway could not read at a scrape is left out of the answer, and `chaosgw_collector_up{source="counters"}` (also `queues`, `interfaces`) is 0 then:
+alert on that, not on a counter that stopped. The Flows screen of the web app lists the connections the gateway tracks, and a device's page shows its connections,
+its recent DNS queries and the path to a destination with the faults that act on it.
+
 ## Packet captures
 
 Captures (`POST /api/v1/captures`, `capture: true` and the `capture` steps of a scenario) are recorded by the executor

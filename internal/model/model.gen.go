@@ -4630,11 +4630,16 @@ type Flow struct {
 	// DstHostname A name the DNS proxy returned for `dst` to this device: one that a hostname selector of a rule or a fault
 	// selects (the DNS-derived address sets hold them) or that appears in the proxy's query log (the name asked
 	// and the CNAME targets of the answer; the last 20000 queries are kept).
-	DstHostname *string      `json:"dst_hostname,omitempty"`
-	Id          string       `json:"id"`
-	NatSrc      *Ipv4        `json:"nat_src,omitempty"`
-	Network     *Uuid        `json:"network,omitempty"`
-	Protocol    FlowProtocol `json:"protocol"`
+	DstHostname *string `json:"dst_hostname,omitempty"`
+
+	// Forwarded The connection came in through a port forward (M35a, listed since M26): `src` is the peer behind the entry
+	// side, `dst` the entry side's address and `dport` the external port, and `device` and `network` are those of
+	// the forward's target. `GET /explain` with `src`, `dst`, `protocol` and `port` of the flow explains it.
+	Forwarded *bool        `json:"forwarded,omitempty"`
+	Id        string       `json:"id"`
+	NatSrc    *Ipv4        `json:"nat_src,omitempty"`
+	Network   *Uuid        `json:"network,omitempty"`
+	Protocol  FlowProtocol `json:"protocol"`
 
 	// Service Set when the flow is redirected into the service namespace.
 	Service   *FlowService `json:"service,omitempty"`

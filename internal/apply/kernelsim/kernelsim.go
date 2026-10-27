@@ -32,8 +32,9 @@ type link struct {
 	name, mac, kind, master string
 	up                      bool
 	noCarrier               bool
-	carrierChanges          uint64   // the kernel's carrier_changes: SetCarrier counts each change
-	addrs                   []string // "ip/len"
+	carrierChanges          uint64           // the kernel's carrier_changes: SetCarrier counts each change
+	stats                   *linux.LinkStats // the counters SetLinkStats gives, else the reading has the carrier changes only
+	addrs                   []string         // "ip/len"
 	index                   int
 	mtu                     int
 	wg                      *wgState
@@ -272,6 +273,15 @@ func (k *Kernel) SetCarrier(name string, on bool) {
 	if l, ok := k.links[name]; ok && l.noCarrier == on {
 		l.noCarrier = !on
 		l.carrierChanges++
+	}
+}
+
+// SetLinkStats sets the interface counters `ip -s -s link` reports for an interface (M26), as traffic would.
+func (k *Kernel) SetLinkStats(name string, s linux.LinkStats) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if l, ok := k.links[name]; ok {
+		l.stats = &s
 	}
 }
 
@@ -670,6 +680,12 @@ func (k *Kernel) ipRead(a []string) (executor.Result, error) {
 			}
 			m := map[string]any{"ifindex": l.index, "ifname": l.name, "flags": flags, "address": l.mac, "link_type": "ether", "mtu": l.mtu,
 				"stats64": map[string]any{"tx": map[string]any{"carrier_changes": l.carrierChanges}}}
+			if st := l.stats; st != nil {
+				m["stats64"] = map[string]any{
+					"rx": map[string]any{"bytes": st.RX.Bytes, "packets": st.RX.Packets, "errors": st.RX.Errors, "dropped": st.RX.Dropped},
+					"tx": map[string]any{"bytes": st.TX.Bytes, "packets": st.TX.Packets, "errors": st.TX.Errors, "dropped": st.TX.Dropped, "carrier_changes": l.carrierChanges},
+				}
+			}
 			if l.master != "" {
 				m["master"] = l.master
 			}

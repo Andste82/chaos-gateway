@@ -17,19 +17,19 @@ import { useToastStore } from '../stores/toasts';
  * state of the technical view (`['linux-state']`, outside the `state` prefix: reading it runs nft, tc,
  * ip and wg) is refetched only for events that change what the gateway applied, and polls otherwise. */
 export const invalidates: Partial<Record<EventType, string[][]>> = {
-  applied: [['state'], ['devices'], ['groups'], ['overlays'], ['faults'], ['networks'], ['uplink'], ['rules'], ['profiles'], ['routing'], ['port-forwards'], ['scenarios'], ['linux-state']],
+  applied: [['explain'], ['state'], ['devices'], ['groups'], ['overlays'], ['faults'], ['networks'], ['uplink'], ['rules'], ['profiles'], ['routing'], ['port-forwards'], ['scenarios'], ['linux-state']],
   apply_failed: [['state']],
   confirm_pending: [['state']],
   revision_created: [['revisions']],
-  revision_applied: [['state'], ['revisions'], ['devices'], ['groups'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['audit'], ['routing'], ['port-forwards'], ['scenarios'], ['linux-state']],
+  revision_applied: [['explain'], ['state'], ['revisions'], ['devices'], ['groups'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['audit'], ['routing'], ['port-forwards'], ['scenarios'], ['linux-state']],
   // a confirmed revision becomes the active one: the views of the configuration change with it
-  revision_confirmed: [['state'], ['revisions'], ['devices'], ['groups'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['audit'], ['routing'], ['port-forwards'], ['scenarios'], ['linux-state']],
-  revision_rolled_back: [['state'], ['revisions'], ['devices'], ['groups'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['overlays'], ['audit'], ['routing'], ['port-forwards'], ['scenarios'], ['linux-state']],
-  overlay_created: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state'], ['linux-state']],
-  overlay_updated: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state'], ['linux-state']],
-  overlay_removed: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state'], ['linux-state']],
-  overlay_expired: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state'], ['linux-state']],
-  overlay_orphaned: [['overlays'], ['devices'], ['faults'], ['profiles'], ['state'], ['linux-state']],
+  revision_confirmed: [['explain'], ['state'], ['revisions'], ['devices'], ['groups'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['audit'], ['routing'], ['port-forwards'], ['scenarios'], ['linux-state']],
+  revision_rolled_back: [['explain'], ['state'], ['revisions'], ['devices'], ['groups'], ['networks'], ['uplink'], ['faults'], ['rules'], ['profiles'], ['overlays'], ['audit'], ['routing'], ['port-forwards'], ['scenarios'], ['linux-state']],
+  overlay_created: [['explain'], ['overlays'], ['devices'], ['faults'], ['profiles'], ['state'], ['linux-state']],
+  overlay_updated: [['explain'], ['overlays'], ['devices'], ['faults'], ['profiles'], ['state'], ['linux-state']],
+  overlay_removed: [['explain'], ['overlays'], ['devices'], ['faults'], ['profiles'], ['state'], ['linux-state']],
+  overlay_expired: [['explain'], ['overlays'], ['devices'], ['faults'], ['profiles'], ['state'], ['linux-state']],
+  overlay_orphaned: [['explain'], ['overlays'], ['devices'], ['faults'], ['profiles'], ['state'], ['linux-state']],
   // a run's progress: its steps, its checks, its end; the end also lets the overlays go
   run_queued: [['runs']],
   run_started: [['runs']],

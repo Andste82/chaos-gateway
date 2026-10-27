@@ -277,11 +277,11 @@ test('port forwards: from the management network in the three-port topology', as
 });
 
 test("port forwards: explain shows a forwarded connection's forward, the access layer of the forward and its note on faults", async ({ page }) => {
-  // The card asks for a device as the source, so it never asks about a forwarded connection itself
-  // (P31-M35a-08; the API test TestExplainNamesTheForwardAndTheRuleThatDecidesAForwardedConnection covers
-  // the question). The mock answers with the shape the gateway gives for one: a peer behind the uplink,
-  // which is no device, to the uplink's address on a forwarded port; the test checks that the card
-  // renders it.
+  // The card renders the forward of an answer (P31-M35a-08; the API test
+  // TestExplainNamesTheForwardAndTheRuleThatDecidesAForwardedConnection covers the question, and flows.spec.ts the
+  // source "an address behind the uplink" that asks it). The mock answers with the shape the gateway gives for one:
+  // a peer behind the uplink, which is no device, to the uplink's address on a forwarded port; the test checks that
+  // the card renders it.
   const gw = withForwards(withNetworks(MockGateway.sample()));
   gw.explanation = {
     generation: 42,

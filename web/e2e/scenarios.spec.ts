@@ -937,7 +937,11 @@ test('a pending wait says what it waits for, and the step after a wait is counte
   await expect(step(page, 'back').getByTestId('step-next')).toHaveText(/^next in \d/);
 });
 
-// P4-AUDIT-41: the artifacts of two runs are not saved under the same name.
+// P4-AUDIT-41: the artifacts of two runs are not saved under the same name. The run handlers send no
+// Content-Disposition, so the link's `download` attribute is the name the browser saves under. The test
+// reads the attribute instead of clicking: Chromium fetches a download past page.route and context.route,
+// so a click went to the preview server's proxy, which has no API behind it, and every download was
+// canceled while the test passed on the suggested name alone.
 
 test('the artifacts of a run are saved under the name of the kind and the run', async ({ page }) => {
   const gw = lab();
@@ -947,11 +951,10 @@ test('the artifacts of a run are saved under the name of the kind and the run', 
   const saved: string[] = [];
   for (const id of ids) {
     await page.goto(`/runs/${id}`);
-    for (const label of ['events.jsonl', 'report.json', 'report.xml']) {
+    for (const [label, path] of [['events.jsonl', 'events'], ['report.json', 'report.json'], ['report.xml', 'report.xml']]) {
       const link = page.getByRole('link', { name: `Download ${label}` });
-      const download = page.waitForEvent('download');
-      await link.click();
-      saved.push((await download).suggestedFilename());
+      await expect(link).toHaveAttribute('href', `/api/v1/runs/${id}/${path}`);
+      saved.push((await link.getAttribute('download')) ?? '');
     }
   }
   expect(saved).toEqual([

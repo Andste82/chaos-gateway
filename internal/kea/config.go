@@ -367,7 +367,10 @@ func (c Config) Document() (map[string]any, error) {
 		"valid-lifetime":     3600,
 		"min-valid-lifetime": 5,
 		"max-valid-lifetime": 86400,
-		"subnet4":            subnets,
+		// no lease caching (on by default in Kea 3, threshold 0.25): a client that asks again soon would get the time its
+		// lease has left, so a short lease of 9 s renewed a second later would be 8 s; Kea wants a float, "0" is refused
+		"cache-threshold": json.Number("0.0"),
+		"subnet4":         subnets,
 		"loggers": []any{jsonMap{"name": "kea-dhcp4", "severity": "INFO",
 			"output_options": []any{jsonMap{"output": "stdout"}}}},
 	}

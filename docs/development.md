@@ -969,6 +969,14 @@ Kea is pinned to `kea-dhcp4-server=3.0.3-1` (`ARG KEA_VERSION` in `deploy/Docker
 `.devcontainer/Dockerfile`), the current Ubuntu 26.04 package version; the image build checks `kea-dhcp4
 -V` against it and fails on a mismatch. Bump the two `ARG`s together when the package updates.
 
+Lease caching is off (`"cache-threshold": 0.0` in the rendered configuration). Kea 3 caches by default (threshold 0.25): a
+client that asks again within a quarter of its lease is answered with the whole seconds its lease has left, so a short lease
+of 9 s renewed a second later was 8 s, which the DHCP actions of M23 promise not to do. Kea wants a float there (an integer
+`0` is a syntax error), so the value is a `json.Number` and a test that decodes the rendered document keeps numbers as
+written. `TestAClientThatAsksAgainSoonGetsTheWholeLeaseTimeNotWhatIsLeft` (in `M23_LEVEL1`) asks again after 1.2 s; it was
+found by a failure of `TestALeaseClassGivesItsClientsTheirOwnLeaseTimeAndNoOtherClient` in the nightly run 40288147095,
+whose second ask crossed a second boundary.
+
 - **Compiler.** `Target.Kea` has one subnet per network with `dhcp` switched on, bound to the network's
   bridge: pools (default, `kea.DefaultPool`: the second half of the subnet, split around the gateway's address
   when it lies inside, #110), lease time (default 1 h), router and DNS

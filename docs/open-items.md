@@ -40,10 +40,10 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   [the remaining points](#phase-4-audit-result-of-the-round-and-remaining-points). The maintainer decided P4-AUDIT-14 to -16 on
   2026-10-19 (option (a) each), see [Phase 4 audit items for the maintainer](#phase-4-audit-items-for-the-maintainer). What the implementation could not settle and
   that no later milestone completes is under [Phase 4 open items](#phase-4-open-items) at the end of the file. P4-M19-01 (the Captures screen has no milestone) was decided on 2026-10-19: option (a), milestone M23a in Phase 5; every Phase 4 open item is closed.
-- **Phase 5** (M20–M23c, M20 to M23a merged to `main` with PR #120, the rest on the branch `phase-5b`, PR #121): audited on
+- **Phase 5** (M20–M23c, M20 to M23a merged to `main` with PR #120, the rest with PR #121, merged to `main` on 2026-10-27, `1c969c4`, CI run 40434567365 on `1c969c4` green in every job): audited on
   2026-10-26 at `eab804c` (CI run 40270141299 green). The result is in [Phase 5 audit result](#phase-5-audit-result), right before
   the Phase 5 open items: 10 items of major and 33 of minor severity, P5-AUDIT-01 to P5-AUDIT-43. The round after the audit
-  (2026-10-26, branch `phase-5b`, PR #121, not merged; CI run 40335480067 on `9bfd4cf` green in every job) closed 42 of them: 38 fixed, four fixed differently (P5-AUDIT-09, -15, -26,
+  (2026-10-26, branch `phase-5b`, PR #121, merged to `main` on 2026-10-27, `1c969c4`; CI run 40335480067 on `9bfd4cf` green in every job) closed 42 of them: 38 fixed, four fixed differently (P5-AUDIT-09, -15, -26,
   -35), none rejected or left undone, see the verdict table and
   [the remaining points](#phase-5-audit-result-of-the-round-and-remaining-points). The one item that needed the
   maintainer, P5-AUDIT-10 (what a test network without a `dhcp` block means), was decided on 2026-10-27 (option (b)) and is
@@ -2471,7 +2471,7 @@ nothing for a configured device without `network` (P5-AUDIT-07), two web defects
 `dhcp` block, P5-AUDIT-08, and the compact exchanges table, P5-AUDIT-09), and the disagreement between the network form and the
 gateway on what a missing `dhcp` block means (P5-AUDIT-10). One item needed the maintainer (P5-AUDIT-10, decided on 2026-10-27, option (b), see below). The
 nightly kernel matrix has not run any Phase 5 level 1 list yet (P5-AUDIT-43). **Result of the round after the audit (2026-10-26):** 42 of the
-43 items are closed on the branch `phase-5b` (PR #121, not merged): 38 are fixed with a test that fails without the fix or with the
+43 items are closed on the branch `phase-5b` (PR #121, merged to `main` on 2026-10-27, `1c969c4`): 38 are fixed with a test that fails without the fix or with the
 corrected document, four were fixed differently from the proposal (P5-AUDIT-09, -15, -26 and -35, see the Fix column), none was
 rejected as wrong after all, and none is not done. P5-AUDIT-10 was decided by the maintainer on 2026-10-27 (option (b), the
 gateway's rule stays) and is fixed on the same branch, so all 43 items are closed; P5-AUDIT-08 and the network form follow the
@@ -2604,7 +2604,7 @@ hold; the race detector found no data race in any Phase 5 package.
 
 ### Phase 5 audit: result of the round and remaining points
 
-The round after the audit (2026-10-26, branch `phase-5b`, PR #121, not merged) closed every item, P5-AUDIT-10 after the maintainer's decision of 2026-10-27, see the Fix
+The round after the audit (2026-10-26, branch `phase-5b`, PR #121, merged to `main` on 2026-10-27, `1c969c4`) closed every item, P5-AUDIT-10 after the maintainer's decision of 2026-10-27, see the Fix
 column of the table. It was built and checked without KVM, without network namespaces and without Docker, on the final commit of
 the fixes (`3975e57`): `go build ./...`, `go vet ./...` and `go vet -tags testbed ./...`, `gofmt -l` (no file),
 `golangci-lint run ./...` (0 issues), `make check-spec`, `make check-generated` and `make check-clients` were green (the Python
@@ -2670,6 +2670,13 @@ Decisions taken by best practice, not by the maintainer:
 
 Remaining points of minor weight that the round left, none of them a new item:
 
+- After the round: the nightly run 40288147095 on `767af94` (2026-10-26) failed one test on 7.0.0-38-generic,
+  `TestALeaseClassGivesItsClientsTheirOwnLeaseTimeAndNoOtherClient` (an offer of 8 s where the lease class gives 9 s). The cause
+  is Kea 3's lease caching, on by default: a client that asks again within a quarter of its lease is answered with what is
+  left, in whole seconds, so the answer depends on a second boundary between two messages, and a short lease renewed soon was
+  shorter than the action said. Fixed on `main` after the merge of PR #121: the rendered configuration switches caching off
+  (`docs/development.md`, Kea), with `TestAClientThatAsksAgainSoonGetsTheWholeLeaseTimeNotWhatIsLeft` (in `M23_LEVEL1`), which
+  fails without the fix every time.
 - P5-AUDIT-10 was decided by the maintainer on 2026-10-27 (option (b)) and is fixed (below): the network form writes a `dhcp`
   block whenever DHCP is on, so a LAN added with the defaults is served; a configuration written by hand without the block still
   has no DHCP, as the spec now says.
@@ -2761,7 +2768,7 @@ Further observations of the lenses that are not defects:
 
 Phase 5 (M20 to M23c, application layer) is implemented: M20 to M23a are on `main` (PR #120; CI run 40196370688 on `6a0ec5e` green), the rest is on the branch `phase-5b` (PR #121; CI run 40258339299 on `aebbae8` green). Items below are what the implementation found that no later milestone of the plan completes and that needed a decision of the maintainer. The maintainer decided all nine on 2026-10-25:
 
-- **Closed:** P5-M20-01 (option (a), the approximation is accepted), P5-M20-02, P5-M21-01 and P5-M23-01 (option (b) each, the forms are the new milestone M23b), P5-M22-01 (option (b), the interception UI is the new milestone M23c), P5-M22-04 (option (a), left for V1), P5-M21-02 (option (b), implemented: a passed-on connection reaches the test networks and the tunnels) and P5-M22-03 (option (b), the per-case field `upstream`). All of it is built on the branch `phase-5b` (PR #121, not merged) and ran in CI run 40258339299 on `aebbae8`, green: M21, M22, M23b and M23c are done. The two small points the review of M23b found, P5-M23b-01 and P5-M23b-02, are closed too (neither needed the maintainer).
+- **Closed:** P5-M20-01 (option (a), the approximation is accepted), P5-M20-02, P5-M21-01 and P5-M23-01 (option (b) each, the forms are the new milestone M23b), P5-M22-01 (option (b), the interception UI is the new milestone M23c), P5-M22-04 (option (a), left for V1), P5-M21-02 (option (b), implemented: a passed-on connection reaches the test networks and the tunnels) and P5-M22-03 (option (b), the per-case field `upstream`). All of it is built on the branch `phase-5b` (PR #121, merged to `main` on 2026-10-27, `1c969c4`) and ran in CI run 40258339299 on `aebbae8`, green: M21, M22, M23b and M23c are done. The two small points the review of M23b found, P5-M23b-01 and P5-M23b-02, are closed too (neither needed the maintainer).
 - **Waiting for H1:** P5-M22-02 (the proxy is part of H1; the release notes say that it is not validated on ARM64 until the measurement exists).
 
 ### P5-M20-01 A hostname selector of a fault is tried in front of the lookup levels, not at its rank among them

@@ -512,8 +512,11 @@ func TestKeaAcceptsTheConfigurationTheDHCPActionsCompileTo(t *testing.T) {
 	w.dhcp(`{target: {device: esp32-43}, dhcp: {action: force_new_ip, ip: 10.10.0.200}}`, time.Second)
 	w.dhcp(`{target: {device: `+discID+`}, dhcp: {action: set_options, options: {router: 10.10.0.9, custom: [{code: 224, value: "0a0b"}]}}}`, time.Second, discID)
 	tg := compiled(t, w)
+	// numbers stay as written: Kea refuses an integer where it wants a float (`cache-threshold`)
 	var doc map[string]any
-	if err := json.Unmarshal([]byte(tg.Kea.Text), &doc); err != nil {
+	dec := json.NewDecoder(strings.NewReader(tg.Kea.Text))
+	dec.UseNumber()
+	if err := dec.Decode(&doc); err != nil {
 		t.Fatal(err)
 	}
 	d4 := doc["Dhcp4"].(map[string]any)

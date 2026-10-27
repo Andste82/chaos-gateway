@@ -380,6 +380,23 @@ func TestALeaseClassGivesItsClientsTheirOwnLeaseTimeAndNoOtherClient(t *testing.
 	}
 }
 
+// A short lease is exact on every answer, not only the first: Kea's lease caching (`cache-threshold`, on by default in
+// Kea 3) would answer a client that asks again within a quarter of its lease with the time it has left, so a 9 s
+// lease taken a second ago is offered and renewed as 8 s. The gateway switches caching off.
+func TestAClientThatAsksAgainSoonGetsTheWholeLeaseTimeNotWhatIsLeft(t *testing.T) {
+	cfg := Config{Subnets: []Subnet{loopbackSubnet()}, LeaseClasses: []LeaseClass{{Name: "cgw-test", MACs: []string{macA}, Seconds: 9, Min: 9, Max: 9}}}
+	startLoopbackKea(t, cfg)
+	r := newRelay(t, "127.0.0.2")
+	addr := r.take(macA).YIAddr
+	time.Sleep(1200 * time.Millisecond)
+	if offer, _ := r.asksFor(macA, time.Hour); leaseOf(t, offer) != 9*time.Second {
+		t.Errorf("the offer a second later: %v, want the class's 9s", leaseOf(t, offer))
+	}
+	if m, ok := r.renew(macA, addr, 2*time.Second); !ok || leaseOf(t, m) != 9*time.Second {
+		t.Errorf("the renewal a second later: %+v %v, want the class's 9s", m, ok)
+	}
+}
+
 // Silence: the clients of the list are not answered, whichever message they send, and the others are. A silenced
 // interface is silent for every client but the ones it excepts.
 func TestSilencedClientsAreNotAnsweredAndTheOthersAre(t *testing.T) {

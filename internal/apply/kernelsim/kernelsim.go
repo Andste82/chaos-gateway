@@ -1170,7 +1170,7 @@ func (k *Kernel) sysctlCmd(c executor.Command) (executor.Result, error) {
 
 func devOfSysctl(key string) string {
 	p := strings.Split(key, "/")
-	if len(p) == 5 && p[0] == "net" && p[2] == "conf" {
+	if len(p) == 5 && p[0] == "net" && p[2] == "conf" && p[3] != "all" && p[3] != "default" { // those two exist in every namespace
 		return p[3]
 	}
 	return ""

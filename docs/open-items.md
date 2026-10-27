@@ -795,6 +795,7 @@ Two findings needed a maintainer decision; the maintainer took the recommendatio
 - Status: closed (2026-10-15): decided — option (a). M26's Scope and Tests in `docs/plan.md` name the path view
   (device → gateway → uplink → a destination of its flows, with the fault badge), the §2.17 Device detail row marks it
   "(with M26)", and the development guide's list of left-out panels names it.
+  Built in M26 (2026-10-27): the Path card of the device detail (`docs/development.md`, "Metrics and flow view (M26)").
 - Severity: minor (a planning gap; no wrong behavior).
 - Reason: plan §2.17 lists "path view MQTT → broker with fault badge" for the device detail, and the reference design draws
   it (`docs/ui/prototype/DeviceDetail.dc.html`, "PATH · MQTT TO BROKER"). M12's Scope gives the device detail identity,
@@ -867,7 +868,8 @@ M27/M30.
 
 - Status: closed (2026-10-14): decided — the device's flows and its recent DNS queries stay with M26, as the plan
   says; plan §5 M26 names them in its Scope (a device's flows and its recent DNS queries on the device detail) and its
-  Tests (Playwright for the device detail's flows and recent DNS queries); `docs/development.md` (M12) says so
+  Tests (Playwright for the device detail's flows and recent DNS queries); `docs/development.md` (M12) says so.
+  Built in M26 (2026-10-27): the Flows and Recent DNS queries cards of the device detail.
 - Severity: low
 - Reason: deferred. Plan §2.17 lists flows, recent DNS, captures, the DHCP lease and test actions, TLS test and diagnose on
   the device detail. M12 scopes the detail to "the data available after Phase 2 (identity, lease, active faults,
@@ -1860,7 +1862,7 @@ P31-M35a-05, -09 and -10 by the maintainer's decision, the others by best practi
 
 ### P31-M35a-08 The explain card of the faults screen asks for a device as the source
 
-- Status: closed (2026-10-17): decided by best practice in the context of the project, with the maintainer's agreement — option (a) for M35a, as implemented: a forwarded connection is explained through the API (`GET /explain`, or the generated clients; `chaosctl` gets `explain` with M18, P31-AUDIT-06); the source choice "an address behind the uplink or the management network" in the explain card (option (b)) moves to M26, whose flow view lets a forwarded connection be picked (plan §5 M26 Scope)
+- Status: closed (2026-10-17): decided by best practice in the context of the project, with the maintainer's agreement — option (a) for M35a, as implemented: a forwarded connection is explained through the API (`GET /explain`, or the generated clients; `chaosctl` gets `explain` with M18, P31-AUDIT-06); the source choice "an address behind the uplink or the management network" in the explain card (option (b)) moves to M26, whose flow view lets a forwarded connection be picked (plan §5 M26 Scope). Built in M26 (2026-10-27): the source choice in the explain card, and `GET /flows` lists a forwarded connection so that it can be picked in the flow view.
 - Severity: low
 - Reason: needs-decision. Plan §5 M35a: "the preview and `explain` say that faults do not apply to forwarded connections".
   `GET /explain` answers a forwarded connection when `src` is a peer behind the entry side and `dst` the entry side's address
@@ -2919,7 +2921,7 @@ Phase 5 (M20 to M23c, application layer) is implemented: M20 to M23a are on `mai
 
 ## Phase 6 open items
 
-Phase 6 (M24 to M26, diagnostics and observability) is under way: M24 and M25 are implemented and closed after their reviews on the branch `worktree-phase-6` (not merged yet). Items below are what the implementation of a milestone found that no later milestone of the plan completes and that needs a decision of the maintainer.
+Phase 6 (M24 to M26, diagnostics and observability) is under way: M24 and M25 are implemented and closed after their reviews, M26 is implemented, all on the branch `worktree-phase-6` (not merged yet); M26 found nothing that needs a decision. Items below are what the implementation of a milestone found that no later milestone of the plan completes and that needs a decision of the maintainer.
 
 ### P6-M24-01 A diagnostic can be pointed at any address the gateway can reach, by a token with the scope `overlays`
 

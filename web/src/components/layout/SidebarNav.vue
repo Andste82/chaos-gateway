@@ -16,6 +16,7 @@ interface NavItem {
 const items: NavItem[] = [
   { label: 'Overview', icon: 'overview', to: '/' },
   { label: 'Devices', icon: 'devices', to: '/devices' },
+  { label: 'Flows', icon: 'flows', to: '/flows' },
   { label: 'Networks', icon: 'networks', to: '/networks' },
   { label: 'Access rules', icon: 'rules', to: '/rules' },
   { label: 'Faults', icon: 'faults', to: '/faults' },

@@ -19,6 +19,7 @@ vi.mock('./views/ScenariosView.vue', () => ({ default: { name: 'PageStub', rende
 vi.mock('./views/CapturesView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
 vi.mock('./views/InterceptView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
 vi.mock('./views/DiagnosticsView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
+vi.mock('./views/FlowsView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
 vi.mock('./views/RunView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
 vi.mock('./views/NetworksView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
 vi.mock('./views/RoutingView.vue', () => ({ default: { name: 'PageStub', render: () => null } }));
@@ -102,6 +103,9 @@ describe('the router', () => {
     await r.push('/diagnostics?type=ping&host=10.10.0.11');
     expect(r.currentRoute.value.name).toBe('diagnostics');
     expect(r.currentRoute.value.query).toEqual({ type: 'ping', host: '10.10.0.11' });
+    await r.push('/flows?device=d1&forwarded=1');
+    expect(r.currentRoute.value.name).toBe('flows');
+    expect(r.currentRoute.value.query).toEqual({ device: 'd1', forwarded: '1' });
     await r.push('/activity');
     expect(r.currentRoute.value.name).toBe('not-found');
   });

@@ -172,3 +172,22 @@ func TestAnOverlayActsOnTheTunnelItNames(t *testing.T) {
 		}
 	}
 }
+
+// A connection that came in through a port forward (M35a) has the forward's target as its device, but the device
+// did not start it: no scope holds it, so no connection check or wait sees a peer's connection as the device's.
+func TestAForwardedConnectionIsNotInTheScopeOfItsTargetDevice(t *testing.T) {
+	dev := "dev-1"
+	scope := model.Scope{Device: &dev}
+	net := "lan"
+	nscope := model.Scope{Network: &net}
+	set := map[string]bool{"dev-1": true}
+	own := engine.Flow{ID: "a", Device: "dev-1", Network: "lan"}
+	if !flowInScope(set, scope, own) || !flowInScope(set, nscope, own) {
+		t.Fatal("a connection the device started is in its scope")
+	}
+	fwd := own
+	fwd.Forwarded = true
+	if flowInScope(set, scope, fwd) || flowInScope(set, nscope, fwd) {
+		t.Error("a forwarded connection is in the scope of the target")
+	}
+}

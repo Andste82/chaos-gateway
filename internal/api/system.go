@@ -273,8 +273,8 @@ func (s *Server) GetCapabilities(c *gin.Context) {
 }
 
 // Features are the feature flags of this build (plan §2.15 capabilities): what the milestones up to
-// M14, M35a (port forwarding), M15 (runs), M20 (DNS faults and hostname selectors), M21 (the TLS responder: certificate cases) M23 (DHCP test actions) and M24 (diagnostics) provide.
-var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "dns.faults", "dns.hostname_selectors", "tls.responder", "tls.cases", "tls.intercept", "dhcp.actions", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards", "runs", "checks", "diagnostics", "probes"}
+// M14, M35a (port forwarding), M15 (runs), M20 (DNS faults and hostname selectors), M21 (the TLS responder: certificate cases) M23 (DHCP test actions), M24 (diagnostics), M25 (probes) and M26 (metrics) provide.
+var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "dns.faults", "dns.hostname_selectors", "tls.responder", "tls.cases", "tls.intercept", "dhcp.actions", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards", "runs", "checks", "diagnostics", "probes", "metrics"}
 
 // GetSystemInfo implements GET /system/info.
 func (s *Server) GetSystemInfo(c *gin.Context) {
@@ -333,7 +333,22 @@ type healthComponent struct {
 
 // GetHealth implements GET /system/health: without authentication only the overall status.
 func (s *Server) GetHealth(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(contextOf(c), 3*time.Second)
+	overall, comps := s.healthReport(contextOf(c))
+	body := gin.H{"status": overall}
+	if principalOf(c) != nil {
+		body["components"] = comps
+	}
+	code := 200
+	if overall == "unhealthy" {
+		code = 503
+	}
+	c.JSON(code, body)
+}
+
+// healthReport checks the managed components: the overall status (healthy, degraded or unhealthy) and one entry per
+// component. GET /system/health and the metrics endpoint (M26) report it.
+func (s *Server) healthReport(parent context.Context) (string, []healthComponent) {
+	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 	defer cancel()
 	api := healthComponent{Name: "api", Status: "healthy"}
 	overall := "healthy"
@@ -445,15 +460,7 @@ func (s *Server) GetHealth(c *gin.Context) {
 		comps[0].Status, comps[0].Detail = "degraded", "observation degraded: "+firstLine(snap.ObserveError)
 		worse("degraded")
 	}
-	body := gin.H{"status": overall}
-	if principalOf(c) != nil {
-		body["components"] = comps
-	}
-	code := 200
-	if overall == "unhealthy" {
-		code = 503
-	}
-	c.JSON(code, body)
+	return overall, comps
 }
 
 // GetPreflight implements GET /system/preflight: the checks of the host made when the process started, and

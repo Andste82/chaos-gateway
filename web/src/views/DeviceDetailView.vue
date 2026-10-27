@@ -5,8 +5,9 @@
 // be edited, "Apply profile" leads to the profiles with the device as the scope. The captures of the device
 // are listed with a "Capture" action (M23a). The DHCP test actions (short lease, delete lease, force a new
 // IP, set options, silence) are made and listed in the DHCP card beside the lease (M23b); a DNS fault or a TLS
-// case of the device is made in the fault dialog and edited where it is listed. The panels whose backend comes
-// later (flows view, diagnostics) arrive with their milestones; the HTTP exchanges of an interception case that acts on the device are listed in
+// case of the device is made in the fault dialog and edited where it is listed. The path view (the device, the gateway, the
+// uplink and a destination of its connections, with the fault badge), the device's connections and its recent DNS queries are
+// panels of M26; the HTTP exchanges of an interception case that acts on the device are listed in
 // a panel (M23c). The port forwards to the device (M35a)
 // are listed with their status and counter, each with a link to edit it on the networks page, which also
 // adds one to the device.
@@ -25,6 +26,9 @@ import AdoptDialog from '../components/devices/AdoptDialog.vue';
 import DeviceDialog from '../components/devices/DeviceDialog.vue';
 import RemoveDeviceDialog from '../components/devices/RemoveDeviceDialog.vue';
 import CapturePanel from '../components/captures/CapturePanel.vue';
+import DeviceDnsQueries from '../components/flows/DeviceDnsQueries.vue';
+import DeviceFlows from '../components/flows/DeviceFlows.vue';
+import PathView from '../components/flows/PathView.vue';
 import DeviceExchanges from '../components/intercept/DeviceExchanges.vue';
 import DhcpActionsCard from '../components/dhcp/DhcpActionsCard.vue';
 import ActiveFaultList from '../components/faults/ActiveFaultList.vue';
@@ -202,6 +206,9 @@ const changeBlocked = computed(() => !!state.data.value?.pending_confirm || conn
 useApiScreen('this device', () => [
   { method: 'GET', path: `/devices/${props.id}`, note: 'identity, lease, winning faults, counters' },
   { method: 'GET', path: `/overlays?device=${props.id}`, note: "the overlays that act on the device, its network's and groups' included" },
+  { method: 'GET', path: `/flows?device=${props.id}`, note: "the device's connections, a forwarded one included" },
+  { method: 'GET', path: `/dns/queries?device=${props.id}&limit=10`, note: "the DNS proxy's newest queries of the device" },
+  { method: 'GET', path: '/explain?device=…&dst=…&protocol=…&port=…', note: 'what acts on the path to a destination of the device’s connections' },
   { method: 'GET', path: '/port-forwards', note: 'the port forwards, those to this device listed' },
   { method: 'GET', path: '/captures', note: 'the captures, those of this device listed' },
 ]);
@@ -296,6 +303,10 @@ useApiScreen('this device', () => [
           <ActiveFaultList v-else :items="faults" removable editable :remove-disabled="changeBlocked" @edit="editFault" />
         </SectionCard>
 
+        <PathView :device="{ id: d.id, name: d.name }" />
+
+        <DeviceFlows :device="{ id: d.id, name: d.name }" />
+
         <SectionCard title="Traffic">
           <dl class="m-0 grid grid-cols-[160px_1fr] gap-x-4 gap-y-2 text-sm" data-testid="device-counters">
             <dt class="text-text-2">Upload</dt>
@@ -311,6 +322,8 @@ useApiScreen('this device', () => [
             </dd>
           </dl>
         </SectionCard>
+
+        <DeviceDnsQueries :device="{ id: d.id, name: d.name }" />
 
         <DeviceExchanges :device="{ id: d.id, name: d.name }" :active="intercepted" />
 

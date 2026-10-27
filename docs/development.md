@@ -3422,7 +3422,8 @@ offline and safe-mode states. The screens of M13 (faults, rules, profiles, the p
 panel) and of M14 (networks, routing, technical view) follow in their own sections below; panels whose backend comes
 later (running scenario, captures, diagnostics, DHCP and TLS test actions) are left out, and a device's flows and recent
 DNS queries come with the flow view of M26 (P3-M12-02), and so does the path view of §2.17 (device → gateway → uplink →
-destination with the fault badge), which is drawn from those flows (P3-AUDIT-37).
+destination with the fault badge), which is drawn from those flows (P3-AUDIT-37). M26 built them: "Metrics and flow view
+(M26)" below.
 
 ### How it works
 
@@ -6650,6 +6651,99 @@ loss and the rate of a profile within the tolerances under KVM or native executi
 | The faults of a device do not touch the gateway's diagnostics (§2.12) | level 1 `TestFaultsAndRulesTargetTheProbeAndNobodyElse` (the gateway's ping next to the probe's), `TestTheEchoRunOfAProbeSeesTheDelayOfItsFaultAndTheGatewayDoesNot` |
 | The design is added to §2.17 | plan §2.17, the row "Probes"; "Not yet designed" no longer lists them |
 
+## Metrics and flow view (M26)
+
+Plan §2.12, §2.17 and M26 (optional for V1, built at the maintainer's request). `GET /metrics` is the Prometheus endpoint (the package `internal/metrics` writes the text format, `internal/api/metrics.go`
+collects the values); the Flows screen lists the connections the gateway tracks; the device detail has the panels *Path*, *Flows* and *Recent DNS queries*; the explain card of the Faults screen takes an
+address behind the uplink or the management network as its source. It closes `docs/open-items.md` P3-M12-02 (a device's flows and recent DNS queries), P3-AUDIT-37 (the path view) and
+P31-M35a-08 (the explain card's source).
+
+### How it works
+
+- **The endpoint.** `GET /metrics` (scope `read`, so a scraper needs an API token; `Content-Type: text/plain; version=0.0.4`) answers from the engine's snapshot and the kernel at the moment of the
+  request: nothing is kept between two scrapes, no client library is linked (`internal/metrics.Set` collects the series of one scrape and writes them sorted, with the escapes of the format, and reports a
+  name or label the format does not allow instead of writing it). The spec lists every family under `/metrics`. All names start with `chaosgw_`:
+  - **Counters of M7 to M9 and M35a** are read by the code that serves them over the REST API (`readOverlayContext`, `counterOf`, `withDNS`, `withTLS`, `ruleCounter`, `forwardCounter`), so the two
+    cannot disagree: `chaosgw_fault_{packets,bytes}_total{layer,id,kind,name}` per configured fault (`layer="config"`, `kind` is the family) and per overlay (`layer="overlay"`, `kind` the overlay's kind:
+    fault, profile, dns, tls, wireguard), `chaosgw_rule_{packets,bytes}_total{layer,id,name,action}` per access rule of the compiled plan (configured and overlay rules) and for the anti-lockout rule
+    (`layer="system"`), `chaosgw_forward_{connections,bytes}_total{id,name,entry}` per forward in the kernel, and `chaosgw_counter_epoch`, the epoch `GET /state` reports (a counter that starts over is a
+    counter reset for Prometheus; the per-object epochs stay in the REST API).
+  - **Queues.** `chaosgw_queue_{sent_packets,sent_bytes,dropped_packets,overlimits}_total` and the gauges `chaosgw_queue_{backlog_packets,backlog_bytes,epoch}` per netem leaf (`fault_id`, `layer`, `source`,
+    `interface`, `direction`), from `Engine.ReadQueues` with the epoch the engine tracks (the label is the fault id, which is unique per leaf; an overlay and a profile can have several leaves).
+  - **Interfaces.** `chaosgw_interface_up` and `chaosgw_interface_{receive,transmit}_{bytes,packets,errors,dropped}_total{interface,role}` for the interfaces the last apply made or uses (`role` uplink,
+    management, network for a bridge, wireguard): one executor read `links` (`ip -j -s -s link`) in the gateway's namespace, whose `stats64` the package `internal/linux` now parses (`linux.LinkStats`; the
+    API container does not necessarily share the namespace of the interfaces, so it is not `/sys/class/net`).
+  - **Devices and totals.** `chaosgw_device_online`, `chaosgw_device_{upload,download}_bytes_per_second` and `chaosgw_device_flows_active` (the last three while the traffic is known, as in `DeviceView`) with
+    `device`, `name`, `network`, `origin`; `chaosgw_devices`, `chaosgw_devices_online`, `chaosgw_flows_active`, `chaosgw_overlays_active`, `chaosgw_leases`, `chaosgw_runs_active`, `chaosgw_runs_queued`.
+  - **System.** `chaosgw_health_ok` and `chaosgw_component_status{component,status}` from the same check as `GET /system/health` (`healthReport`, split out of the handler), `chaosgw_system_cpus`,
+    `chaosgw_system_load{1,5,15}` and `chaosgw_system_memory_{total,available}_bytes` (from `/proc`, `Config.ProcDir` for tests), `chaosgw_disk_{free,total}_bytes{volume}` for the state volume and the capture
+    volume (statfs, or the capture manager's own reading), `chaosgw_build_info`, `chaosgw_start_time_seconds`, `chaosgw_uptime_seconds`, `chaosgw_revision`, `chaosgw_apply_ok`.
+  - **`chaosgw_collector_up{source}`** is 0 for a source that could not be read at this scrape (`counters`, `queues`, `interfaces`); the series that come from it are left out then and are never reported as 0,
+    so an alert on a rate does not see a drop to zero that was a failed read. The feature `metrics` is in `GET /capabilities`.
+- **Flows.** `GET /flows` lists the connections of the test networks (M6a). Since M26 a connection that came in through a port forward (M35a) is listed as well, as a flow of the forward's target device with
+  `forwarded: true`: its `src` is the peer behind the entry side, its `dst` the entry side's address and its `dport` the external port, which is what `GET /explain` needs to explain it
+  (`engine.Flows` takes the reply's source as the target, as the rate computation does). A connection to the gateway's own ports that no forward translated is still no flow.
+- **The Flows screen** (`views/FlowsView.vue`, `components/flows/ConnectionTable.vue`, `lib/flows.ts`). The table is read every 3 s (`useFlows`; Pause holds what is shown) and sorted newest first by the start
+  conntrack noted. The device and the network filter on the gateway's side, the text (addresses, host name, ports, service), the protocol and "only forwarded connections" here; all five are in the address, so
+  the link *All flows* of the device detail lands on the device's connections. A row shows the service (the well-known port's name, `MQTT/TLS`, `NTP`, else the protocol), the device (a link), the source, the
+  destination (the name the DNS proxy returned for it, else the address, with the port), the state, the bytes in both directions, the age and *Explain*. Up to 200 rows are drawn, 200 more with *Show more*.
+- **The device detail.** *Path*: the device, the gateway, the uplink and one destination of the device's connections (`pathTargets`: the one that moved the most first, a forwarded connection and a protocol that
+  cannot be explained left out; a choice when there are several), and `GET /explain` for the device and that destination, address, protocol and port (key `['explain', ...]`, read every 5 s and on the events that
+  change faults or the revision). The fault that wins in each family stands as a badge on the line out of the device ("2 faults", or the single fault's summary); the line is blue when nothing acts, orange while
+  a fault does, red while the access verdict drops or rejects the connection, and a sentence under it says the same in words ("No fault acts on the way: …", "A fault acts on the way from … to …", "Dropped by a
+  configured rule: … cannot reach …"). *Flows*: the eight newest connections of the device, a forwarded one marked *FORWARDED* with its peer, and the link to all of them. *Recent DNS queries*: the ten newest the
+  DNS proxy logged of the device (`GET /dns/queries?device=&limit=10`), with the type, the answer, the time it took, an answer a DNS fault changed in orange with "changed by a DNS fault", and one that is no
+  answer (NXDOMAIN, SERVFAIL, a timeout) in red with its code.
+- **The explain card.** *Source*: a device, an address behind the uplink, an address behind the management network (offered only when a host interface is assigned the role management: in the two-port topology
+  the management network is behind the uplink), or another address. For the two entry sides the destination defaults to the address of the entry interface (`GET /uplink`, `GET /system/interfaces`), until it is
+  edited, and a sentence says that a connection a port forward carries comes from a peer behind that side to that address on the forward's external port. The source address is checked as an IPv4 address. *Explain* on a
+  row of the Flows screen opens the Faults screen with the card filled in (`?explain=1&device=|src=&dst=&protocol=&port=`), explains at once and scrolls to the card; a source address whose destination is the
+  uplink's or the management interface's address is shown as "an address behind the uplink" (or management) once those addresses are known.
+
+### Decisions
+
+Taken by best practice where the plan leaves room; none needs the maintainer.
+
+1. **The text format is written here, not by `client_golang`:** the endpoint keeps no state, so there is nothing to register, and no dependency is added to an appliance image for two hundred lines.
+2. **A series that cannot be read is left out, not zero,** and `chaosgw_collector_up` says which source failed; a gap is what Prometheus alerts on correctly.
+3. **Labels are the id and the name, not only one:** the id is stable and unique, the name is what a dashboard shows. A label with an empty value is not written.
+4. **Overlays of every kind count under one family per thing (`chaosgw_fault_*`) with `kind`,** and rules under `chaosgw_rule_*`: a query "all packets that faults impaired" is one sum, and the REST API's `counters` of the same objects are the same numbers.
+5. **The interface counters are the interfaces the gateway applied,** not every interface of the machine: a metric per veth of every namespace would be a series per probe and capture that nobody asked for.
+6. **The endpoint needs a token (`read`).** The health check is the one unauthenticated endpoint (for the container runtime); metrics name devices and faults.
+7. **A forwarded connection is a flow of the target device,** with the peer as its source, rather than a separate list: the device's rates already count it for the target (M35a), and the flow view is where it is picked.
+   The scenario runs (M15, M16) do not treat it as the device's own: `flowInScope` skips a forwarded flow, because a check on "the device's connections" means the ones the device starts, not the ones a peer starts to it.
+8. **No per-device DNS query metric:** the DNS proxy keeps a bounded log of queries, not a counter, so a count over it would shrink as the log rotates and look like a counter reset. §2.13's "DNS queries" stay with `GET /dns/queries` and the Recent DNS queries card; a counter in the proxy would be a change of M6b and is not part of M26.
+8. **The path view asks about an address, not a host name:** a flow has the address; a hostname fault acts on the addresses the DNS proxy resolved (the DNS-derived sets), which the explanation covers.
+9. **The badge sits on the way out of the device,** where the gateway impairs the traffic (the prototype's place), and shows the winner per family; "2 faults" when several, the list under the line.
+10. **The Flows screen is polled (3 s) like the Interception screen,** not driven by events: connections come and go without one.
+
+### Tests
+
+Level 0, run here. Go: `internal/metrics` (the format: sorting, escapes, whole numbers, what is refused), `internal/linux` (`TestParseLinkInterfaceCounters`), `internal/api/metrics_test.go`
+(the counters of a configured fault, an overlay, an access rule, the anti-lockout rule, a forward, the queues and the interfaces against the values the simulated kernel is given and against the REST API's
+views; the rise after more traffic; the device, the totals, the health, the system numbers from a fake `/proc`; the overlay kinds; the token; the sources that fail; a forwarded connection as a flow and
+its explanation), the list of operations in `misc_test.go` (`/metrics` belongs to M26 in the build), `tools/ciconfig` (the list `M26_LEVEL1` in every testbed job). Web unit tests (`make test-web`):
+`src/lib/flows.test.ts` (names, filters, the explain request and its address, the destinations of the path, the badge, the DNS rows) and the route in `router.test.ts`. Playwright against the mocked API
+(`e2e/flows.spec.ts`, 19 tests): the Flows screen (the rows, the filters and the address, Pause, the empty and the failed state), the device detail (its flows, a forwarded one included, the more-link, its DNS
+queries with an answer a fault changed and one that failed, the empty and failed states), the path view with and without a fault on it (blue, orange with the badge, red when a rule drops, another destination,
+a fault that appears), and the explain card (an address behind the uplink and the management network, the validation, no management source in the two-port topology, a connection picked in the flow view
+explained at once, for a device and for a forwarded one).
+
+Level 1 (the list `M26_LEVEL1`): `internal/api/e2e_metrics_test.go` (`TestMetricsCountKnownTrafficOnTheRealKernel`: ten echo requests of a device through a fault, and the counters of the fault, its queues and the
+interfaces of the bridge and the uplink against them). It ran in the emulated VM of the development machine (kernel 6.8.0-142, software emulation: 292 s) and passed; CI runs it natively, the nightly matrix also on 7.0.0-38.
+
+### Acceptance map (plan M26 "Scope" and "Tests")
+
+| Plan M26 | Test |
+|---|---|
+| Scope: Prometheus metrics endpoint (counters from M7–M9, interface and queue statistics, system health) | `TestMetricsReportTheCountersOfFaultsRulesForwardsAndQueuesAgainstKnownTraffic`, `TestMetricsCountOverlaysByKind`, `TestMetricsLeaveOutWhatCannotBeReadAndSayWhichSourceFailed`, `TestMetricsNeedAToken`, level 1 `TestMetricsCountKnownTrafficOnTheRealKernel` |
+| Scope: flow view in the UI (flow data from M6a) | `e2e/flows.spec.ts` (the Flows screen, its filters, Pause), `lib/flows.test.ts`, `TestAForwardedConnectionIsAFlowOfTheTargetDevice` |
+| Scope: a device's flows and recent DNS queries on the device detail (P3-M12-02) | `e2e/flows.spec.ts` (the device detail's panels) |
+| Scope: the explain card's source behind the uplink or the management network, destination defaulting to the entry side's address, a forwarded connection picked in the flow view explained (P31-M35a-08) | `e2e/flows.spec.ts` (the explain card), `TestAForwardedConnectionIsAFlowOfTheTargetDevice` (the flow and its explanation) |
+| Scope: the device detail's path view with the fault badge (P3-AUDIT-37) | `e2e/flows.spec.ts` (the path view) |
+| Tests: metric values against known traffic | `TestMetricsReportTheCountersOfFaultsRulesForwardsAndQueuesAgainstKnownTraffic` (level 0, the simulated kernel's counters), level 1 `TestMetricsCountKnownTrafficOnTheRealKernel` |
+| Tests: Playwright for the flow view, the device detail's flows and recent DNS queries, and the path view with and without a fault | `e2e/flows.spec.ts` |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -6685,9 +6779,9 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
+Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
 tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of packet captures (M17: the AF_PACKET sockets
-need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of the DNS faults and hostname selectors (M20, with the executor's netlink connection), those of the TLS responder (M21), those of the interception proxy (M22, with the real mitmproxy, which the level 0 job installs too and requires), those of the DHCP test actions (M23, udhcpc and the real Kea), those of the probes and the calibration (M25, the real Kea, the real executor and the real netem), those of Kea's packet socket after a link flap
+need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of the DNS faults and hostname selectors (M20, with the executor's netlink connection), those of the TLS responder (M21), those of the interception proxy (M22, with the real mitmproxy, which the level 0 job installs too and requires), those of the DHCP test actions (M23, udhcpc and the real Kea), those of the probes and the calibration (M25, the real Kea, the real executor and the real netem), the one of the metrics (M26), those of Kea's packet socket after a link flap
 (issue #64), the tests against the real Kea (I64-05) and those of the observed state of a device (the acceptance of
 issue #79, issue #92) must each pass, so one that is renamed, skips or is no
 longer built fails the job. `tools/ciconfig` checks that every job passes every list of the file and that the list quoted here names them all

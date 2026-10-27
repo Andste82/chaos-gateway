@@ -2338,6 +2338,37 @@ paths:
       tags: [observability]
       operationId: getMetrics
       summary: Prometheus metrics
+      description: |
+        The gateway's metrics in the Prometheus text format (version 0.0.4), read from the engine and the kernel at the
+        moment of the request; nothing is kept between two scrapes. A scraper authenticates with an API token of the
+        scope `read`. All names start with `chaosgw_`.
+
+        - Counters (the values the REST API shows as `counters`, so the two agree): `chaosgw_fault_packets_total` and
+          `chaosgw_fault_bytes_total` per fault and overlay (`layer` `config` or `overlay`, `id`, `kind`, `name`),
+          `chaosgw_rule_packets_total` and `chaosgw_rule_bytes_total` per access rule, overlay rule and the
+          anti-lockout rule (`layer` `config`, `overlay` or `system`, `id`, `name`, `action`: the new connections each
+          decided), `chaosgw_forward_connections_total` and `chaosgw_forward_bytes_total` per port forward.
+          `chaosgw_counter_epoch` is the epoch of the counters as a whole (`GET /state`); a counter that starts over
+          is a counter reset for Prometheus.
+        - Netem queues, per fault id, direction and interface of the tc tree (`fault_id`, `layer`, `source`,
+          `interface`, `direction`): `chaosgw_queue_sent_packets_total`, `chaosgw_queue_sent_bytes_total`,
+          `chaosgw_queue_dropped_packets_total`, `chaosgw_queue_overlimits_total`, the gauges
+          `chaosgw_queue_backlog_packets`, `chaosgw_queue_backlog_bytes` and `chaosgw_queue_epoch` (the epoch of the
+          queue, which changes when it is created again).
+        - Interfaces the gateway applied (the uplink, the management interface, the bridges of the test networks and
+          the WireGuard interfaces; `interface`, `role`): `chaosgw_interface_up` and the counters
+          `chaosgw_interface_{receive,transmit}_{bytes,packets,errors,dropped}_total`.
+        - Devices (`device`, `name`, `network`, `origin`): `chaosgw_device_online`,
+          `chaosgw_device_upload_bytes_per_second`, `chaosgw_device_download_bytes_per_second` and
+          `chaosgw_device_flows_active` (the last three while the traffic is known), and the totals
+          `chaosgw_devices`, `chaosgw_devices_online`, `chaosgw_flows_active`, `chaosgw_overlays_active`,
+          `chaosgw_leases`, `chaosgw_runs_active` and `chaosgw_runs_queued`.
+        - System: `chaosgw_health_ok`, `chaosgw_component_status{component,status}` (1 for the status a component has),
+          `chaosgw_system_cpus`, `chaosgw_system_load{1,5,15}`, `chaosgw_system_memory_{total,available}_bytes`,
+          `chaosgw_disk_{free,total}_bytes{volume}` (`state`, `captures`), `chaosgw_build_info`,
+          `chaosgw_start_time_seconds`, `chaosgw_uptime_seconds`, `chaosgw_revision` and `chaosgw_apply_ok`.
+        - `chaosgw_collector_up{source}` is 0 for a source that could not be read at this scrape (`counters`,
+          `queues`, `interfaces`); the series that come from it are left out then, they are not reported as 0.
       x-milestone: M26
       x-required-scope: read
       responses:
@@ -5293,6 +5324,12 @@ components:
             selects (the DNS-derived address sets hold them) or that appears in the proxy's query log (the name asked
             and the CNAME targets of the answer; the last 20000 queries are kept).
         nat_src: {$ref: '#/components/schemas/Ipv4'}
+        forwarded:
+          type: boolean
+          description: |
+            The connection came in through a port forward (M35a, listed since M26): `src` is the peer behind the entry
+            side, `dst` the entry side's address and `dport` the external port, and `device` and `network` are those of
+            the forward's target. `GET /explain` with `src`, `dst`, `protocol` and `port` of the flow explains it.
         state:
           type: string
           description: TCP state from conntrack (e.g. `ESTABLISHED`), or `ASSURED`/`UNREPLIED`.

@@ -19,11 +19,13 @@ import type {
   CaptureStorage,
   Configuration,
   DhcpLease,
+  DnsQueryLogEntry,
   DomainChange,
   Explanation,
   DeviceView,
   Event as GatewayEvent,
   FaultView,
+  Flow,
   GatewayState,
   GroupView,
   Health,
@@ -618,6 +620,12 @@ export class MockGateway {
   forwardViews: Record<string, Partial<PortForwardView>> = {};
   /** The answer of GET /explain. */
   explanation?: Explanation;
+  /** The answer of GET /explain by the query, instead of `explanation` (undefined: no such device). */
+  explainWith?: (query: Record<string, string>) => Explanation | undefined;
+  /** The connections GET /flows lists (the filters device and network select from them). */
+  flows: Flow[] = [];
+  /** The query log of the DNS proxy, oldest first (GET /dns/queries lists it newest first; the filters device, name and since select). */
+  dnsQueries: DnsQueryLogEntry[] = [];
   /** DHCP leases by network id (GET /networks/{id}/leases). */
   leases: Record<string, DhcpLease[]> = {};
   /** The status of WireGuard clients by client id; a client without one is offline, never seen. */
@@ -1101,7 +1109,21 @@ export class MockGateway {
     if (path === '/profiles') return json(200, this.page(this.profileViews(), url));
     if (path === '/faults') return json(200, this.page(this.faultList(), url));
     if (path === '/rules') return json(200, { system_rules: [this.systemRule()], ...this.page(this.ruleList(), url) });
-    if (path === '/explain') return this.explanation ? json(200, this.explanation) : problem(404, 'not_found', 'no such device');
+    if (path === '/explain') {
+      const e = this.explainWith ? this.explainWith(Object.fromEntries(url.searchParams)) : this.explanation;
+      return e ? json(200, e) : problem(404, 'not_found', 'no such device');
+    }
+    if (path === '/flows') {
+      const device = url.searchParams.get('device');
+      const network = url.searchParams.get('network');
+      return json(200, this.page(this.flows.filter((f) => (!device || f.device === device) && (!network || f.network === network)), url));
+    }
+    if (path === '/dns/queries') {
+      const device = url.searchParams.get('device');
+      const name = url.searchParams.get('name');
+      const rows = this.dnsQueries.filter((q) => (!device || q.device === device) && (!name || q.name === name));
+      return json(200, this.page([...rows].reverse(), url));
+    }
     if (path === '/revisions/active') return json(200, this.activeRevision());
     if (path === '/revisions' && method === 'GET') return json(200, this.page([...this.applied].reverse(), url));
     const diff = /^\/revisions\/(\d+)\/diff$/.exec(path);

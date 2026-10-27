@@ -429,6 +429,9 @@ type Flow struct {
 	Download     Traffic
 	// Service is set when the flow is redirected into the service namespace (plan §3.3).
 	Service string
+	// Forwarded is set for a connection that came in through a port forward (M35a): Src is the peer behind the entry
+	// side, Dst the entry side's address, and Device and Network are the target's.
+	Forwarded bool
 	// StartedAt is when the connection was first tracked (M6a-03); zero when `nf_conntrack_timestamp`
 	// has not reported it yet (just after the gateway starts, before the first full apply).
 	StartedAt time.Time
@@ -487,7 +490,24 @@ func (e *Engine) Flows(ctx context.Context) ([]Flow, error) {
 			f.Service = "tls_responder"
 		}
 		if f.Device == "" && f.Network == "" {
-			continue // not a flow of a test network
+			// a connection from outside the test networks is a flow of the device a port forward sent it to (M26: the
+			// flow view lists it, so it can be explained)
+			target, ok := forwardTarget(c)
+			if !ok {
+				continue // not a flow of a test network
+			}
+			if dev, ok := snap.Identity.OwnerOf(target); ok {
+				f.Device = dev
+			}
+			for _, b := range snap.Bridges {
+				if b.Address.Masked().Contains(target) {
+					f.Network = b.NetworkID
+				}
+			}
+			if f.Device == "" && f.Network == "" {
+				continue
+			}
+			f.Forwarded = true
 		}
 		f.ID = flowID(c)
 		f.StartedAt = c.StartedAt

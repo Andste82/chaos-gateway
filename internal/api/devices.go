@@ -300,6 +300,7 @@ type flowView struct {
 	// DstHostname is a name the DNS proxy returned for Dst to the device that opened the flow, as far as a
 	// hostname selector of a rule or a fault selects it (the DNS-derived sets hold those, plan §2.6).
 	DstHostname string     `json:"dst_hostname,omitempty"`
+	Forwarded   bool       `json:"forwarded,omitempty"`
 	ID          string     `json:"id"`
 	NatSrc      string     `json:"nat_src,omitempty"`
 	Network     string     `json:"network,omitempty"`
@@ -357,7 +358,7 @@ func (s *Server) ListFlows(c *gin.Context, params model.ListFlowsParams) {
 		if (wantDevice != "" && f.Device != wantDevice) || (wantNet != "" && f.Network != wantNet) {
 			continue
 		}
-		fv := flowView{Device: f.Device, DPort: f.DPort, Dst: f.Dst.String(), ID: f.ID, Network: f.Network, Protocol: f.Protocol, Service: f.Service, SPort: f.SPort,
+		fv := flowView{Device: f.Device, DPort: f.DPort, Dst: f.Dst.String(), ID: f.ID, Network: f.Network, Protocol: f.Protocol, Service: f.Service, SPort: f.SPort, Forwarded: f.Forwarded,
 			Src: f.Src.String(), State: f.State, Upload: trafficOf(f.Upload), Download: trafficOf(f.Download)}
 		if f.NatSrc.IsValid() {
 			fv.NatSrc = f.NatSrc.String()

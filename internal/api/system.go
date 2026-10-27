@@ -263,6 +263,7 @@ func (s *Server) GetCapabilities(c *gin.Context) {
 		StepTypes:     steps,
 		CheckTypes:    run.SupportedCheckTypes,
 	}
+	caps.DiagnosticTypes = &domain.DiagnosticTypes
 	// the limits of plan §3.3: the ids the mark layout has, the classes the compiler accepts per interface
 	caps.Limits = &struct {
 		ClassLimitPerInterface *int `json:"class_limit_per_interface,omitempty"`
@@ -272,8 +273,8 @@ func (s *Server) GetCapabilities(c *gin.Context) {
 }
 
 // Features are the feature flags of this build (plan §2.15 capabilities): what the milestones up to
-// M14, M35a (port forwarding), M15 (runs), M20 (DNS faults and hostname selectors), M21 (the TLS responder: certificate cases) and M23 (DHCP test actions) provide.
-var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "dns.faults", "dns.hostname_selectors", "tls.responder", "tls.cases", "tls.intercept", "dhcp.actions", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards", "runs", "checks"}
+// M14, M35a (port forwarding), M15 (runs), M20 (DNS faults and hostname selectors), M21 (the TLS responder: certificate cases) M23 (DHCP test actions) and M24 (diagnostics) provide.
+var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "dns.faults", "dns.hostname_selectors", "tls.responder", "tls.cases", "tls.intercept", "dhcp.actions", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards", "runs", "checks", "diagnostics"}
 
 // GetSystemInfo implements GET /system/info.
 func (s *Server) GetSystemInfo(c *gin.Context) {

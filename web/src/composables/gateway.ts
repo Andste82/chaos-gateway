@@ -240,6 +240,18 @@ export function useCanCapture() {
 }
 
 /**
+ * Whether this gateway has diagnostics (M24): its features list `diagnostics`. Undefined until the capabilities are known;
+ * capabilities that cannot be read do not take the screen away (the gateway answers `unsupported_feature` itself).
+ */
+export function useCanDiagnose() {
+  const caps = useCapabilities();
+  return computed<boolean | undefined>(() => {
+    if (caps.data.value) return caps.data.value.features.includes('diagnostics');
+    return caps.error.value ? true : undefined;
+  });
+}
+
+/**
  * Whether this gateway has the interception (M22): its features list `tls.intercept`. Undefined until the capabilities are known;
  * capabilities that cannot be read do not take the interception away (the gateway answers `unsupported_feature` itself).
  */

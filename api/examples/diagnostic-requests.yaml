@@ -1,0 +1,10 @@
+# Example `POST /diagnostics` bodies (schema `DiagnosticRequest`, plan §2.12): one of each type, run from the gateway.
+- {type: ping, host: 203.0.113.10, count: 10}
+- {type: tcp, host: broker.example.com, port: 8883, timeout: 3s}
+- {type: udp, host: 203.0.113.10, port: 5683, payload: ping}
+- {type: dns, host: 203.0.113.10, dns_name: broker.example.com}
+- {type: dns, host: broker.example.com}
+- {type: http, host: api.example.com, url: "https://api.example.com/health"}
+- {type: tls, host: broker.example.com, port: 8883, sni: broker.example.com}
+- {type: path, host: broker.example.com, port: 8883}
+- {type: path, host: 10.10.0.20, port: 1883, tls: false, from: {gateway: true}}

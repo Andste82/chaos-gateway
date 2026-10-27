@@ -43,7 +43,7 @@ sudo sh host-setup.sh --test-interface lan0
 ```
 
 It installs Docker if missing, loads the kernel modules now and at boot
-(`/etc/modules-load.d/chaos-gateway.conf`), enables IPv4 forwarding (`/etc/sysctl.d/90-chaos-gateway.conf`),
+(`/etc/modules-load.d/chaos-gateway.conf`), enables IPv4 forwarding and the unprivileged ICMP socket of the ping of the diagnostics (`net.ipv4.ping_group_range`, M24) in `/etc/sysctl.d/90-chaos-gateway.conf`,
 keeps systemd-networkd off each test interface (below), prints the netplan changes the test interfaces need and
 ends with the check of each test interface. It never touches the uplink or the management configuration, or any
 netplan file, and it refuses, before it changes anything, a `--test-interface` that has the default route, an IPv4
@@ -308,6 +308,14 @@ A device on a test network gets no address. In this order:
 5. **Capture on the port, not on the bridge.** `sudo tcpdump -eni lan0 port 67 or port 68` shows the device's
    requests and the gateway's answers on the wire. Frames the bridge forwards between its ports are not seen on
    the bridge device, so a capture on `br-<network>` can miss what the device sends or receives.
+
+## Diagnostics: the ping needs a sysctl of the host
+
+The ping of the diagnostics (M24, `POST /diagnostics` and the Diagnostics screen) runs in the unprivileged API container, which shares the
+network namespace of the host. It opens the ICMP datagram socket that Linux gives a group listed in `net.ipv4.ping_group_range`, so the value of the
+host counts. The host setup writes `net.ipv4.ping_group_range=0 2147483647` into `/etc/sysctl.d/90-chaos-gateway.conf` and sets it. On a host that was set up
+before M24, run the host setup again (it is safe to run again), or set the sysctl by hand (`sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"` and the
+same line in `/etc/sysctl.d/`); until then a ping answers `cannot open an ICMP socket …` and the other diagnostics work.
 
 ## Upgrading an installation made before issue #64 was fixed
 

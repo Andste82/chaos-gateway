@@ -23,7 +23,7 @@ const items: NavItem[] = [
   { label: 'Scenarios', icon: 'scenarios', to: '/scenarios' },
   { label: 'Captures', icon: 'captures', to: '/captures' },
   { label: 'Interception', icon: 'interception', to: '/interception' },
-  { label: 'Diagnostics', icon: 'diagnostics', later: 'M24' },
+  { label: 'Diagnostics', icon: 'diagnostics', to: '/diagnostics' },
   { label: 'Activity', icon: 'activity', later: 'a later milestone' },
 ];
 

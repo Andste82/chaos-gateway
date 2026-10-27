@@ -67,6 +67,9 @@ expect_valid("run-request.yaml", "RunRequest", yaml.safe_load((HERE / "run-reque
 for i, capture in enumerate(yaml.safe_load((HERE / "capture-requests.yaml").read_text())):
     expect_valid(f"capture-requests.yaml[{i}]", "CaptureRequest", capture)
 
+for i, req in enumerate(yaml.safe_load((HERE / "diagnostic-requests.yaml").read_text())):
+    expect_valid(f"diagnostic-requests.yaml[{i}]", "DiagnosticRequest", req)
+
 # Things the schema itself must reject.
 expect_invalid("loss without %", "NetemParams", {"loss": "10"})
 expect_invalid("duration without unit", "NetemParams", {"latency": "200"})
@@ -81,6 +84,9 @@ expect_invalid("upper-case MAC", "MacAddress", "AA:BB:CC:DD:EE:FF")
 expect_invalid("step without at", "Step", {"id": "x", "restore": True})
 expect_invalid("capture scope with two scopes", "CaptureRequest", {"scope": {"uplink": True, "network": "IoT"}})
 expect_invalid("capture ring buffer of one file", "CaptureRequest", {"scope": {"uplink": True}, "ring_buffer": {"files": 1, "file_size": "1MiB"}})
+expect_invalid("diagnostic of an unknown type", "DiagnosticRequest", {"type": "traceroute", "host": "10.0.0.1"})
+expect_invalid("diagnostic from the gateway and a probe", "DiagnosticRequest", {"type": "ping", "host": "10.0.0.1", "from": {"gateway": True, "probe": "p1"}})
+expect_invalid("diagnostic without host", "DiagnosticRequest", {"type": "ping"})
 expect_invalid("bad step id", "Step", {"id": "Bad Id", "at": "1s", "restore": True})
 expect_invalid("schema version 2", "Configuration", {**config, "schema_version": 2})
 

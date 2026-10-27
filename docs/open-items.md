@@ -2921,7 +2921,7 @@ Phase 5 (M20 to M23c, application layer) is implemented: M20 to M23a are on `mai
 
 ## Phase 6 open items
 
-Phase 6 (M24 to M26, diagnostics and observability) is under way: M24 and M25 are implemented and closed after their reviews, M26 is implemented, all on the branch `worktree-phase-6` (not merged yet); M26 found nothing that needs a decision. Items below are what the implementation of a milestone found that no later milestone of the plan completes and that needs a decision of the maintainer.
+Phase 6 (M24 to M26, diagnostics and observability) is under way: M24, M25 and M26 are implemented and closed after their reviews, all on the branch `worktree-phase-6` (not merged yet); M26 found nothing that needs a decision. Items below are what the implementation of a milestone found that no later milestone of the plan completes and that needs a decision of the maintainer.
 
 ### P6-M24-01 A diagnostic can be pointed at any address the gateway can reach, by a token with the scope `overlays`
 

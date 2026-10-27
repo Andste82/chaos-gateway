@@ -73,12 +73,13 @@ describe('the network form (P3-M14-01)', () => {
       routes: [{ destination: '10.40.0.0/24', via: '10.30.0.254' }],
     });
     expect(acceptedBySpec('e1000000-0000-4000-8000-000000000001', n)).toBeUndefined();
-    // the defaults stay out: name, address and one port
+    // the defaults stay out: name, address, one port and DHCP on as an empty block (without it the gateway has no DHCP there, P5-AUDIT-10)
     expect(networkFromForm({ ...emptyNetworkForm('lan', '10.30.0.1/24'), name: 'cams', ports: ['eth5'] })).toEqual({
       type: 'lan',
       name: 'cams',
       address: '10.30.0.1/24',
       interfaces: [{ name: 'eth5' }],
+      dhcp: {},
     });
   });
 
@@ -242,3 +243,19 @@ describe('the network form (P3-M14-01)', () => {
     expect(proposeListenPort([51820, 51821])).toBe('51822');
   });
 });
+
+describe('the dhcp block of a LAN (P5-AUDIT-10)', () => {
+  it('is written whenever DHCP is on, empty with the defaults, because the gateway reads a LAN without it as DHCP off', () => {
+    const f = { ...emptyNetworkForm('lan', '10.30.0.1/24'), name: 'lab2' };
+    expect((networkFromForm(f) as LanNetwork).dhcp).toEqual({});
+    expect((networkFromForm({ ...f, dhcpEnabled: false }) as LanNetwork).dhcp).toEqual({ enabled: false });
+  });
+
+  it('reads a LAN without the block as DHCP off, and one with an empty block as on', () => {
+    const lan: LanNetwork = { type: 'lan', name: 'IoT', address: '10.10.0.1/24', interfaces: [{ name: 'eth1' }] };
+    expect(formFromNetwork(lan).dhcpEnabled).toBe(false);
+    expect(formFromNetwork({ ...lan, dhcp: {} }).dhcpEnabled).toBe(true);
+    expect(formFromNetwork({ ...lan, dhcp: { enabled: false } }).dhcpEnabled).toBe(false);
+  });
+});
+

@@ -26,7 +26,7 @@ import {
   completeSetupBodyConfigurationOneNetworksTwoPeerOneKeyPublicKeyOneRegExp as keyRegExp,
 } from '../api/generated/zod/system/system';
 import { cloneJSON } from './mergePatch';
-import { formatIPv4, hostBitsError, inSubnet, parseIPv4, parseSubnet, reservedRangeOf, subnetText, type Subnet } from './networks';
+import { dhcpServed, formatIPv4, hostBitsError, inSubnet, parseIPv4, parseSubnet, reservedRangeOf, subnetText, type Subnet } from './networks';
 import { seconds } from './routingForm';
 
 /** What a network is: a local test network, a WireGuard hub or a WireGuard link. */
@@ -195,7 +195,8 @@ export function formFromNetwork(n: Network): NetworkForm {
   if (n.type === 'lan') {
     const lan = n as LanNetwork;
     f.ports = lan.interfaces.map(portKey);
-    f.dhcpEnabled = lan.dhcp?.enabled !== false;
+    // a LAN without a `dhcp` block has no DHCP: the gateway gives Kea no subnet for it (P5-AUDIT-10)
+    f.dhcpEnabled = dhcpServed(lan);
     f.leaseTime = lan.dhcp?.lease_time ?? '';
     f.pools = (lan.dhcp?.pools ?? []).map((p) => `${p.start}-${p.end}`).join(', ');
     const o = lan.dhcp?.options;
@@ -479,7 +480,8 @@ export function networkFromForm(f: NetworkForm, before?: Network, hosts: HostInt
       const s = parseSubnet(n.address);
       if (!s || poolsError(dhcp.pools, s, n.address)) delete dhcp.pools;
     }
-    put(n, 'dhcp', compact(dhcp));
+    // DHCP on is a block, even an empty one: the gateway reads a LAN without the block as DHCP off (P5-AUDIT-10)
+    put(n, 'dhcp', f.dhcpEnabled ? (compact(dhcp) ?? {}) : compact(dhcp));
     const dns = { ...(n.dns ?? {}) };
     put(dns, 'redirect_hardcoded', f.redirectDns ? true : n.dns?.redirect_hardcoded === false ? false : undefined);
     put(dns, 'block_dot', f.blockDot ? true : n.dns?.block_dot === false ? false : undefined);

@@ -111,6 +111,26 @@ test('network forms: add a test network with several ports through the drawer; a
   await expect(page.getByTestId('dhcp-pool')).toContainText('10.30.0.100 – 10.30.0.199');
 });
 
+test('network forms: a test network added with DHCP on and its defaults is saved with a dhcp block, so the gateway serves it and its DHCP card is on (P5-AUDIT-10)', async ({ page }) => {
+  const gw = await open(page);
+  await page.getByRole('button', { name: 'Add network' }).first().click();
+  const dialog = page.getByRole('dialog', { name: 'Add network' });
+  await dialog.getByLabel('Name', { exact: true }).fill('cams');
+  await dialog.getByTestId('network-ports').getByRole('checkbox', { name: /^eth3 / }).check();
+  await expect(dialog.getByRole('checkbox', { name: /hands out addresses \(DHCP\)/ })).toBeChecked();
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+
+  const patch = await lastPatch(page, gw);
+  const [, net] = Object.entries(patch.networks!)[0]!;
+  // without the block the gateway gives Kea no subnet for the network
+  expect((net as LanNetwork).dhcp).toEqual({});
+  await page.getByRole('button', { name: 'Apply revision 43' }).click();
+  await expect(toast(page, 'Revision 43 applied and verified in 87 ms')).toBeVisible();
+  const dhcp = page.getByTestId('dhcp-card');
+  await expect(dhcp.getByTestId('dhcp-add-short_lease')).toBeEnabled();
+  await expect(dhcp.getByTestId('dhcp-unavailable')).toHaveCount(0);
+});
+
 test('network forms: edit a test network — a second port, a pool and DNS; the patch has only what changed, Undo takes it back (P3-M12-04)', async ({ page }) => {
   const gw = await open(page, `/networks/${IOT}`);
   await settings(page).getByRole('button', { name: 'Edit IoT' }).click();

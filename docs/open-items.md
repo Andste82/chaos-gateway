@@ -2925,7 +2925,7 @@ Phase 6 (M24 to M26, diagnostics and observability) is under way: M24, M25 and M
 
 ### P6-M24-01 A diagnostic can be pointed at any address the gateway can reach, by a token with the scope `overlays`
 
-- Status: open
+- Status: closed (2026-10-28): decided by the maintainer, option (a): the scope `overlays` reaches every destination and every run is audited (`diagnostic.run`); plan §2.12 says so; the scopes are looked at again with the review of the token scopes in Phase 7 (M29, M30)
 - Severity: minor
 - Reason: needs-decision. The spec gives `POST /diagnostics` the scope `overlays` (the scope of automation: overlays, runs, own reset), and a diagnostic opens its connections from the gateway's own network stack, which in production is the host's (plan §3.8: the API container uses the host network namespace). A token with that scope can therefore make the gateway connect to the loopback of the host, to the management network (which the matrix and the management guard of plan §2.16 keep the test networks out of), to the Docker networks and to every address behind the uplink, and read what comes back: the status line and the headers of an HTTP service that only the gateway can reach, the certificate of a TLS service, whether a port answers. The plan names the scope and says nothing of the destinations; M24 limits none and records each run in the audit log (`diagnostic.run`, with the type and the target).
 - Evidence: `api/openapi.yaml` (`runDiagnostic`, `x-required-scope: overlays`), `internal/api/diagnostics.go`, `docs/development.md` "Diagnostics (M24)", decision 7; plan §2.12 ("diagnostics from the gateway's own address do not pass through device-specific faults"), §2.16.
@@ -2938,7 +2938,7 @@ Phase 6 (M24 to M26, diagnostics and observability) is under way: M24, M25 and M
 
 ### P6-M25-01 A probe cannot be added, changed or removed in the web UI or with `chaosctl`
 
-- Status: open
+- Status: closed (2026-10-28): decided by the maintainer, option (a): a probe dialog over the draft and `chaosctl probe add|remove|list`, in the new milestone M26a (Probe management, M) after M26 in Phase 6 of `docs/plan.md`; not built yet
 - Severity: minor
 - Reason: needs-decision. The plan's Scope for M25 names the probes themselves (virtual clients, DHCP address, targeting, diagnostics, the self-test) and not a form for them. A probe is an object of the configuration (`probes`: name, network, `trusts_test_ca`, labels), like a custom profile or a port forward: it is made with a revision over the API (a merge patch, or the YAML import), and the web UI lists the probes, runs a diagnostic from one and measures a profile with one, but has no dialog that adds one to the draft, edits its network or removes it, and `chaosctl` has no `probe` command. The draft of the web app (`web/src/stores/draft.ts`) keeps one set of functions per kind of object (the changes, the patch, the rebase and the overlap check), so a form for probes is a piece of work of its own, not a dialog over an existing kind.
 - Evidence: `docs/development.md` "Probes and calibration (M25)", decision 9; `web/src/components/diagnostics/ProbesCard.vue` (the empty state names `probes` of the configuration); `api/openapi.yaml` (`probes` of `Configuration`; no `POST /probes`).

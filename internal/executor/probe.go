@@ -439,6 +439,37 @@ func (e *Executor) probeCmd(ctx context.Context, ns string, args ...string) {
 	}
 }
 
+// readProbeInterface reads the probe's end of the pair from inside its namespace. A read that fails is repeated twice: `ip netns
+// exec` can fail for a moment while other commands enter namespaces at the same time, and an interface that is read as "no
+// address, not up" makes a probe look unready (a 503 on a diagnostic) and makes the next apply ensure it again.
+func (e *Executor) readProbeInterface(ctx context.Context, ns string) (linux.Addrs, bool) {
+	var last string
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return linux.Addrs{}, false
+			case <-e.clock.After(100 * time.Millisecond):
+			}
+		}
+		a, err := e.run.Run(ctx, Command{Tool: ToolIP, Args: []string{"-j", "addr", "show", "dev", ProbePeerIf}, NS: ns})
+		switch {
+		case err != nil:
+			last = err.Error()
+		case a.Exit != 0:
+			last = fmt.Sprintf("exit %d: %s", a.Exit, strings.TrimSpace(a.Stderr))
+		default:
+			as, perr := linux.ParseAddrs([]byte(a.Stdout))
+			if perr == nil && len(as) == 1 {
+				return as[0], true
+			}
+			last = fmt.Sprintf("%d interfaces named %s", len(as), ProbePeerIf)
+		}
+	}
+	e.log.Warn("probe: cannot read the interface", "probe", ns, "error", last)
+	return linux.Addrs{}, false
+}
+
 // readProbes lists the probes: the gateway's ends of the pairs, with what is inside their namespaces.
 func (e *Executor) readProbes(ctx context.Context, tg Target) ([]ProbeNSState, error) {
 	r, err := e.run.Run(ctx, ReadCommand(&Read{Target: tg, What: ReadLinks}))
@@ -493,14 +524,11 @@ func (e *Executor) readProbes(ctx context.Context, tg Target) ([]ProbeNSState, e
 		sem <- struct{}{}
 		go func() {
 			defer func() { <-sem; wg.Done() }()
-			a, err := e.run.Run(ctx, Command{Tool: ToolIP, Args: []string{"-j", "addr", "show", "dev", ProbePeerIf}, NS: st.Name})
-			if err == nil && a.Exit == 0 {
-				if as, err := linux.ParseAddrs([]byte(a.Stdout)); err == nil && len(as) == 1 {
-					st.MAC, st.PeerUp = strings.ToLower(as[0].MAC), hasString(as[0].Flags, "UP")
-					for _, x := range as[0].Addrs {
-						if x.Family == "inet" {
-							st.Addrs = append(st.Addrs, fmt.Sprintf("%s/%d", x.Local, x.PrefixLen))
-						}
+			if as, ok := e.readProbeInterface(ctx, st.Name); ok {
+				st.MAC, st.PeerUp = strings.ToLower(as.MAC), hasString(as.Flags, "UP")
+				for _, x := range as.Addrs {
+					if x.Family == "inet" {
+						st.Addrs = append(st.Addrs, fmt.Sprintf("%s/%d", x.Local, x.PrefixLen))
 					}
 				}
 			}

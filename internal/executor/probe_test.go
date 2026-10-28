@@ -217,6 +217,52 @@ func TestTheReadOfProbesListsTheGatewayEndsWithTheirNamespaces(t *testing.T) {
 	}
 }
 
+// A read of the probe's interface that fails for a moment (an `ip netns exec` that raced with another) does not make the probe
+// look like one without an address: it is repeated, and only a read that keeps failing leaves the probe without one.
+func TestTheReadOfAProbesInterfaceIsRepeatedWhenItFailsForAMoment(t *testing.T) {
+	for _, tc := range []struct {
+		failures int
+		addrs    int
+	}{{0, 1}, {2, 1}, {3, 0}} {
+		var calls int
+		armed := false
+		fr := &fakeRunner{respond: func(c Command) (Result, error) {
+			switch {
+			case isLinkRead(c):
+				return Result{Stdout: linkJSON("br-iot", true)}, nil
+			case c.Tool == ToolIP && c.NS == pNS && len(c.Args) >= 3 && c.Args[0] == "-j" && c.Args[1] == "addr":
+				if !armed {
+					return Result{Stdout: addrJSON}, nil
+				}
+				calls++
+				if calls <= tc.failures {
+					return Result{Exit: 1, Stderr: "setting the network namespace failed"}, nil
+				}
+				return Result{Stdout: addrJSON}, nil
+			case c.Tool == ToolIP && c.NS == "" && len(c.Args) >= 3 && c.Args[0] == "link" && c.Args[1] == "show":
+				return Result{Exit: 1}, nil
+			}
+			return Result{}, nil
+		}}
+		e := newExec(t, fr, WithProbeSocket(idleOpen))
+		if _, err := e.DoBatch(context.Background(), ops(t, `{"type":"assign_interfaces","devs":["br-iot"]}`, pEnsure)); err != nil {
+			t.Fatal(err)
+		}
+		armed = true // only the read fails
+		out, err := e.Do(context.Background(), mustDecode(t, `{"type":"read","what":"probes"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var st []ProbeNSState
+		if err := json.Unmarshal(out.Data[0], &st); err != nil {
+			t.Fatal(err)
+		}
+		if len(st) != 1 || len(st[0].Addrs) != tc.addrs || (tc.addrs == 1 && !st[0].PeerUp) {
+			t.Errorf("%d failures: %+v", tc.failures, st)
+		}
+	}
+}
+
 func TestDeletingAProbeStopsItsClientAndRemovesThePairAndTheNamespace(t *testing.T) {
 	fr := probeRunner()
 	closed := make(chan struct{})

@@ -106,15 +106,26 @@ func TestARenewalTimeOfZeroDoesNotMakeATightLoop(t *testing.T) {
 	}
 	renewals := 0
 	for i := 0; i < 60; i++ {
-		h.clk.BlockUntil(1)
-		// nothing is sent before the timer: the answer to a renewal does not start the next one
-		select {
-		case d := <-h.sock.sent:
-			t.Fatalf("a message without waiting: %+v", request(t, d))
-		case <-time.After(5 * time.Millisecond):
+		// The clock moves in steps of 100 ms until the renewal comes. A timer that the client registers late (the fake clock
+		// also holds the timer of the request that was just answered, so BlockUntil cannot tell) only delays it, and the
+		// renewal must not come before the floor of a second has passed: the answer to a renewal does not start the next one.
+		var rm *message
+		for waited := time.Duration(0); ; waited += 100 * time.Millisecond {
+			if waited > 5*time.Second {
+				t.Fatalf("no renewal after %v", waited)
+			}
+			select {
+			case d := <-h.sock.sent:
+				if waited < 900*time.Millisecond {
+					t.Fatalf("a message after %v: %+v", waited, request(t, d))
+				}
+				rm = request(t, d)
+			case <-time.After(20 * time.Millisecond):
+				h.clk.Advance(100 * time.Millisecond)
+				continue
+			}
+			break
 		}
-		h.clk.Advance(time.Second)
-		rm := request(t, h.next())
 		if rm.typ != msgRequest {
 			t.Fatalf("%+v", rm)
 		}

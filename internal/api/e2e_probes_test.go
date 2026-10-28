@@ -306,12 +306,25 @@ func TestTheMeasurementOfAProfileMatchesItsParametersOnTheRealKernel(t *testing.
 	}
 
 	// the probe's faults now: the profile is gone, and the unimpaired path is what is measured
-	res = g.calibrate(map[string]any{"host": testbed.ServerAddr, "port": echoPort, "duration": "10s"})
-	if res["within_tolerance"] != true && testbed.Accurate() {
-		t.Errorf("a path without a fault is not within the tolerances: %v", res["detail"])
+	unimpaired := map[string]any{"host": testbed.ServerAddr, "port": echoPort, "duration": "10s"}
+	if testbed.Accurate() {
+		// a path without a fault loses nothing, but a datagram may be lost by chance on a real kernel (1 in 1000 was, CI run
+		// 40754169656), so the assertion is a statistical one like the others: repeated once (plan §4.3)
+		testbed.Statistically(t, "calibrate a path without a fault", func() error {
+			r := g.calibrate(unimpaired)
+			l := sub(r, "measured")["loss_percent"].(float64) / 100
+			lo, hi := 0.0, 0.0
+			var err error
+			if r["within_tolerance"] != true || l != 0 {
+				err = fmt.Errorf("a path without a fault is not within the tolerances, loss %.2f %%: %v", l*100, r["detail"])
+			}
+			return testbed.Measure(t, "calibrate a path without a fault").Record("", testbed.Measurement{Quantity: "round trip loss", Unit: "fraction", N: int(sub(r, "samples")["sent"].(float64)), Configured: 0, Value: l, Low: &lo, High: &hi}, err)
+		})
+		return
 	}
-	// a path without a fault loses nothing; an emulated machine may drop a datagram now and then
-	if l := sub(res, "measured")["loss_percent"].(float64); (testbed.Accurate() && l != 0) || l > 2 {
+	// an emulated machine may drop a datagram now and then
+	res = g.calibrate(unimpaired)
+	if l := sub(res, "measured")["loss_percent"].(float64); l > 2 {
 		t.Errorf("a path without a fault loses %.2f %%", l)
 	}
 }

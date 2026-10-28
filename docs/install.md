@@ -227,7 +227,7 @@ goes through preview and apply like every other change. Things to know:
 `chaosctl` is in the image next to `chaosgw` (`/usr/local/bin/chaosctl`). It talks to the API with a token, so it runs
 anywhere that reaches the management network: copy the binary out of the image
 (`docker create --name tmp chaos-gateway && docker cp tmp:/usr/local/bin/chaosctl . && docker rm tmp`), or build it with
-`go build ./cmd/chaosctl`. Create a token once, with the scope `overlays` (faults, profiles, runs, captures; enough for a CI job):
+`go build ./cmd/chaosctl`. Create a token once, with the scope `overlays` (faults, profiles, runs, captures; enough for a CI job; `chaosctl probe add` and `probe remove` change the configuration and need the scope `full`):
 
 ```sh
 GW=https://gateway.example:8443
@@ -251,6 +251,10 @@ chaosctl explain --device esp32-42 --dst mqtt.example.com --protocol tcp --port 
 chaosctl tls ca --out test-ca.pem          # the test CA a development firmware (and the interception) trusts
 chaosctl intercept set --device esp32-42 --rule 'host=api.example.com;path=/v1/;status=503' --ttl 5m
 chaosctl intercept flows --device esp32-42 --faulted   # what the interception proxy saw, and the rules that acted
+chaosctl probe add ci-probe --network IoT              # a virtual client in a test network (scope full)
+chaosctl wait device ci-probe --online --timeout 60s   # until its DHCP client got a lease
+chaosctl probe list                                    # name, network, address, MAC, state
+chaosctl probe remove ci-probe                         # --force also removes its overlays and aborts its runs (scope full)
 ```
 
 `chaosctl intercept set` needs the interception proxy of `compose.tlsproxy.yaml` (section 3) and a device that trusts the test CA;

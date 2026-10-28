@@ -187,8 +187,10 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 		o.hostFS = fstest.MapFS{}
 	}
 	eopts = append(eopts, executor.WithHostRoot(o.hostFS))
+	// a probe's DHCP socket (nobody answers: a test gives the probe its address by hand); the stack a measurement runs on only when asked
+	eopts = append(eopts, executor.WithProbeSocket(func(string, string) (probe.Socket, error) { return &idleSocket{done: make(chan struct{})}, nil }))
 	if o.probeNet != nil {
-		eopts = append(eopts, executor.WithProbeNet(o.probeNet), executor.WithProbeSocket(func(string, string) (probe.Socket, error) { return &idleSocket{done: make(chan struct{})}, nil }))
+		eopts = append(eopts, executor.WithProbeNet(o.probeNet))
 	}
 	if o.runner != nil && !o.noCaptures {
 		// the testbed: the real executor captures on the real interfaces, in the namespace of the gateway

@@ -181,6 +181,12 @@ func asAPIError(err error) *apiError {
 // call sends a request and decodes a JSON answer into out (nil: the body is discarded). A body is sent as
 // JSON. It returns the response headers.
 func (c *client) call(ctx context.Context, method, path string, query url.Values, body, out any) (http.Header, error) {
+	return c.callWith(ctx, method, path, query, nil, body, out)
+}
+
+// callWith is call with request headers of its own: `Content-Type: application/merge-patch+json` and `If-Match` for a
+// revision made from a patch (they replace the JSON content type the body gets otherwise).
+func (c *client) callWith(ctx context.Context, method, path string, query url.Values, extra http.Header, body, out any) (http.Header, error) {
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -191,7 +197,7 @@ func (c *client) call(ctx context.Context, method, path string, query url.Values
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	res, err := c.send(ctx, method, path, query, rd, body != nil)
+	res, err := c.send(ctx, method, path, query, rd, body != nil, extra)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +220,7 @@ func (c *client) call(ctx context.Context, method, path string, query url.Values
 // open starts a GET and returns the response with a body that is still to be read (the caller closes it) and
 // the file name the gateway suggests ("" for none). The path is relative to the API (`/captures/<id>/download`).
 func (c *client) open(ctx context.Context, path string, query url.Values) (*http.Response, string, error) {
-	res, err := c.send(ctx, http.MethodGet, path, query, nil, false)
+	res, err := c.send(ctx, http.MethodGet, path, query, nil, false, nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -243,7 +249,7 @@ func (c *client) download(ctx context.Context, path string, query url.Values, w 
 	return name, nil
 }
 
-func (c *client) send(ctx context.Context, method, path string, query url.Values, body io.Reader, hasBody bool) (*http.Response, error) {
+func (c *client) send(ctx context.Context, method, path string, query url.Values, body io.Reader, hasBody bool, extra http.Header) (*http.Response, error) {
 	u := c.base + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
@@ -256,6 +262,9 @@ func (c *client) send(ctx context.Context, method, path string, query url.Values
 	req.Header.Set("Accept", "application/json, */*;q=0.5")
 	if hasBody {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range extra {
+		req.Header[k] = v
 	}
 	res, err := c.hc.Do(req)
 	if err != nil {

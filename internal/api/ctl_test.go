@@ -837,6 +837,7 @@ func TestChaosctlOverlays(t *testing.T) {
 	sub("MakesDNSFaults", ctlMakesDNSFaults)
 	sub("MakesTLSCases", ctlMakesTLSCases)
 	sub("MakesDHCPActions", ctlMakesDHCPActions)
+	sub("ManagesProbes", ctlManagesProbes)
 	sub("ReadsTheTokenFromAFile", ctlReadsTheTokenFromAFile)
 	sub("WaitsForADeviceToBeOnlineAndConnected", ctlWaitsForADeviceToBeOnlineAndConnected)
 	sub("WaitsForADeviceThatComesOnline", ctlWaitsForADeviceThatComesOnline)

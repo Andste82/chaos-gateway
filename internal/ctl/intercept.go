@@ -600,7 +600,7 @@ func (a *app) writeCA(out string, pem []byte) error {
 func (c *client) postRaw(ctx context.Context, path string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	res, err := c.send(ctx, http.MethodPost, path, nil, nil, false)
+	res, err := c.send(ctx, http.MethodPost, path, nil, nil, false, nil)
 	if err != nil {
 		return nil, err
 	}

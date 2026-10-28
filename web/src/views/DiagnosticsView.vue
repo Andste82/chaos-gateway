@@ -5,31 +5,39 @@
 // from the address (`?type=&host=&port=`: the link of a device's page); the runs of the session stay below the last result.
 // Since M25 a diagnostic runs from a probe as well (plan §2.12): a virtual client whose traffic takes the path of a device's and
 // meets the faults, rules and profiles that target it. The probes are listed under the form, with the self-test "measure with
-// a probe" (a profile is activated on the probe for the run and compared with what it measured).
+// a probe" (a profile is activated on the probe for the run and compared with what it measured). Since M26a a probe is added,
+// edited and removed here as well, through the configuration draft and the preview-and-apply drawer, like a port forward.
 import { computed, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import DiagnosticForm from '../components/diagnostics/DiagnosticForm.vue';
 import CalibrateDialog from '../components/diagnostics/CalibrateDialog.vue';
 import DiagnosticResultCard from '../components/diagnostics/DiagnosticResultCard.vue';
+import ProbeDialog from '../components/diagnostics/ProbeDialog.vue';
 import ProbesCard from '../components/diagnostics/ProbesCard.vue';
+import RemoveProbeDialog from '../components/diagnostics/RemoveProbeDialog.vue';
 import PageHeader from '../components/layout/PageHeader.vue';
 import EmptyState from '../components/ui/EmptyState.vue';
+import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
 import StatusDot from '../components/ui/StatusDot.vue';
-import { useCanDiagnose, useCanProbe, useNames, useProbes, useProfiles } from '../composables/gateway';
-import { findProbe, measurableProfiles } from '../lib/probes';
+import { firstError, useActiveConfig, useCanDiagnose, useCanProbe, useNames, useProbes, useProfiles } from '../composables/gateway';
+import { findProbe, measurableProfiles, probeRows } from '../lib/probes';
 import type { ProbeView } from '../api/generated/model';
 import { describeTarget, formFromQuery, formatMs, formToDiagnosticRequest, resultTone, type DiagnosticForm as Form } from '../lib/diagnostics';
 import { formatClock } from '../lib/format';
 import { useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
 import { useDiagnosticsStore, type DiagnosticRun } from '../stores/diagnostics';
+import { useDraftStore } from '../stores/draft';
 import type { DiagnosticRequest } from '../api/generated/model';
 
 const route = useRoute();
 const canDiagnose = useCanDiagnose();
 const connection = useConnectionStore();
 const store = useDiagnosticsStore();
+const draft = useDraftStore();
+// the base of the draft the probe dialogs edit
+const active = useActiveConfig();
 
 const canProbe = useCanProbe();
 const probesQuery = useProbes(() => canProbe.value !== false);
@@ -49,6 +57,19 @@ watch(
   },
   { immediate: true },
 );
+// the probes as the draft has them (M26a), each with what the gateway observes of the applied probe
+const rows = computed(() => probeRows(draft.baseProbes, draft.probes, probes.value));
+const probeOpen = ref(false);
+const probeEditing = ref<string>();
+const removing = ref<{ open: boolean; probe: string }>({ open: false, probe: '' });
+function addProbe() {
+  probeEditing.value = undefined;
+  probeOpen.value = true;
+}
+function editProbe(id: string) {
+  probeEditing.value = id;
+  probeOpen.value = true;
+}
 const measuring = ref<{ open: boolean; probe?: string }>({ open: false });
 const refusal = ref<{ path?: string; message?: string }[]>();
 const shown = ref<number>();
@@ -80,16 +101,30 @@ useApiScreen('the diagnostics', () => [
     </SectionCard>
 
     <SectionCard v-if="canProbe !== false" title="Probes">
+      <template v-if="rows.length" #actions>
+        <button type="button" class="btn btn-sm" :disabled="!draft.baseConfig" data-testid="probe-add" @click="addProbe">Add probe</button>
+      </template>
       <ProbesCard
-        v-if="probes.length"
-        :probes="probes"
+        v-if="rows.length"
+        :rows="rows"
         :networks="networkNames"
         :disabled="connection.offline"
         @diagnose="(p: ProbeView) => (form.from = p.id)"
         @measure="(p: ProbeView) => (measuring = { open: true, probe: p.id })"
+        @edit="editProbe"
+        @remove="(id: string) => (removing = { open: true, probe: id })"
       />
-      <EmptyState v-else text="No probes: a probe is a virtual client of a test network, added to the configuration under probes." data-testid="probes-empty" />
+      <EmptyState
+        v-else
+        text="No probes: a probe is a virtual client of a test network. Add one to diagnose and measure from the network's side before a device is connected."
+        data-testid="probes-empty"
+      >
+        <button type="button" class="btn btn-primary" :disabled="!draft.baseConfig" data-testid="probe-add" @click="addProbe">Add probe</button>
+      </EmptyState>
     </SectionCard>
+    <LoadError v-if="canProbe !== false && firstError(active)" :error="firstError(active)" what="The configuration is not loaded" :retry="active.refetch" />
+    <ProbeDialog v-model:open="probeOpen" :probe="probeEditing" />
+    <RemoveProbeDialog v-if="removing.probe" v-model:open="removing.open" :probe="removing.probe" />
     <CalibrateDialog v-model:open="measuring.open" :probes="probes" :profiles="measurable" :probe="measuring.probe" />
 
     <SectionCard title="Result">

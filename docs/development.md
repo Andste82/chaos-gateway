@@ -9,7 +9,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 |---|---|
 | `api/` | `openapi.yaml`, the source of truth for the domain model and the REST API; examples and their validator |
 | `cmd/chaosgw`, `cmd/chaosctl` | the core binary and the CLI (`chaosgw exec` is the executor; `chaosgw tls` is the TLS responder (M21), which hands the connections of the case `intercept` to the proxy (M22); `cmd/chaosctl` is a `main` over `internal/ctl`) |
-| `internal/ctl` | `chaosctl` (M18): the commands (Cobra), the API client with its token and certificate options, runs that are waited for with their lease, `wait device`, `with`; the commands of the application-layer kinds, `dns set`, `tls set` and `dhcp set` (M23b), and the interception, `intercept set`, `intercept flows` and `tls ca` (M23c) |
+| `internal/ctl` | `chaosctl` (M18): the commands (Cobra), the API client with its token and certificate options, runs that are waited for with their lease, `wait device`, `with`; the commands of the application-layer kinds, `dns set`, `tls set` and `dhcp set` (M23b), and the interception, `intercept set`, `intercept flows` and `tls ca` (M23c); the probes, `probe list`, `probe add` and `probe remove` (M26a) |
 | `internal/clock` | injectable clock: real and fake, wall time apart from monotonic time |
 | `internal/preflight` | kernel version, the one shared kernel-module list, namespace capability |
 | `internal/testbed` | namespace topologies for integration tests; `vmrun` runs them in a VM; the starter of the interception proxy for the tests that run the real mitmproxy (M22) |
@@ -5240,14 +5240,14 @@ what they leave out.
   the command line (`--insecure=false` included) means the trust variables are not read, so a variable of the shell cannot
   override a pin; `--insecure` next to a pin or a CA file from the same source is a usage error (2), and `--insecure` prints a
   warning on standard error (P4-AUDIT-11). A token with the
-  scope `overlays` does everything except `wg export` (scope `full`) and `reset --all`.
+  scope `overlays` does everything except `wg export`, `probe add` and `probe remove` (scope `full`) and `reset --all`.
 - **Output.** Standard output is the result and nothing else: the id of the overlay or run a command created (so
   `id=$(chaosctl fault set …)` works), the result of a waited run, a table. Progress and explanations go to standard error
   (`[  12.3s] step cut applied at +10.0s`). `--json` prints the API's JSON where a command has a result.
 - **Commands.** `profile apply <profile>` and `fault set` (impairment flags, or `--body` for a whole fault) create an
   overlay for `--device`, `--group`, `--network` or `--global` with `--ttl` and `--lease`; `overlay create -f`, `overlay
   list`, `overlay delete`, `overlay renew`, `reset [--all]`; `run [scenario] [-f file] [--set k=v] [--wait] …`, `abort`, `wait run`, `wait
-  device`; `with`; `explain`; `wg export`; `version`. Every command's `--help` has the details and examples.
+  device`; `with`; `explain`; `wg export`; `probe list|add|remove` (M26a); `version`. Every command's `--help` has the details and examples.
 - **`run`.** The scenario is a stored one (by name or UUID) or a YAML/JSON file (`-f`, `-` for standard input), sent as
   `inline` with the `parameters` of `--set`; the server validates it (the CLI interprets nothing of it). Without `--wait` the
   command prints the run id and returns 0. With `--wait` it polls the run (every second), reports the steps, checks and
@@ -6606,7 +6606,7 @@ runs from it, and the self-test "measure this profile" compares what it measures
 
 ### Decisions
 
-Taken by best practice where the plan leaves room; the one that needs the maintainer is P6-M25-01 in `docs/open-items.md`:
+Taken by best practice where the plan leaves room; the one that needed the maintainer, P6-M25-01 in `docs/open-items.md`, was decided on 2026-10-28 (the form is M26a, "Probe management (M26a)" below):
 
 1. **The client is in Go and runs in the executor,** not `udhcpc` in a process per probe: no new package in the image, and the lease logic is tested at level 0.
 2. **The probe's MAC is derived from its id,** not random per creation: a probe keeps its lease and any reservation across restarts.
@@ -6617,7 +6617,7 @@ Taken by best practice where the plan leaves room; the one that needs the mainta
 6. **The datagram interval is fixed at 10 ms** (100 per second): 2000 datagrams in 20 s; a duration under 20 s still runs and is marked indicative.
 7. **A calibration needs the scope `overlays`** like the overlays it makes; a token with that scope removes its own overlay (the engine removes it with no owner limit, as the call made it).
 8. **The probe_run operation is a read for the executor** (it changes nothing in the kernel): it runs beside the writer on a reader slot and does not wait for an apply that is running.
-9. **Probes are configured, not created by a dedicated operation:** the spec has `probes` in the configuration and no `POST /probes`; the web UI lists, diagnoses and measures them (P6-M25-01 is the form).
+9. **Probes are configured, not created by a dedicated operation:** the spec has `probes` in the configuration and no `POST /probes`; the web UI lists, diagnoses and measures them, and since M26a adds, edits and removes them through the draft (P6-M25-01).
 
 ### Tests
 
@@ -6743,6 +6743,76 @@ interfaces of the bridge and the uplink against them). It ran in the emulated VM
 | Scope: the device detail's path view with the fault badge (P3-AUDIT-37) | `e2e/flows.spec.ts` (the path view) |
 | Tests: metric values against known traffic | `TestMetricsReportTheCountersOfFaultsRulesForwardsAndQueuesAgainstKnownTraffic` (level 0, the simulated kernel's counters), level 1 `TestMetricsCountKnownTrafficOnTheRealKernel` |
 | Tests: Playwright for the flow view, the device detail's flows and recent DNS queries, and the path view with and without a fault | `e2e/flows.spec.ts` |
+
+## Probe management (M26a)
+
+Plan §2.12, §2.17 ("Probes") and M26a (decided 2026-10-28, `docs/open-items.md` P6-M25-01, option (a)). A probe (M25) is an object of the configuration, `probes`: name, network, `trusts_test_ca`, labels.
+Until M26a it was made only with a revision over the API or the YAML import. The milestone adds the dialog of a probe to the Diagnostics screen, over the configuration draft and the preview-and-apply
+drawer like a port forward (M35a), and the commands `chaosctl probe list`, `probe add` and `probe remove`. There is no change of the API: `probes` of `Configuration` and `GET /probes` are what M25 made, a
+revision is a merge patch like every other, and the spec and the generated code are unchanged. It is not part of V1 (the V1 scope summary does not list it).
+
+### How it works
+
+- **The draft.** `stores/draft.ts` has `probes` (added, changed or deleted (`null`) probes by id), `baseProbes`, `effectiveProbes`, `setProbe`, `revertProbe`, `removeProbe` and `restoreProbe`, and the probe is
+  a kind of the draft's `changes` (`kind: 'probe'`, so the unapplied-changes bar says "1 change in 1 probe"), `summary`, `patch` (`probes` of the merge patch: the whole probe when it is new, the members that
+  changed, `null` when it goes), `overlaps` and `rebase` (the concurrent-change dialog compares and reapplies a probe member by member like a fault), `discard` and `setServerErrors` (the gateway's pointer below
+  `/probes/{id}` is kept for the dialog's fields, `probe` for the probe as a whole). `valueText` names a network by its name now, for the fields both sides changed.
+- **The library** `lib/probes.ts` has the form (`ProbeForm`: name, network, trusts the test CA), `probeFormErrors` (the checks under the fields: the name is required, has the form of the spec and is not the form of a
+  UUID, and is not the name of a device, a WireGuard client or another probe, which share one namespace; the network is a local test network), `probeFromForm` (the probe as the configuration stores it: description and
+  labels stay, `trusts_test_ca` is written when it is on and kept `false` when the base had it so), `probeFieldOf`, `probeChanges` (the words), `probeRows` (the base with the edits, marked NEW, CHANGED, DELETED, each with
+  the gateway's view of the applied probe) and `rowTone` (its state in words: *No address yet*, *Online*, *Offline*, *not applied yet*, "… · change not applied yet").
+- **The Diagnostics screen.** The card *Probes* lists `probeRows`: the address, MAC and state are those of the applied probe, a probe of the draft is marked and has none yet, a deleted one is struck through with
+  *Undo*. Per row *Diagnose from here* and *Measure…* (only for a probe the gateway has built), *Edit* (*Fix* when the gateway refused it, with its message under the row), *Remove* and, on a marked row, *Undo*.
+  *Add probe* is in the card's header, and the empty state ("No probes: a probe is a virtual client of a test network …") has it as its button. `components/diagnostics/ProbeDialog.vue` is the form (the networks
+  are the local test networks of the draft; a single test network is chosen already), its submit puts the probe into the draft and opens the drawer; `RemoveProbeDialog.vue` is the removal.
+- **Remove takes the objects that name the probe along,** as the removal of a device does (#99): an access rule, a configured fault and a port forward that name only the probe are deleted, a group loses it as a
+  member, and the dialog lists them before anything happens; a scenario that targets the probe blocks the removal (it is a file of its own); an overlay that targets it is named, and the preview asks before the apply
+  removes it. `removeDevice` and `removeProbe` share `removeReferences`, `restoreDevice` and `restoreProbe` share `restoreReferences`, and one record (`removals`, by id) serves both Undo.
+- **`chaosctl probe`** (`internal/ctl/probe.go`). `list` reads `GET /probes` and `GET /networks` and prints name, network (by name), address, MAC, state and id (`--json`: the API's list; scope `read`). `add <name>
+  --network <network> [--trusts-test-ca]` and `remove <name|id> [--force]` make a revision: `GET /revisions/active` for the ETag, `POST /revisions` with the merge patch (`application/merge-patch+json`, `If-Match`,
+  `?message=chaosctl: add probe …`), `POST /revisions/{id}/apply`; they need the scope `full`, which the commands of the overlays do not. `add` makes the id of the probe itself (a configuration key is a UUID) and
+  prints it; the network is a name or a UUID (the gateway resolves it). A candidate the gateway refuses to apply (a reference, an overlay) is discarded again, so none is left, and the refusal is printed with its
+  pointers and exits with 2. `remove --force` is the apply's `force=true`: the overlays and runs that target the probe go with it and are counted on standard error. The client got `callWith` for the headers.
+
+### Decisions
+
+Taken by best practice where the plan leaves room; none needs the maintainer.
+
+1. **The probe's dialog is on the Diagnostics screen, in the card of the probes,** not on the Networks screen: that is where the probes are listed and used, and where the empty state of M25 sends the user.
+2. **A probe is edited as a whole through the draft,** the same path as a port forward: nothing reaches the gateway before the drawer's *Apply*, and the preview shows the domain change `probe … added`.
+3. **Remove deletes what names the probe, as the removal of a device does.** The alternative, to refuse while anything names it, would leave a group (the UI has no group editor) that has the probe as a member
+   impossible to clear.
+4. **A probe keeps its identity when it is edited:** its id is the key, and its MAC and namespace derive from the id (M25 decision 2), so renaming a probe or moving it to another network keeps the id and the
+   apply makes the executor rebuild what the network changes.
+5. **The name check is against the devices the UI knows** (the list of devices, the configured ones of the draft, the other probes); the gateway checks the rest (`name_taken`) and its message stands under the
+   field.
+6. **`chaosctl probe add` and `remove` apply at once.** There is no preview on the command line: the merge patch is the whole change, and a CI job that wants a probe wants it applied. A probe change is not
+   lockout-relevant, so the apply never waits for a confirmation; if the gateway ever asked for one, the command would say so and exit with 2 rather than confirm for the user.
+7. **`add` is not idempotent:** a name that exists is refused (`409 name_taken`). A pipeline that wants "a probe called x" lists first; an idempotent flag would hide a probe on another network.
+8. **The id of a new probe is made by the client** (the web UI and `chaosctl`), like that of every object of the configuration; the gateway keeps it.
+
+### Tests
+
+Level 0, run here. Go: `internal/api/ctl_probes_test.go` (`TestChaosctlOverlays/ManagesProbes`, the commands against the real API and engine on the simulated kernel: the empty list, `add` with the network by name
+(stored as its UUID, one revision more, the probe's pair built by the executor), the list before and after the probe has an address, `--json`, the refusals (a name in use by a probe and by a device, an unknown
+network, a missing flag or name) that leave no candidate behind, a removal refused because an access rule names the probe and because an overlay targets it, `remove --force` taking the overlay and the probe's pair
+away, removal by id, the probe that is gone, and a token with the scope `overlays` that lists and is refused the changes); the harness gives every gateway of the tests a probe's DHCP socket (nobody answers), so
+an API test can make a probe without `probeNet`. Web unit tests (`make test-web`): `src/lib/probeForm.test.ts` (the checks, the form and the stored probe, the words, the rows and their state) and
+`src/stores/draft.probes.test.ts` (the changes, the patch, the server's messages, discard, the removal together with a rule, a fault, a group and a forward and its Undo with and without the record, the
+removal of a device unchanged, and the overlaps and the reapply on another revision). Playwright against the mocked API (`e2e/probe-management.spec.ts`, 11 tests): a probe added through the dialog and the
+drawer is NEW without an address until the apply and listed with its address after it, removed through the dialog and the drawer, edited (CHANGED, "change not applied yet", Undo), Remove then Undo, a probe only
+the draft has taken out with Undo, the checks under the fields, the gateway's refusal under the field with *Fix*, the removal together with a rule, an overlay named in the removal, the empty state that opens the
+dialog, and a gateway without the feature. No level 1 test: a probe built by an apply is M25's (`M25_LEVEL1`), and the path the commands take is the API's.
+
+### Acceptance map (plan M26a "Scope" and "Tests")
+
+| Plan M26a | Test |
+|---|---|
+| Scope: a probe dialog over the draft (name, network, trusts the test CA) with Remove and the preview of the changes, in the draft machinery of the port forwards | `e2e/probe-management.spec.ts` (add, edit, remove, Undo, the checks, the refusal), `draft.probes.test.ts`, `probeForm.test.ts` |
+| Scope: `chaosctl probe add\|remove\|list` | `TestChaosctlOverlays/ManagesProbes` |
+| Tests: a Playwright test adds a probe through the dialog and the drawer, sees it in the list with its address and removes it | `e2e/probe-management.spec.ts` ("add one through the dialog and the drawer", "remove one") |
+| Tests: a `chaosctl` test lists, adds and removes one | `TestChaosctlOverlays/ManagesProbes` |
+| P6-M25-01: the empty state of the probes card points to the dialog | `e2e/probe-management.spec.ts` ("the empty state points to the dialog") |
 
 ## Generated code
 

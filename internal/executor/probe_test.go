@@ -217,6 +217,52 @@ func TestTheReadOfProbesListsTheGatewayEndsWithTheirNamespaces(t *testing.T) {
 	}
 }
 
+// The list of namespaces is the host's: it names the namespace of a pair that belongs to another gateway on the same host too
+// (the tests of the testbed run several with the same probe ids, and one of them removed the namespace of another, CI run
+// 40741696470). Only a namespace in which the interface is certainly missing is listed as a probe without its pair.
+func TestANamespaceOfAnotherGatewaysPairIsNotListedAsOneWithoutItsPair(t *testing.T) {
+	const other = "cgp-9d2e4b61"
+	for _, tc := range []struct {
+		name   string
+		result Result
+		listed bool
+	}{
+		{"the interface is there", Result{Stdout: addrJSON}, false},
+		{"the interface is missing", Result{Exit: 1, Stderr: `Device "eth0" does not exist.`}, true},
+		{"the command fails otherwise", Result{Exit: 1, Stderr: "setting the network namespace failed"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fr := &fakeRunner{respond: func(c Command) (Result, error) {
+				switch {
+				case isLinkRead(c):
+					return Result{Stdout: linkJSON("br-iot", true)}, nil
+				case c.Tool == ToolIP && c.NS == "" && len(c.Args) == 2 && c.Args[0] == "netns" && c.Args[1] == "list":
+					return Result{Stdout: other + " (id: 3)\n"}, nil
+				case c.Tool == ToolIP && c.NS == other && len(c.Args) >= 4 && c.Args[1] == "link" && c.Args[2] == "show":
+					return tc.result, nil
+				}
+				return Result{}, nil
+			}}
+			e := newExec(t, fr, WithProbeSocket(idleOpen))
+			out, err := e.Do(context.Background(), mustDecode(t, `{"type":"read","what":"probes"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var st []ProbeNSState
+			if err := json.Unmarshal(out.Data[0], &st); err != nil {
+				t.Fatal(err)
+			}
+			listed := false
+			for _, s := range st {
+				listed = listed || (s.Name == other && s.NoPair)
+			}
+			if listed != tc.listed {
+				t.Errorf("listed: %v, want %v: %+v", listed, tc.listed, st)
+			}
+		})
+	}
+}
+
 // The question "is the namespace of the probe there?" is asked by a command inside it. A command that fails for a moment
 // must not be read as "no": the pair would be deleted and made again, and the probe would lose its address (CI run
 // 40721700824). Only the message of a namespace that cannot be opened says it is gone.

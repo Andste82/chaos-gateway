@@ -48,7 +48,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   [the remaining points](#phase-5-audit-result-of-the-round-and-remaining-points). The one item that needed the
   maintainer, P5-AUDIT-10 (what a test network without a `dhcp` block means), was decided on 2026-10-27 (option (b)) and is
   fixed on the same branch, see [Phase 5 audit items for the maintainer](#phase-5-audit-items-for-the-maintainer). The nine open items P5-M20-01 to P5-M23-01 were decided by the maintainer on 2026-10-25, see [Phase 5 open items](#phase-5-open-items) at the end of the file: eight closed (the forms and the interception UI became the milestones M23b and M23c; P5-M21-02 and P5-M22-03, the per-case field `upstream`, are implemented on the branch `phase-5b` and ran green in CI run 40258339299 on `aebbae8`, so M21 and M22 are done) and one waiting for H1 (P5-M22-02).
-- **Phase 6** (M24 to M26a: diagnostics, probes and calibration, observability, probe management; on the branch `worktree-phase-6`, PR #125, not merged yet; CI run 40639560679 on `b80fa86` green in every job): audited on
+- **Phase 6** (M24 to M26a: diagnostics, probes and calibration, observability, probe management; on the branch `worktree-phase-6`, PR #125, not merged yet; CI run 40771332746 on `7048cae` green in every job): audited on
   2026-10-28 at `b80fa86`. The result is in [Phase 6 audit result](#phase-6-audit-result), right before the Phase 6 open items: 14 items of major and 51 of minor
   severity, P6-AUDIT-01 to P6-AUDIT-69 except -39, -56, -57 and -68, which the verifiers refuted. All 65 are closed on the branch (seven fix commits, `c29d100` to `b00df9c`):
   63 with a change of their own, two (P6-AUDIT-16 and -30) already fixed by another item of the round; six are fixed in part or differently (P6-AUDIT-13, -22, -25,
@@ -3036,7 +3036,7 @@ that covers the fix commits has not happened yet.
 | P6-AUDIT-65 | minor | M26a: the block of a probe's removal by a scenario that targets it was not tested at all levels. | **Fixed (b00df9c):** the Playwright and draft-store tests already existed (P6-AUDIT-26); the missing `chaosctl` case is added: a scenario that targets the probe, or a step of it, makes `probe remove` exit 2 with `/scenarios/` in the error and store no revision. |
 | P6-AUDIT-66 | minor | Flows screen: "unknown host" and "Show more" (200 rows) were promised in §2.17 and not tested. | **Fixed (b00df9c):** two Playwright tests in `flows.spec.ts`: a flow without a device ("unknown host", no link, the network under it only where it is known), and 450 flows (200 drawn, Show more twice, the list kept across a refetch). |
 | P6-AUDIT-67 | minor | A probe could be added to a network without DHCP and was silently never reachable. | **Fixed (b00df9c):** `ProbeDialog` shows a non-blocking note under the network field when the chosen network serves no DHCP (`dhcpServed`), and `chaosctl probe add` prints the same warning on stderr. A Playwright test and a `chaosctl` test. |
-| P6-AUDIT-69 | minor | Stale and inconsistent status text in the plan and `docs/development.md` for Phase 6. | **Fixed (b00df9c):** the M24 status and the numbering of the M26 decisions were already fixed (P6-AUDIT-32, -35); the four "no CI run yet" statuses name PR #125 and CI run 40639560679 on `b80fa86` (green in every job, the VM job included); the decision counts of M26 (14) and M26a (13) are corrected; the M24 level 1 count is three. |
+| P6-AUDIT-69 | minor | Stale and inconsistent status text in the plan and `docs/development.md` for Phase 6. | **Fixed (b00df9c):** the M24 status and the numbering of the M26 decisions were already fixed (P6-AUDIT-32, -35); the four "no CI run yet" statuses name PR #125 and CI run 40771332746 on `7048cae` (green in every job, the VM job included); the decision counts of M26 (14) and M26a (13) are corrected; the M24 level 1 count is three. |
 
 ### Per milestone
 
@@ -3081,6 +3081,23 @@ the table. The seven fix commits, by lens: `c29d100` (probes, P6-AUDIT-01 to -13
 `a92abff` (tests, -21 to -28), `d6efa02` (API, spec and docs, -29 to -38 and -40), `ecc5ac8` (web app, -41 to -49), `4d4dbd3` (metrics
 and the flow view, -50 to -55, -58, -59) and `b00df9c` (plan completeness, -60 to -67 and -69). The final checks of the round and what
 ran are in the last paragraph of this section. No item needed the maintainer, so the round decided nothing on the maintainer's behalf.
+
+The CI round after the audit (2026-10-28, runs 40680300170 to 40771332746 on PR #125) found what the tests of this machine cannot: level 1 needs
+namespaces, a real kernel and a host that is shared by several gateways. Five defects of the code and three of the tests, all fixed on
+the branch; the run 40771332746 on `7048cae` is green in every job:
+
+| Commit | Found by | What |
+|---|---|---|
+| `7be4264` | M25 level 1 (privileged container) | The probe's namespace has `rp_filter` off: on a host with `rp_filter` 2 (Ubuntu) the answers of the DHCP server, which come from an address the client has no route to yet, were dropped, so no probe got a lease. |
+| `0b61040` | unit tests | The simulated kernel knows the sysctl directories `all` and `default` of every namespace. |
+| `be42a74` | M25 level 1 | The read of the probe's interface inside its namespace is repeated twice before the probe counts as having no address. |
+| `88399d3` | M25 level 1 (the test printed the namespace) | The probe's pair is deleted and made again only when its namespace cannot be opened: a failing `ip netns exec` for a moment was read as "the namespace is gone", and the pair with the probe's address was replaced. |
+| `60a8623` | M25 level 1 | A namespace of the probes' name counts as a probe without its pair only when its interface is certainly missing: the list of namespaces is the host's, and the engine of a test that was still running removed the namespace of the next test's probe (P6-AUDIT-13's discovery of namespaces without a pair). In production one gateway owns every `cgp-*` namespace of its host, so this showed in the testbed only. |
+| `627d329` | arm64 (qemu-user) | The test of a renewal time of zero moves the fake clock in steps until the renewal comes (`BlockUntil(1)` also counts the timer of the answered request). |
+| `6948ddd`, `7048cae` | M24 and M25 level 1 | The DNS level 1 test accepts `REFUSED` from the resolver of the server namespace; "a path without a fault loses nothing" is a statistical assertion like the others, repeated once (plan §4.3), because one datagram in 1000 was lost by chance on the real kernel. |
+
+One remark for the maintainer, not an open item: for an unimpaired path the self-test expects no loss at all, because the 99.9 % interval
+of 0 % is 0 itself (plan §4.3), so a single lost datagram makes "measure the current faults" report "not within the tolerances".
 
 Decisions taken by best practice, not by the maintainer:
 

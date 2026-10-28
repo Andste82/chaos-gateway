@@ -43,6 +43,38 @@ func TestTLSShowsWhatAServerPresented(t *testing.T) {
 	}
 }
 
+// A real server presents its certificate and the intermediate CA behind it, and the clients are expected to know only the
+// root (P6-AUDIT-24).
+func TestTLSVerifiesAndListsTheWholeChainOfAServer(t *testing.T) {
+	root := newPKI(t, "Test Root")
+	inter := root.intermediate(t, "Test Intermediate")
+	srv := serveTLS(t, inter.chained(inter.good(t, "broker.test")), 0)
+	res := run(t, runner(root.roots), tlsReq(loop, srv.Port, withSNI("broker.test")))
+	if !res.Ok || res.Tls == nil || !*res.Tls.Verified || res.Error != nil {
+		t.Fatalf("%+v / %s", res.Tls, str(res.Error))
+	}
+	cs := *res.Tls.Certificates
+	if len(cs) != 2 {
+		t.Fatalf("the chain has %d certificates: %+v", len(cs), cs)
+	}
+	if *cs[0].Subject != "CN=broker.test" || !strings.Contains(*cs[0].Issuer, "CN=Test Intermediate") {
+		t.Errorf("the certificate: %s issued by %s", *cs[0].Subject, *cs[0].Issuer)
+	}
+	if !strings.Contains(*cs[1].Subject, "CN=Test Intermediate") || !strings.Contains(*cs[1].Issuer, "CN=Test Root") {
+		t.Errorf("the intermediate: %s issued by %s", *cs[1].Subject, *cs[1].Issuer)
+	}
+
+	// without the intermediate the server's chain does not lead to the root
+	bare := serveTLS(t, inter.good(t, "broker.test"), 0)
+	res = run(t, runner(root.roots), tlsReq(loop, bare.Port, withSNI("broker.test")))
+	if res.Ok || res.Tls == nil || *res.Tls.Verified || str(res.Tls.VerifyError) != "certificate signed by unknown authority" {
+		t.Fatalf("a missing intermediate: %+v / %s", res.Tls, str(res.Error))
+	}
+	if cs := *res.Tls.Certificates; len(cs) != 1 {
+		t.Errorf("the chain has %d certificates", len(cs))
+	}
+}
+
 func TestTLSReportsTheVersionTheServerChose(t *testing.T) {
 	ca := newPKI(t, "Test CA")
 	srv := serveTLS(t, ca.good(t, "broker.test"), tls.VersionTLS12)

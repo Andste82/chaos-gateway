@@ -129,6 +129,8 @@ type options struct {
 	apiClock clock.Clock
 	// maxRuns limits the queued and running runs (0: the default of the manager)
 	maxRuns int
+	// started is when the gateway process started (zero: now)
+	started time.Time
 	// noCaptures leaves out the capture volume (M17): a deployment that cannot record
 	noCaptures bool
 	// offlineAfter is the engine's (0: its default of a minute, on the real clock)
@@ -242,8 +244,12 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 			c.CapturesDir, c.Capturer, c.CaptureDiskFree, c.CaptureQuota = fc.dir, fc, fc.diskFree, o.captureQuota
 		}
 	}
+	started := o.started
+	if started.IsZero() {
+		started = time.Now()
+	}
 	apiCfg := api.Config{Engine: e, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: apply.Local{E: ex}, Namespace: o.namespace, StateDir: filepath.Join(root, "api"),
-		BootID: "boot-1", Started: time.Now(), Version: "test", ConfirmTimeout: o.confirm, UI: o.ui, Preflight: o.preflight, Log: o.log, Clock: o.apiClock, RunMax: o.maxRuns,
+		BootID: "boot-1", Started: started, Version: "test", ConfirmTimeout: o.confirm, UI: o.ui, Preflight: o.preflight, Log: o.log, Clock: o.apiClock, RunMax: o.maxRuns,
 		Resolvers: func() []netip.Addr {
 			if len(o.resolvers) > 0 {
 				return o.resolvers

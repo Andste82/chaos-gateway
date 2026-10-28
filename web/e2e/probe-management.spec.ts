@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { IOT, MockGateway, RULE_DNS, sampleProbe, TEST, toast, withNetworks, withProbes, withRules } from './mock';
+import { IOT, LTE_ID, MockGateway, RULE_DNS, sampleProbe, SCN_BOOT, SCN_MQTT, TEST, toast, withNetworks, withProbes, withRules, withScenarios } from './mock';
 
 // M26a (plan §2.12, §2.17 "Probes"): a probe is added, edited and removed on the Diagnostics screen, through the configuration
 // draft, the unapplied-changes bar and the preview-and-apply drawer, like a port forward — the dialog (name, network, trusts the
@@ -194,6 +194,32 @@ test('probes: removing a probe that a rule names takes the rule along, and the p
   await expect(toast(page, 'Revision 43 applied and verified in 87 ms')).toBeVisible();
   await expect(probe(page, 'probe-a')).toHaveCount(0);
   expect(gw.config.access_rules?.[RULE_DNS]).toBeUndefined();
+});
+
+test('probes: a scenario that targets the probe blocks its removal, with the reason, and nothing is sent', async ({ page }) => {
+  const gw = withScenarios(withProbes(withNetworks(MockGateway.sample())));
+  // one scenario targets the probe itself, the other has a step that does
+  gw.config.scenarios![SCN_MQTT] = { ...gw.config.scenarios![SCN_MQTT]!, name: 'probe-outage', target: { device: PROBE } };
+  gw.config.scenarios![SCN_BOOT] = { name: 'probe-steps', target: { network: IOT }, steps: [{ id: 'offline', at: '0s', target: { device: PROBE }, profile: LTE_ID }, { id: 'back', at: '20s', restore: true }] };
+  await open(page, gw);
+  await probe(page, 'probe-a').getByRole('button', { name: 'Remove probe-a' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Remove probe-a' });
+  const refs = dialog.getByTestId('remove-probe-references');
+  await expect(refs).toHaveAttribute('role', 'alert');
+  await expect(dialog.getByTestId('remove-probe-reference')).toHaveText([
+    'scenario probe-outage · blocks the removal: a scenario is a file of its own, change its target first',
+    'scenario probe-steps · blocks the removal: a scenario is a file of its own, change its target first',
+  ]);
+  await expect(dialog.getByRole('link', { name: 'probe-outage' })).toHaveAttribute('href', `/scenarios/${SCN_MQTT}`);
+  await expect(refs.getByTestId('remove-probe-blocked')).toContainText('The removal waits for these scenarios');
+  await expect(dialog.getByTestId('remove-probe-preview')).toHaveCount(0);
+  const confirm = dialog.getByRole('button', { name: 'Remove the probe and these references' });
+  await expect(confirm).toBeDisabled();
+  // a submit by the keyboard does nothing either: no revision is created, the dialog stays
+  await dialog.getByTestId('remove-probe-form').evaluate((f) => (f as HTMLFormElement).requestSubmit());
+  await expect(dialog).toBeVisible();
+  expect(gw.requestsTo('POST', '/revisions')).toHaveLength(0);
+  await expect(drawer(page)).toHaveCount(0);
 });
 
 test('probes: an active overlay that targets the probe is named in the removal, and the preview asks before it is removed', async ({ page }) => {

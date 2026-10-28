@@ -14,9 +14,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -381,6 +383,8 @@ type blocking struct {
 	diag.HostNet
 	entered chan struct{}
 	release chan struct{}
+	// canceled gets a value each time a dial returns because its context ended (nil: not observed).
+	canceled chan struct{}
 }
 
 func (b *blocking) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -388,6 +392,9 @@ func (b *blocking) DialContext(ctx context.Context, network, addr string) (net.C
 	select {
 	case <-b.release:
 	case <-ctx.Done():
+		if b.canceled != nil {
+			b.canceled <- struct{}{}
+		}
 	}
 	return nil, &net.OpError{Op: "dial", Err: fmt.Errorf("released")}
 }
@@ -427,7 +434,7 @@ func TestMoreThanEightDiagnosticsAtOnceAreRefused(t *testing.T) {
 }
 
 func TestACanceledRequestEndsItsDiagnostic(t *testing.T) {
-	b := &blocking{entered: make(chan struct{}, 4), release: make(chan struct{})}
+	b := &blocking{entered: make(chan struct{}, 4), release: make(chan struct{}), canceled: make(chan struct{}, 4)}
 	defer close(b.release)
 	g := newGW(t, func(o *options) { o.diagnostics = api.DiagnosticsConfig{Net: b} })
 	g.finishSetup()
@@ -443,6 +450,13 @@ func TestACanceledRequestEndsItsDiagnostic(t *testing.T) {
 	}()
 	<-b.entered
 	cancel()
+	// the cancel reaches the dial itself: the release channel stays closed until the test ends, so only the context
+	// can end it (the request timeout of 50 s is far beyond the limit)
+	select {
+	case <-b.canceled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the dial of the diagnostic does not see the cancel of the request")
+	}
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
@@ -463,14 +477,24 @@ func TestACanceledRequestEndsItsDiagnostic(t *testing.T) {
 	}
 }
 
+// auditEntries are the diagnostic.run entries of the audit log, newest first.
+func auditEntries(g *gw) []map[string]any {
+	g.t.Helper()
+	var entries []map[string]any
+	for _, i := range g.do("GET", "/audit?limit=500", nil, nil, nil).json(g.t)["items"].([]any) {
+		if e := i.(map[string]any); e["action"] == "diagnostic.run" {
+			entries = append(entries, e)
+		}
+	}
+	return entries
+}
+
 // auditDetails are the details of the diagnostic.run entries of the audit log, newest first.
 func auditDetails(g *gw) []string {
 	g.t.Helper()
 	var details []string
-	for _, i := range g.do("GET", "/audit?limit=500", nil, nil, nil).json(g.t)["items"].([]any) {
-		if e := i.(map[string]any); e["action"] == "diagnostic.run" {
-			details = append(details, fmt.Sprint(e["detail"]))
-		}
+	for _, e := range auditEntries(g) {
+		details = append(details, fmt.Sprint(e["detail"]))
 	}
 	return details
 }
@@ -483,6 +507,17 @@ func TestADiagnosticIsAuditedAndTheCapabilitiesListThem(t *testing.T) {
 	want := []string{fmt.Sprintf("tcp 127.0.0.1:%d failed", shut), fmt.Sprintf("tcp 127.0.0.1:%d ok", open)}
 	if details := auditDetails(g); fmt.Sprint(details) != fmt.Sprint(want) {
 		t.Errorf("audit: %q, want %q", details, want)
+	}
+	// every entry names who ran it (the token of the requests) and how; a run has no object and no revision
+	entries := auditEntries(g)
+	if len(entries) != 2 {
+		t.Fatalf("%d entries", len(entries))
+	}
+	for _, e := range entries {
+		actor, _ := e["actor"].(map[string]any)
+		if actor["type"] != "token" || actor["name"] != "test-full" || actor["id"] == nil || actor["id"] == "" || e["via"] != "api" || e["object"] != nil || e["revision"] != nil {
+			t.Errorf("the entry %v", e)
+		}
 	}
 	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
 	if !strings.Contains(fmt.Sprint(caps["features"]), "diagnostics") {
@@ -587,5 +622,79 @@ func TestADiagnosticEndsAtTheCeilingAndFreesItsPlace(t *testing.T) {
 		if r := g.diagnose(map[string]any{"type": "tcp", "host": "203.0.113.10", "port": 80, "timeout": "60s"}); r.Status != 200 {
 			t.Fatalf("run %d: %d %s", i+1, r.Status, r.Body)
 		}
+	}
+}
+
+// redirecting is the Net of the tests of the default servers: it records the DNS servers that are dialed, refuses the
+// DNS proxy's address like a service namespace without a proxy and sends the datagrams for the other servers to the
+// test servers behind them.
+type redirecting struct {
+	diag.HostNet
+	mu     sync.Mutex
+	dialed []string
+	to     map[string]string
+}
+
+func (r *redirecting) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if network == "udp" {
+		r.mu.Lock()
+		r.dialed = append(r.dialed, addr)
+		to, known := r.to[addr]
+		r.mu.Unlock()
+		if !known {
+			return nil, &net.OpError{Op: "dial", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+		}
+		addr = to
+	}
+	return r.HostNet.DialContext(ctx, network, addr)
+}
+
+func (r *redirecting) servers() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.dialed...)
+}
+
+// The production list of the servers that resolve a host name: the DNS proxy in the service namespace first, then the
+// uplink's dns_upstream, or the host's resolvers when there is none (P6-AUDIT-22).
+func TestAHostNameIsResolvedByTheProxyThenTheUplinkThenTheHost(t *testing.T) {
+	uplink, host := dnsServer(t, "127.0.0.1"), dnsServer(t, "203.0.113.99")
+	nets := &redirecting{to: map[string]string{"203.0.113.53:53": uplink.String(), "192.0.2.53:53": host.String()}}
+	g := newGW(t, func(o *options) {
+		o.diagnostics = api.DiagnosticsConfig{Net: nets}
+		o.resolvers = []netip.Addr{netip.MustParseAddr("192.0.2.53")}
+	})
+	g.finishSetup()
+	port := listenTCPServer(t)
+	run := func() map[string]any {
+		t.Helper()
+		nets.mu.Lock()
+		nets.dialed = nil
+		nets.mu.Unlock()
+		return g.diagnoseOK(map[string]any{"type": "tcp", "host": "broker.example.com", "port": port})
+	}
+
+	// no dns_upstream: the proxy, whose address is the service peer, then the resolvers of the host
+	r := run()
+	if got := nets.servers(); fmt.Sprint(got) != "[169.254.100.2:53 192.0.2.53:53]" {
+		t.Errorf("the servers asked: %v", got)
+	}
+	if r["address"] != "203.0.113.99" {
+		t.Errorf("the answer of the host's resolver: %v", r)
+	}
+
+	// dns_upstream replaces the host's resolvers, the proxy stays first
+	id := g.mustPatch(map[string]any{"uplink": map[string]any{"dns_upstream": []any{"203.0.113.53"}}})
+	if ar := g.apply(id).json(t); ar["status"] == "pending_confirm" {
+		if cf := g.do("POST", "/revisions/"+itoa(id)+"/confirm", nil, nil, nil); cf.Status != 200 {
+			t.Fatalf("%d %s", cf.Status, cf.Body)
+		}
+	}
+	r = run()
+	if got := nets.servers(); fmt.Sprint(got) != "[169.254.100.2:53 203.0.113.53:53]" {
+		t.Errorf("the servers asked with dns_upstream: %v", got)
+	}
+	if r["ok"] != true || r["address"] != "127.0.0.1" {
+		t.Errorf("the answer of the uplink's server: %v", r)
 	}
 }

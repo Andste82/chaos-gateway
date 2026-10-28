@@ -89,12 +89,10 @@ function where(path: string | undefined): string {
   if (path === '/routing' || path?.startsWith('/routing/')) return `Routing${rest(path.slice('/routing/'.length))}`;
   const sc = /^\/scenarios\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
   if (sc) return `Scenario ${draft.effectiveScenarios[sc[1]!]?.name ?? draft.baseScenarios[sc[1]!]?.name ?? sc[1]}${rest(sc[2])}`;
-  const o = /^\/(groups|probes)\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
-  if (o) {
-    const kind = { groups: 'Group', probes: 'Probe' }[o[1] as 'groups'];
-    const name = (draft.baseConfig?.[o[1] as 'groups']?.[o[2]!] as { name?: string } | undefined)?.name ?? o[2];
-    return `${kind} ${name}${rest(o[3])}`;
-  }
+  const pr = /^\/probes\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
+  if (pr) return `Probe ${draft.effectiveProbes[pr[1]!]?.name ?? draft.baseProbes[pr[1]!]?.name ?? pr[1]}${rest(pr[2])}`;
+  const o = /^\/groups\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
+  if (o) return `Group ${draft.baseConfig?.groups?.[o[1]!]?.name ?? o[1]}${rest(o[2])}`;
   const m = /^\/(access_rules|faults|profiles|devices)\/([^/]+)(?:\/(.*))?$/.exec(path ?? '');
   if (!m) return path || 'configuration';
   return `${objectName(m[1]!, m[2]!)}${rest(m[3])}`;

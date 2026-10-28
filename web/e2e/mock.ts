@@ -255,6 +255,15 @@ export function withForwards(m: MockGateway): MockGateway {
   return m;
 }
 
+/** A gateway with the feature `probes` and the probe probe-a on IoT, in the configuration and as the gateway lists it (M26a). */
+export function withProbes(m: MockGateway): MockGateway {
+  const probe = sampleProbe();
+  m.capabilities.features = [...m.capabilities.features, 'probes'];
+  m.probes = [probe];
+  m.config = { ...m.config, probes: { [probe.id]: probe.config } };
+  return m;
+}
+
 export const SCN_MQTT = '5c000000-0000-4000-8000-000000000001';
 export const SCN_BOOT = '5c000000-0000-4000-8000-000000000002';
 export const ESP32 = 'a1b2c3d4-0000-4000-8000-000000000042';
@@ -1228,6 +1237,7 @@ export class MockGateway {
           });
         }
       }
+      this.syncProbes(patch);
       this.state = { ...this.state, active_revision: id, generation: this.state.generation + 1 };
       const res: ApplyResult = { revision: id, status: 'active', generation: this.state.generation, duration_ms: 87 };
       return json(200, res);
@@ -1426,6 +1436,12 @@ export class MockGateway {
     if ((patch as { access_matrix?: unknown }).access_matrix) {
       domain.push({ op: 'changed', kind: 'access_matrix', path: '/access_matrix', summary: 'access between networks changed' });
     }
+    for (const [key, v] of Object.entries((patch as { probes?: Record<string, { name?: string } | null> }).probes ?? {})) {
+      const before = this.config.probes?.[key];
+      const name = String(v?.name ?? before?.name ?? key);
+      const op = v === null ? 'removed' : before ? 'changed' : 'added';
+      domain.push({ op, kind: 'probe', id: key, name, path: `/probes/${key}`, summary: `probe ${name} ${op}` });
+    }
     const fwds = (patch as { port_forwards?: Record<string, Record<string, unknown> | null> }).port_forwards ?? {};
     for (const [key, v] of Object.entries(fwds)) {
       const before = this.config.port_forwards?.[key];
@@ -1446,6 +1462,29 @@ export class MockGateway {
       ...(port_forwards.length ? { port_forwards } : {}),
       ...(warnings.length ? { warnings } : {}),
     };
+  }
+
+  /**
+   * The probes GET /probes lists after an apply (M26a): a probe the revision adds is built and gets an address from the
+   * network's DHCP, one it removes is gone, and the configuration of one it changes is the new one.
+   */
+  private syncProbes(patch: unknown) {
+    for (const [id, v] of Object.entries((patch as { probes?: Record<string, unknown> } | undefined)?.probes ?? {})) {
+      const config = this.config.probes?.[id];
+      if (v === null || !config) {
+        this.probes = this.probes.filter((p) => p.id !== id);
+        continue;
+      }
+      const known = this.probes.find((p) => p.id === id);
+      if (known) this.probes = this.probes.map((p) => (p.id === id ? { ...p, config } : p));
+      else {
+        const n = this.probes.length + 1;
+        this.probes = [
+          ...this.probes,
+          { id, config, observed: { addresses: [`10.10.0.${80 + n}`], macs: [`02:28:b4:ce:f6:${(0x10 + n).toString(16)}`], online: true, sources: ['probe', 'dhcp'] } },
+        ];
+      }
+    }
   }
 
   /** The scenarios of the active configuration. */
@@ -1586,12 +1625,13 @@ export class MockGateway {
    */
   danglingDeviceReferences(patch: unknown): ValidationError[] {
     const devs = (patch as { devices?: Record<string, unknown> } | undefined)?.devices ?? {};
-    const deleted = Object.keys(devs).filter((id) => devs[id] === null);
+    const probes = (patch as { probes?: Record<string, unknown> } | undefined)?.probes ?? {};
+    const deleted = [...Object.keys(devs).filter((id) => devs[id] === null), ...Object.keys(probes).filter((id) => probes[id] === null)];
     if (!deleted.length) return [];
     const cfg = applyMergePatch(this.config, patch);
     const out: ValidationError[] = [];
     const ref = (path: string, id: string | undefined) => {
-      if (id && deleted.some((d) => d === id || this.config.devices?.[d]?.name === id)) out.push({ path, code: 'unknown_reference', message: `there is no device "${id}"` });
+      if (id && deleted.some((d) => d === id || this.config.devices?.[d]?.name === id || this.config.probes?.[d]?.name === id)) out.push({ path, code: 'unknown_reference', message: `there is no device "${id}"` });
     };
     for (const [id, r] of Object.entries(cfg.access_rules ?? {})) ref(`/access_rules/${id}/source/device`, r.source.device);
     for (const [id, f] of Object.entries(cfg.faults ?? {})) ref(`/faults/${id}/source/device`, f.source?.device);
@@ -1611,7 +1651,11 @@ export class MockGateway {
     const onDevices = this.overlays
       .filter((o) => o.target?.device && devs[o.target.device] === null && this.config.devices?.[o.target.device])
       .map((o) => ({ kind: 'overlay' as const, id: o.id, owner: o.owner, object: `/devices/${o.target!.device}` }));
-    return [...this.profileReferencesOf(patch), ...onDevices];
+    const gone = (patch as { probes?: Record<string, unknown> } | undefined)?.probes ?? {};
+    const onProbes = this.overlays
+      .filter((o) => o.target?.device && gone[o.target.device] === null && this.config.probes?.[o.target.device])
+      .map((o) => ({ kind: 'overlay' as const, id: o.id, owner: o.owner, object: `/probes/${o.target!.device}` }));
+    return [...this.profileReferencesOf(patch), ...onDevices, ...onProbes];
   }
 
   /** The activations of a custom profile the candidate deletes. */

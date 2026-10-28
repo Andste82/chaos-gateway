@@ -12,6 +12,7 @@ import type {
   Network,
   NetworkView,
   PortForward,
+  Probe,
   Profile,
   RevisionWithConfiguration,
   Routing,
@@ -26,6 +27,7 @@ import { faultChips, describeScope, describeTunnel, impairmentCombines, impairme
 import { bothChanged, cloneJSON, createMergePatch, jsonEqual, reapplyMergePatch } from '../lib/mergePatch';
 import { networkChanges, protocolChanges, routingSettingsChanges, withoutClients } from '../lib/networkChanges';
 import { cellOf, entryKey, keysText, matrixChanges, toggleCell } from '../lib/networks';
+import { probeChanges, probeTitle } from '../lib/probes';
 import { profileChips } from '../lib/profiles';
 import { scenarioChanges, scenarioProblems, scenarioTitle, type ScenarioProblem } from '../lib/scenarios';
 import { accessLabels, describeDestination, ruleErrors, ruleFieldChanges, formatPorts, type FieldChange } from '../lib/rules';
@@ -86,6 +88,8 @@ function valueText(key: string, v: unknown, names: Names, other?: unknown): stri
   if (typeof v === 'boolean') return v ? 'yes' : 'no';
   // a forward's target is a device or an address
   if (key === 'target' && typeof v === 'object' && 'address' in v) return String((v as { address: string }).address);
+  // a probe's network
+  if (key === 'network' && typeof v === 'string') return names.network?.(v) ?? v;
   if (key === 'source' || key === 'target') return describeScope(v as Parameters<typeof describeScope>[0], names);
   if (key === 'destination') return describeDestination(v as Parameters<typeof describeDestination>[0], names);
   if (key === 'action') return accessLabels[v as keyof typeof accessLabels] ?? String(v);
@@ -123,19 +127,20 @@ export interface EditOrigin {
 
 /** One change of the draft as the unapplied-changes bar counts it and the rule list marks it. */
 export interface DraftChange extends FieldChange {
-  kind: 'rule' | 'fault' | 'device' | 'group' | 'client' | 'matrix' | 'profile' | 'network' | 'routing' | 'forward' | 'scenario';
+  kind: 'rule' | 'fault' | 'device' | 'group' | 'client' | 'matrix' | 'profile' | 'network' | 'routing' | 'forward' | 'scenario' | 'probe';
   id: string;
   /** The object's name (or its id when it has none). */
   name: string;
 }
 
 /**
- * What the draft had before a device was removed together with the objects that name it (#99): the
- * device, the rules, faults and port forwards deleted along and the groups it was taken out of (as the
- * draft had them), and the order of the rules.
+ * What the draft had before a device or a probe was removed together with the objects that name it
+ * (#99, M26a): the device or the probe, the rules, faults and port forwards deleted along and the groups
+ * it was taken out of (as the draft had them), and the order of the rules.
  */
 interface Removal {
   device: Device | undefined;
+  probe: Probe | undefined;
   rules: Record<string, AccessRule>;
   faults: Record<string, ConfigFault>;
   forwards: Record<string, PortForward>;
@@ -146,7 +151,7 @@ interface Removal {
 /**
  * The configuration changes made in the UI and not applied yet (plan §2.17, "Unapplied changes"):
  * access rules, their order, configured faults, custom profiles, adopted devices, groups (#99), networks (P3-M14-01), WireGuard clients, the access
- * matrix, the routing (P3-M14-01), the port forwards (M35a) and the scenarios (M19), edited
+ * matrix, the routing (P3-M14-01), the port forwards (M35a), the scenarios (M19) and the probes (M26a), edited
  * against the revision that was active when the first edit was made. Nothing reaches the gateway until "Preview & apply" turns the draft
  * into a candidate revision (a JSON Merge Patch against that base, `If-Match` the base); a base
  * that is not the active revision any more is the concurrent-change dialog's (reload and reapply).
@@ -172,7 +177,7 @@ export const useDraftStore = defineStore('draft', () => {
    * members (#99).
    */
   const groups = ref<Record<string, Group | null>>({});
-  /** What the draft had before each removal of a device together with the objects that name it, by device id: for its Undo (#99). */
+  /** What the draft had before each removal of a device or a probe together with the objects that name it, by its id: for its Undo (#99, M26a). */
   const removals = ref<Record<string, Removal>>({});
   /** WireGuard clients added, changed or deleted (`client: null`), by client id with their hub. */
   const clients = ref<Record<string, { network: string; client: WireGuardClient | null }>>({});
@@ -189,6 +194,8 @@ export const useDraftStore = defineStore('draft', () => {
   const forwards = ref<Record<string, PortForward | null>>({});
   /** Scenarios added, changed or deleted (`null`), by id (M19). */
   const scenarios = ref<Record<string, Scenario | null>>({});
+  /** Probes added, changed or deleted (`null`), by id (M26a). */
+  const probes = ref<Record<string, Probe | null>>({});
   /** The ports as typed, by rule (a text that is no list of ports yet keeps its error). */
   const portsText = ref<Record<string, string>>({});
 
@@ -205,6 +212,7 @@ export const useDraftStore = defineStore('draft', () => {
       routing.value !== undefined ||
       Object.keys(forwards.value).length > 0 ||
       Object.keys(scenarios.value).length > 0 ||
+      Object.keys(probes.value).length > 0 ||
       matrix.value !== undefined,
   );
 
@@ -442,14 +450,24 @@ export const useDraftStore = defineStore('draft', () => {
    * What the draft had before is kept for the Undo (`restoreDevice`).
    */
   function removeDevice(device: { id: string; name: string }) {
-    const record: Removal = {
-      device: devices.value[device.id] ?? baseConfig.value?.devices?.[device.id],
-      rules: {},
-      faults: {},
-      forwards: {},
-      groups: {},
-      order: [...effectiveOrder.value],
-    };
+    const record = removeReferences(device, { device: devices.value[device.id] ?? baseConfig.value?.devices?.[device.id], probe: undefined });
+    setDevice(device.id, null);
+    removals.value = { ...removals.value, [device.id]: record };
+  }
+
+  /**
+   * Removes a probe together with the objects of the draft that name it, as `removeDevice` does a device
+   * (a probe is a device of the same namespace: `Scope.device` names it), M26a. Undo: `restoreProbe`.
+   */
+  function removeProbe(probe: { id: string; name: string }) {
+    const record = removeReferences(probe, { device: undefined, probe: probes.value[probe.id] ?? baseConfig.value?.probes?.[probe.id] });
+    setProbe(probe.id, null);
+    removals.value = { ...removals.value, [probe.id]: record };
+  }
+
+  /** The objects of the draft that name the device or probe, deleted or changed; `start` is the device or probe as the draft had it, and the record returned is for the Undo. */
+  function removeReferences(device: { id: string; name: string }, start: Pick<Removal, 'device' | 'probe'>): Removal {
+    const record: Removal = { ...start, rules: {}, faults: {}, forwards: {}, groups: {}, order: [...effectiveOrder.value] };
     const refs = deviceReferences(device, { rules: effectiveRules.value, faults: effectiveFaults.value, groups: effectiveGroups.value, forwards: effectiveForwards.value });
     for (const r of refs) {
       if (r.kind === 'rule') {
@@ -467,8 +485,7 @@ export const useDraftStore = defineStore('draft', () => {
         setGroup(r.id, groupWithout(g, device));
       }
     }
-    setDevice(device.id, null);
-    removals.value = { ...removals.value, [device.id]: record };
+    return record;
   }
 
   /**
@@ -490,7 +507,26 @@ export const useDraftStore = defineStore('draft', () => {
       return;
     }
     setDevice(id, record.device ?? null);
-    const device = { id, name: record.device?.name ?? id };
+    restoreReferences(record, { id, name: record.device?.name ?? id });
+  }
+
+  /** The Undo of the removal of a probe (`removeProbe`), like `restoreDevice`: the probe and the objects removed along come back. */
+  function restoreProbe(id: string) {
+    if (probes.value[id] !== null) return;
+    const record = removals.value[id];
+    const { [id]: _drop, ...rest } = removals.value;
+    removals.value = rest;
+    if (!record) {
+      const before = baseConfig.value?.probes?.[id];
+      if (before) restoreReferencesFromBase(id, before, () => setProbe(id, before));
+      return;
+    }
+    setProbe(id, record.probe ?? null);
+    restoreReferences(record, { id, name: record.probe?.name ?? id });
+  }
+
+  /** What a removal took along comes back: the objects as the draft had them, the device in its groups (the Undo of `removeReferences`). */
+  function restoreReferences(record: Removal, device: { id: string; name: string }) {
     const back = Object.keys(record.rules).filter((r) => !(r in effectiveRules.value));
     for (const r of back) setRule(r, record.rules[r]!);
     if (back.length) {
@@ -513,8 +549,11 @@ export const useDraftStore = defineStore('draft', () => {
   /** The Undo of a removal without its record: the device and the objects of the base that named it come back as the base has them. */
   function restoreDeviceFromBase(id: string) {
     const before = baseConfig.value?.devices?.[id];
-    if (!before) return;
-    setDevice(id, before);
+    if (before) restoreReferencesFromBase(id, before, () => setDevice(id, before));
+  }
+
+  function restoreReferencesFromBase(id: string, before: { name: string }, restore: () => void) {
+    restore();
     const device = { id, name: before.name };
     const refs = deviceReferences(device, { rules: baseRules.value, faults: baseFaults.value, groups: baseGroups.value, forwards: baseForwards.value });
     for (const r of refs) {
@@ -669,6 +708,35 @@ export const useDraftStore = defineStore('draft', () => {
   function restoreForward(id: string) {
     const before = baseForwards.value[id];
     if (before) setForward(id, before);
+  }
+
+  const baseProbes = computed<Record<string, Probe>>(() => baseConfig.value?.probes ?? {});
+  /** The probes as the draft has them: base with the edits. */
+  const effectiveProbes = computed<Record<string, Probe>>(() => {
+    const out: Record<string, Probe> = { ...baseProbes.value };
+    for (const [id, p] of Object.entries(probes.value)) {
+      if (p === null) delete out[id];
+      else out[id] = p;
+    }
+    return out;
+  });
+
+  /** A probe added, changed or deleted (`null`); a probe back at its base is no change (M26a). */
+  function setProbe(id: string, probe: Probe | null) {
+    clearServerErrors(id);
+    const before = baseProbes.value[id];
+    if ((probe === null && before === undefined) || (probe !== null && before !== undefined && jsonEqual(before, probe))) {
+      const { [id]: _drop, ...rest } = probes.value;
+      probes.value = rest;
+    } else {
+      probes.value = { ...probes.value, [id]: probe === null ? null : cloneJSON(probe) };
+    }
+  }
+
+  /** Undoes the edit of a probe of the base, or its deletion (without what a removal took along: `restoreProbe` does that). */
+  function revertProbe(id: string) {
+    const before = baseProbes.value[id];
+    if (before) setProbe(id, before);
   }
 
   const baseScenarios = computed<Record<string, Scenario>>(() => baseConfig.value?.scenarios ?? {});
@@ -863,6 +931,11 @@ export const useDraftStore = defineStore('draft', () => {
       const name = scenarioTitle(sc ?? before!);
       for (const c of scenarioChanges(before, sc, names)) out.push({ kind: 'scenario', id, name, ...c });
     }
+    for (const [id, p] of Object.entries(probes.value)) {
+      const before = baseProbes.value[id];
+      const name = probeTitle(p ?? before!);
+      for (const c of probeChanges(before, p, (n) => netName(n) ?? n)) out.push({ kind: 'probe', id, name, ...c });
+    }
     if (matrix.value) {
       for (const c of matrixChanges(baseMatrix.value, matrix.value, baseNetworks.value, { network: netName, client: clientName })) {
         out.push({ kind: 'matrix', id: c.field, name: 'Access between networks', ...c });
@@ -883,6 +956,7 @@ export const useDraftStore = defineStore('draft', () => {
     const networkIds = new Set(cs.filter((c) => c.kind === 'network').map((c) => c.id));
     const forwardIds = new Set(cs.filter((c) => c.kind === 'forward').map((c) => c.id));
     const scenarioIds = new Set(cs.filter((c) => c.kind === 'scenario').map((c) => c.id));
+    const probeIds = new Set(cs.filter((c) => c.kind === 'probe').map((c) => c.id));
     const objects = [
       ruleIds.size ? `${ruleIds.size} ${ruleIds.size === 1 ? 'rule' : 'rules'}` : '',
       faultIds.size ? `${faultIds.size} ${faultIds.size === 1 ? 'fault' : 'faults'}` : '',
@@ -893,6 +967,7 @@ export const useDraftStore = defineStore('draft', () => {
       clientIds.size ? `${clientIds.size} WireGuard ${clientIds.size === 1 ? 'client' : 'clients'}` : '',
       forwardIds.size ? `${forwardIds.size} port ${forwardIds.size === 1 ? 'forward' : 'forwards'}` : '',
       scenarioIds.size ? `${scenarioIds.size} ${scenarioIds.size === 1 ? 'scenario' : 'scenarios'}` : '',
+      probeIds.size ? `${probeIds.size} ${probeIds.size === 1 ? 'probe' : 'probes'}` : '',
       cs.some((c) => c.kind === 'matrix') ? 'the access matrix' : '',
       cs.some((c) => c.kind === 'routing') ? 'the routing' : '',
     ].filter(Boolean);
@@ -998,6 +1073,12 @@ export const useDraftStore = defineStore('draft', () => {
       if (p !== undefined) sp[id] = p;
     }
     if (Object.keys(sp).length) out.scenarios = sp;
+    const prp: Record<string, unknown> = {};
+    for (const [id, pr] of Object.entries(probes.value)) {
+      const p = createMergePatch(baseProbes.value[id], pr);
+      if (p !== undefined) prp[id] = p;
+    }
+    if (Object.keys(prp).length) out.probes = prp;
     if (routing.value) {
       const p = createMergePatch(baseConfig.value?.routing, routing.value);
       if (p !== undefined) out.routing = p as ConfigurationPatch;
@@ -1066,6 +1147,7 @@ export const useDraftStore = defineStore('draft', () => {
     compare('network', networks.value, networkSettings(old), networkSettings(theirs), named);
     compare('forward', forwards.value, old?.port_forwards ?? {}, theirs.port_forwards ?? {}, forwardTitle);
     compare('scenario', scenarios.value, old?.scenarios ?? {}, theirs.scenarios ?? {}, named);
+    compare('probe', probes.value, old?.probes ?? {}, theirs.probes ?? {}, named);
     if (routing.value) {
       const count = out.length;
       compare('routing', { routing: routing.value }, { routing: old?.routing ?? {} }, { routing: theirs.routing ?? {} }, () => 'routing');
@@ -1157,6 +1239,7 @@ export const useDraftStore = defineStore('draft', () => {
     networks.value = reapply('network', networks.value, networkSettings(old), networkSettings(rev.configuration));
     forwards.value = reapply('forward', forwards.value, old?.port_forwards ?? {}, rev.configuration.port_forwards ?? {});
     scenarios.value = reapply('scenario', scenarios.value, old?.scenarios ?? {}, rev.configuration.scenarios ?? {});
+    probes.value = reapply('probe', probes.value, old?.probes ?? {}, rev.configuration.probes ?? {});
     if (routing.value) {
       const r = reapply('routing', { routing: routing.value }, { routing: old?.routing ?? {} }, { routing: rev.configuration.routing ?? {} }).routing;
       routing.value = r && !jsonEqual(r, rev.configuration.routing ?? {}) ? r : undefined;
@@ -1212,6 +1295,7 @@ export const useDraftStore = defineStore('draft', () => {
     routing.value = undefined;
     forwards.value = {};
     scenarios.value = {};
+    probes.value = {};
     matrix.value = undefined;
     portsText.value = {};
     serverErrors.value = {};
@@ -1262,6 +1346,12 @@ export const useDraftStore = defineStore('draft', () => {
         (out[f[1]!] ??= {})[f[2] ?? 'forward'] = e.message ?? 'not valid';
         continue;
       }
+      // a probe keeps the pointer below it (its dialog maps it to its fields; `probe` for the probe as a whole)
+      const pr = /^\/probes\/([^/]+)(?:\/(.+))?$/.exec(e.path ?? '');
+      if (pr) {
+        (out[pr[1]!] ??= {})[pr[2] ?? 'probe'] = e.message ?? 'not valid';
+        continue;
+      }
       // a scenario keeps the pointer below it (its editors map it to steps and checks; `scenario` for the scenario as a whole)
       const sc = /^\/scenarios\/([^/]+)(?:\/(.+))?$/.exec(e.path ?? '');
       if (sc) {
@@ -1305,6 +1395,7 @@ export const useDraftStore = defineStore('draft', () => {
     routing,
     forwards,
     scenarios,
+    probes,
     matrix,
     portsText,
     dirty,
@@ -1320,6 +1411,8 @@ export const useDraftStore = defineStore('draft', () => {
     baseForwards,
     effectiveScenarios,
     baseScenarios,
+    effectiveProbes,
+    baseProbes,
     baseNetwork,
     baseRouting,
     baseClient,
@@ -1340,6 +1433,10 @@ export const useDraftStore = defineStore('draft', () => {
     setDevice,
     removeDevice,
     restoreDevice,
+    setProbe,
+    revertProbe,
+    removeProbe,
+    restoreProbe,
     effectiveGroups,
     setGroup,
     setClient,

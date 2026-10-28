@@ -2921,7 +2921,7 @@ Phase 5 (M20 to M23c, application layer) is implemented: M20 to M23a are on `mai
 
 ## Phase 6 open items
 
-Phase 6 (M24 to M26, diagnostics and observability) is under way: M24, M25 and M26 are implemented and closed after their reviews, all on the branch `worktree-phase-6` (not merged yet); M26 found nothing that needs a decision. Items below are what the implementation of a milestone found that no later milestone of the plan completes and that needs a decision of the maintainer.
+Phase 6 (M24 to M26a, diagnostics, observability and probe management) is under way: M24, M25, M26 and M26a are implemented and closed after their reviews, all on the branch `worktree-phase-6` (not merged yet); M26 found nothing that needs a decision, M26a one (P6-M26a-01). Items below are what the implementation of a milestone found that no later milestone of the plan completes and that needs a decision of the maintainer.
 
 ### P6-M24-01 A diagnostic can be pointed at any address the gateway can reach, by a token with the scope `overlays`
 
@@ -2938,7 +2938,7 @@ Phase 6 (M24 to M26, diagnostics and observability) is under way: M24, M25 and M
 
 ### P6-M25-01 A probe cannot be added, changed or removed in the web UI or with `chaosctl`
 
-- Status: closed (2026-10-28): decided by the maintainer, option (a): a probe dialog over the draft and `chaosctl probe add|remove|list`, in the new milestone M26a (Probe management, M) after M26 in Phase 6 of `docs/plan.md`; not built yet
+- Status: closed (2026-10-28): decided by the maintainer, option (a): a probe dialog over the draft and `chaosctl probe add|remove|list`, in the new milestone M26a (Probe management, M) after M26 in Phase 6 of `docs/plan.md`; built in M26a on the branch `worktree-phase-6` on 2026-10-28 (not merged yet, no CI run yet): the probe dialog with Remove and the preview, `chaosctl probe add|remove|list`, the Playwright test, the `chaosctl` test, the empty state that opens the dialog
 - Severity: minor
 - Reason: needs-decision. The plan's Scope for M25 names the probes themselves (virtual clients, DHCP address, targeting, diagnostics, the self-test) and not a form for them. A probe is an object of the configuration (`probes`: name, network, `trusts_test_ca`, labels), like a custom profile or a port forward: it is made with a revision over the API (a merge patch, or the YAML import), and the web UI lists the probes, runs a diagnostic from one and measures a profile with one, but has no dialog that adds one to the draft, edits its network or removes it, and `chaosctl` has no `probe` command. The draft of the web app (`web/src/stores/draft.ts`) keeps one set of functions per kind of object (the changes, the patch, the rebase and the overlap check), so a form for probes is a piece of work of its own, not a dialog over an existing kind.
 - Evidence: `docs/development.md` "Probes and calibration (M25)", decision 9; `web/src/components/diagnostics/ProbesCard.vue` (the empty state names `probes` of the configuration); `api/openapi.yaml` (`probes` of `Configuration`; no `POST /probes`).
@@ -2948,3 +2948,16 @@ Phase 6 (M24 to M26, diagnostics and observability) is under way: M24, M25 and M
 - Acceptance: for (a) and (b), a Playwright test adds a probe through the dialog and the drawer, sees it in the list with its address, and removes it; for (a) a `chaosctl` test lists, adds and removes one; for (c) the plan says that probes are made over the API.
 - Needs maintainer: yes
 - Effort: M
+
+### P6-M26a-01 Whether probe management (M26a) belongs to V1
+
+- Status: new
+- Severity: minor
+- Reason: needs-decision. The V1 scope summary of `docs/plan.md` names M24 and M25 and does not name M26a, which the maintainer added on 2026-10-28 (P6-M25-01, option (a)) as the part of M25 that lets a user add, change and remove a probe in the web UI and with `chaosctl`. M25 itself is in V1. Without M26a a probe is made only by editing the configuration (`config patch`, the YAML import), so the probes of V1 (testing "before the hardware is connected", plan §2.12) would be reachable from the web UI for diagnostics and measurements but not creatable there. Whether the feature ships with V1 is a scope decision; the plan's rule is that nothing is in V1 unless the maintainer put it there (D27).
+- Evidence: `docs/plan.md` ("V1 Scope Summary", M26a, §2.17 "Probes"), `docs/development.md` "Probe management (M26a)", `docs/open-items.md` P6-M25-01.
+- Task: decide whether M26a is part of V1, optional for V1, or ships after V1.
+- Options: (a) part of V1, like M25 (the summary lists M26a; nothing else changes because the code exists and passes its level 0 tests); (b) optional for V1, like M26 (it ships if it is merged and green at the release, and the release notes say that probes are made over the API otherwise); (c) after V1, like M23c (the code stays on the branch, hidden or merged behind no flag; the UI would then have to lose *Add probe* before the release).
+- Recommendation: (a): M25 is in V1 and its probes are of little use if a tester has to write YAML to make one; M26a adds no API and no spec change, only a form and a `chaosctl` command over the draft machinery that is in V1 already (M35a), so it costs V1 nothing beyond the CI run it needs anyway.
+- Acceptance: the V1 scope summary of `docs/plan.md` names M26a (for (a)), lists it among the optional milestones (for (b)) or among those that ship after V1 (for (c)); for (c) the UI also loses *Add probe*.
+- Needs maintainer: yes
+- Effort: S

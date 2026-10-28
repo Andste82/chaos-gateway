@@ -56,7 +56,11 @@ type Step struct {
 	Idempotent   bool
 	Probe        *Command
 	RunIfProbeOK bool
-	Cmd          Command
+	// ProbeAsksForNS says the probe asks whether a network namespace is there by running a command in it. Only the message
+	// that the namespace cannot be opened counts as "no"; any other failure (`ip netns exec` can fail for a moment while other
+	// commands enter namespaces) is repeated and then reported, so that nothing is removed or made again on a guess.
+	ProbeAsksForNS bool
+	Cmd            Command
 }
 
 // Plan turns a validated operation into steps. It is pure: no execution, no state. Read

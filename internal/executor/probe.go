@@ -39,7 +39,8 @@ var (
 // ProbeNS makes a probe (`ensure`) or removes it (`delete`). `ensure` creates the namespace and the pair, makes the
 // gateway's end a port of Bridge, gives the end in the namespace its MAC, brings both up and starts the DHCP client
 // that gives the probe its address (the executor keeps it running; a probe whose client died is started again by the next
-// `ensure`). `delete` stops the client and removes the pair and the namespace. Everything is fixed: the operation takes
+// `ensure`, and a client that was started for another bridge, MAC or namespace is replaced by one for the probe as it is
+// now). An interface with another MAC than the wanted one gets it back. `delete` stops the client and removes the pair and the namespace. Everything is fixed: the operation takes
 // names, never a command.
 type ProbeNS struct {
 	Target
@@ -111,6 +112,8 @@ type ProbeNSState struct {
 	MAC    string `json:"mac,omitempty"`
 	// Addrs are the IPv4 addresses of the probe's interface, with their prefix length.
 	Addrs []string `json:"addrs,omitempty"`
+	// NoPair says the namespace is there and the gateway's end of the pair is not (HostIf is the name it would have).
+	NoPair bool `json:"no_pair,omitempty"`
 	// DHCP says the executor runs the probe's DHCP client; Lease is what it holds.
 	DHCP  bool         `json:"dhcp"`
 	Lease *probe.Lease `json:"lease,omitempty"`
@@ -251,16 +254,51 @@ func planProbeNS(o *ProbeNS) []Step {
 	}
 }
 
+// healProbeMAC gives the probe's interface its MAC when it has another: the pair is made once, with the MAC of the day it
+// was made, so a MAC changed by hand or by a newer derivation stays until something sets it. The lease and the reservation
+// of the probe are by MAC, so a wrong one is a wrong probe.
+func (e *Executor) healProbeMAC(ctx context.Context, o *ProbeNS) error {
+	show := Command{Tool: ToolIP, Args: []string{"-j", "addr", "show", "dev", ProbePeerIf}, NS: o.Name}
+	r, err := e.run.Run(ctx, show)
+	if err != nil {
+		return err
+	}
+	if r.Exit != 0 {
+		return &CommandError{Cmd: show, Exit: r.Exit, Stderr: r.Stderr}
+	}
+	as, err := linux.ParseAddrs([]byte(r.Stdout))
+	if err != nil || len(as) != 1 || strings.EqualFold(as[0].MAC, o.MAC) {
+		return nil
+	}
+	for _, args := range [][]string{{"link", "set", "dev", ProbePeerIf, "down"}, {"link", "set", "dev", ProbePeerIf, "address", o.MAC}, {"link", "set", "dev", ProbePeerIf, "up"}} {
+		cmd := Command{Tool: ToolIP, Args: args, NS: o.Name}
+		r, err := e.run.Run(ctx, cmd)
+		if err != nil {
+			return err
+		}
+		if r.Exit != 0 {
+			return &CommandError{Cmd: cmd, Exit: r.Exit, Stderr: r.Stderr}
+		}
+	}
+	return nil
+}
+
 // probeClients are the DHCP clients of the probes the executor runs.
 type probeClients struct {
 	mu sync.Mutex
 	m  map[string]*probeClient
 }
 
+// probeClient is a running DHCP client with what it was started for: a client is bound to the namespace it opened its socket
+// in, to the bridge it asks on and to the MAC it asks with, so it is replaced when one of them is no longer the probe's.
 type probeClient struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	client *probe.Client
+	bridge string
+	mac    string
+	// netns is the identity of the namespace (the inode of /run/netns/NAME); 0 when it cannot be read.
+	netns uint64
 }
 
 // WithProbeSocket replaces how the DHCP client of a probe opens its socket (the tests of the executor have no
@@ -280,9 +318,26 @@ func (e *Executor) probeNetOf(ns string) diag.Net {
 	return diag.HostNet{Namespace: ns}
 }
 
-// startProbeClient starts the DHCP client of the probe unless one runs.
+// startProbeClient starts the DHCP client of the probe unless one runs for the probe as it is now. A client that was
+// started for another bridge (the probe moved to another network), another MAC or another namespace (the namespace was
+// removed and made again: the client's socket lives in the old one) is stopped first, and a probe that moved gets rid of
+// the address of the old network, so the new client asks from scratch.
 func (e *Executor) startProbeClient(o *ProbeNS) error {
+	netns, _ := e.inode("/run/netns/" + o.Name)
 	e.probes.mu.Lock()
+	if pc, ok := e.probes.m[o.Name]; ok {
+		if pc.bridge == o.Bridge && pc.mac == o.MAC && pc.netns == netns {
+			e.probes.mu.Unlock()
+			return nil
+		}
+		same := pc.netns == netns
+		e.probes.mu.Unlock()
+		e.stopProbeClient(o.Name)
+		if same {
+			e.deconfigureProbe(context.Background(), o.Name)
+		}
+		e.probes.mu.Lock()
+	}
 	defer e.probes.mu.Unlock()
 	if _, ok := e.probes.m[o.Name]; ok {
 		return nil
@@ -300,7 +355,7 @@ func (e *Executor) startProbeClient(o *ProbeNS) error {
 	}
 	mac, _ := net.ParseMAC(o.MAC)
 	ctx, cancel := context.WithCancel(context.Background())
-	pc := &probeClient{cancel: cancel, done: make(chan struct{})}
+	pc := &probeClient{cancel: cancel, done: make(chan struct{}), bridge: o.Bridge, mac: o.MAC, netns: netns}
 	pc.client = &probe.Client{MAC: mac, Hostname: o.Hostname, Sock: sock, Clock: e.clock, Log: e.log.With("probe", o.Name),
 		Bound: func(l probe.Lease) { e.configureProbe(ctx, o.Name, &l) }, Lost: func(l probe.Lease) { e.deconfigureProbe(ctx, o.Name) }}
 	if e.probeRetry > 0 {
@@ -404,27 +459,54 @@ func (e *Executor) readProbes(ctx context.Context, tg Target) ([]ProbeNSState, e
 	}
 	e.probes.mu.Unlock()
 	var out []ProbeNSState
+	have := map[string]bool{}
 	for _, l := range links {
 		if !probeHostName.MatchString(l.Name) || l.Kind() != "veth" {
 			continue
 		}
 		st := ProbeNSState{Name: ProbeNSPrefix + strings.TrimPrefix(l.Name, ProbeHostPrefix), HostIf: l.Name, Master: l.Master, HostUp: l.Up()}
+		have[st.Name] = true
+		out = append(out, st)
+	}
+	// a namespace whose pair is gone (a crash between the two steps of a delete, a pair removed by hand) is still a probe's:
+	// it is listed without a pair, so the plan can remove it or make the pair again
+	if r, err := e.run.Run(ctx, Command{Tool: ToolIP, Args: []string{"netns", "list"}}); err == nil && r.Exit == 0 {
+		for _, line := range strings.Split(r.Stdout, "\n") {
+			if f := strings.Fields(line); len(f) > 0 && probeNSName.MatchString(f[0]) && !have[f[0]] {
+				have[f[0]] = true
+				out = append(out, ProbeNSState{Name: f[0], HostIf: ProbeHostPrefix + strings.TrimPrefix(f[0], ProbeNSPrefix), NoPair: true})
+			}
+		}
+	}
+	// the inside of every namespace is read by its own `ip`; a few at a time, so that many probes do not add up to a long read
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for i := range out {
+		st := &out[i]
 		if c, ok := running[st.Name]; ok {
 			st.DHCP, st.Lease = true, c.client.Lease()
 		}
-		a, err := e.run.Run(ctx, Command{Tool: ToolIP, Args: []string{"-j", "addr", "show", "dev", ProbePeerIf}, NS: st.Name})
-		if err == nil && a.Exit == 0 {
-			if as, err := linux.ParseAddrs([]byte(a.Stdout)); err == nil && len(as) == 1 {
-				st.MAC, st.PeerUp = strings.ToLower(as[0].MAC), hasString(as[0].Flags, "UP")
-				for _, x := range as[0].Addrs {
-					if x.Family == "inet" {
-						st.Addrs = append(st.Addrs, fmt.Sprintf("%s/%d", x.Local, x.PrefixLen))
+		if st.NoPair {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			a, err := e.run.Run(ctx, Command{Tool: ToolIP, Args: []string{"-j", "addr", "show", "dev", ProbePeerIf}, NS: st.Name})
+			if err == nil && a.Exit == 0 {
+				if as, err := linux.ParseAddrs([]byte(a.Stdout)); err == nil && len(as) == 1 {
+					st.MAC, st.PeerUp = strings.ToLower(as[0].MAC), hasString(as[0].Flags, "UP")
+					for _, x := range as[0].Addrs {
+						if x.Family == "inet" {
+							st.Addrs = append(st.Addrs, fmt.Sprintf("%s/%d", x.Local, x.PrefixLen))
+						}
 					}
 				}
 			}
-		}
-		out = append(out, st)
+		}()
 	}
+	wg.Wait()
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }

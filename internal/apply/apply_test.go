@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Andste82/chaos-gateway/internal/apply"
@@ -20,6 +21,8 @@ type env struct {
 	ex  *executor.Executor
 	cfg *model.Configuration
 	seq uint64
+	// sockets counts how often the DHCP client of a probe opened its socket (newProbeEnv)
+	sockets atomic.Int32
 }
 
 func newTestbedKernel() *kernelsim.Kernel {
@@ -85,7 +88,7 @@ func (e *env) mutating() []string {
 		f := strings.Fields(c)
 		switch f[0] {
 		case "ip":
-			if len(f) > 1 && f[1] != "-j" && (len(f) <= 2 || f[1] != "link" || f[2] != "show") {
+			if len(f) > 1 && f[1] != "-j" && (len(f) <= 2 || f[1] != "link" || f[2] != "show") && (len(f) <= 2 || f[1] != "netns" || f[2] != "list") {
 				out = append(out, c)
 			}
 		case "nft":

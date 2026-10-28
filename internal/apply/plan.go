@@ -509,6 +509,8 @@ func probeDiffers(p compiler.ProbeTarget, s *State) string {
 	switch {
 	case !ok:
 		return "missing"
+	case st.NoPair:
+		return "its pair is gone"
 	case st.HostIf != p.HostIf:
 		return "its pair is " + st.HostIf + ", want " + p.HostIf
 	case st.Master != p.Bridge:

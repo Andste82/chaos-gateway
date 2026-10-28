@@ -827,6 +827,13 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 		}
 		k.svc[a[2]] = sub
 		return ok2()
+	case "netns list":
+		var names []string
+		for n := range k.svc {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		return okr(strings.Join(names, "\n"))
 	case "netns delete":
 		if len(a) != 3 || k.svc[a[2]] == nil {
 			return fail("Cannot remove namespace file: No such file or directory")
@@ -959,6 +966,9 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 				}
 				l.mtu = n
 				return ok2()
+			case a[4] == "address" && len(a) == 6:
+				l.mac = a[5]
+				return ok2()
 			case a[4] == "up":
 				l.up = true
 				return ok2()
@@ -981,6 +991,27 @@ func (k *Kernel) ipCmd(a []string) (executor.Result, error) {
 			}
 			l.addrs = append(l.addrs, a[2])
 			return ok2()
+		}
+	case "addr flush":
+		// ip -4 addr flush dev X
+		if len(a) == 4 && a[2] == "dev" {
+			l, exists := k.links[a[3]]
+			if !exists {
+				return fail("Device \"%s\" does not exist.", a[3])
+			}
+			l.addrs = nil
+			return ok2()
+		}
+	case "route delete":
+		// ip route delete default dev D (the main table of a namespace)
+		if len(a) == 5 && a[2] == "default" && a[3] == "dev" {
+			for i, x := range k.routes {
+				if x.table == "main" && x.dst == "default" && x.dev == a[4] {
+					k.routes = append(k.routes[:i], k.routes[i+1:]...)
+					return ok2()
+				}
+			}
+			return fail("RTNETLINK answers: No such process")
 		}
 	case "addr delete":
 		if len(a) == 5 && a[3] == "dev" {

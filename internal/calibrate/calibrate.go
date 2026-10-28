@@ -25,6 +25,8 @@ const (
 	RateRelative = 0.10
 	// MinSamplesLoss is the number of datagrams from which the loss check is a statistic and not an indication.
 	MinSamplesLoss = 2000
+	// JitterMargin is the factor on the expected spread of the round trip that the jitter check allows.
+	JitterMargin = 1.2
 	// MinSamplesLatency is the number of answers the latency check needs.
 	MinSamplesLatency = 200
 )
@@ -32,9 +34,14 @@ const (
 // Expectation is what the parameters should make of a round trip of a probe to an echo server: the delays of the two
 // directions add up and the losses combine.
 type Expectation struct {
-	// AddedRTTMs is the delay the parameters add to a round trip (upload plus download), JitterMs the sum of the two
-	// jitters: the round trip varies by at most this much around the median.
+	// AddedRTTMs is the delay the parameters add to a round trip (upload plus download: the delays, and the time a packet
+	// takes to leave a direction that has a rate), JitterMs the sum of the two jitters.
 	AddedRTTMs, JitterMs float64
+	// SpreadMs is how far the 95th percentile of the round trip is expected above its median because of the jitters: the
+	// two directions are independent, so it depends on the distribution of the delay (netem: mu + jitter * a table that
+	// is uniform on -1..1 or normal with a standard deviation of 1). 0 when there is none to check: no jitter, or a
+	// distribution (pareto) whose tail has no bound to hold the measurement to.
+	SpreadMs float64
 	// LossPercent is the chance that a round trip is lost; LossMeasured is false when it is not a rate (flapping), Correlated
 	// when losses come in bursts (a correlation or the burst model), where the binomial interval does not hold.
 	LossPercent  float64
@@ -64,7 +71,11 @@ func Directions(p *model.ImpairmentParams) (up, down *model.NetemParams) {
 }
 
 // Expect works out the expectation of impairment parameters; nil is no impairment.
-func Expect(p *model.ImpairmentParams) (Expectation, error) {
+func Expect(p *model.ImpairmentParams) (Expectation, error) { return ExpectFor(p, 0) }
+
+// ExpectFor is Expect for datagrams of wireBytes bytes at the qdisc (the Ethernet frame): a direction with a rate holds
+// each of them back for wireBytes*8/rate seconds besides its delay. 0 leaves that out.
+func ExpectFor(p *model.ImpairmentParams, wireBytes int) (Expectation, error) {
 	e := Expectation{LossMeasured: true}
 	if p == nil {
 		return e, nil
@@ -72,6 +83,7 @@ func Expect(p *model.ImpairmentParams) (Expectation, error) {
 	up, down := Directions(p)
 	pass := 1.0 // the chance that a round trip is not lost
 	notes := map[string]bool{}
+	var jitters []jitter
 	for _, d := range []*model.NetemParams{up, down} {
 		if d == nil {
 			continue
@@ -82,6 +94,12 @@ func Expect(p *model.ImpairmentParams) (Expectation, error) {
 		}
 		e.AddedRTTMs += float64(n.Delay) / float64(time.Millisecond)
 		e.JitterMs += float64(n.Jitter) / float64(time.Millisecond)
+		if n.Rate > 0 && wireBytes > 0 {
+			e.AddedRTTMs += float64(wireBytes) * 8 / float64(n.Rate) * 1000
+		}
+		if n.Jitter > 0 {
+			jitters = append(jitters, jitter{ms: float64(n.Jitter) / float64(time.Millisecond), dist: n.Distribution})
+		}
 		switch {
 		case n.Flapping != nil:
 			e.LossMeasured = false
@@ -113,11 +131,54 @@ func Expect(p *model.ImpairmentParams) (Expectation, error) {
 		}
 	}
 	e.LossPercent = (1 - pass) * 100
+	var note string
+	if e.SpreadMs, note = spreadOf(jitters); note != "" {
+		notes[note] = true
+	}
 	for n := range notes {
 		e.Notes = append(e.Notes, n)
 	}
 	sort.Strings(e.Notes)
 	return e, nil
+}
+
+// jitter is the jitter of one direction with the distribution of its delay ("" is uniform).
+type jitter struct {
+	ms   float64
+	dist string
+}
+
+// spreadOf is the distance of the 95th percentile of a round trip from its median when each direction adds its delay
+// independently. Uniform delays of +-a and +-b add up to a trapezoid whose tail is (a+b-x)^2/(8ab) (x is the distance
+// from the median; the tail is 0.9a where a >= 10b); normal ones add up to a normal one with the variances summed; a
+// mix is taken as normal with the variance of a uniform delay J^2/3. A pareto tail has no bound: 0 and a note.
+func spreadOf(js []jitter) (float64, string) {
+	if len(js) == 0 {
+		return 0, ""
+	}
+	uniform, variance := true, 0.0
+	for _, j := range js {
+		switch j.dist {
+		case "":
+			variance += j.ms * j.ms / 3
+		case "normal":
+			uniform = false
+			variance += j.ms * j.ms
+		default:
+			return 0, "the jitter of the distribution " + j.dist + " has a heavy tail and is not checked"
+		}
+	}
+	if uniform {
+		a, b := js[0].ms, 0.0
+		if len(js) == 2 {
+			a, b = math.Max(js[0].ms, js[1].ms), math.Min(js[0].ms, js[1].ms)
+		}
+		if a >= 10*b {
+			return 0.9 * a, ""
+		}
+		return a + b - math.Sqrt(0.4*a*b), ""
+	}
+	return normalQuantile(0.95) * math.Sqrt(variance), ""
 }
 
 // Measurement is what the probe measured, in the units the executor reports.
@@ -182,11 +243,12 @@ func Evaluate(exp Expectation, m Measurement) model.CalibrationResult {
 		check("latency", math.Abs(added-exp.AddedRTTMs) <= tol, "the median round trip is %.2f ms against %.2f ms unimpaired: %.2f ms added, %.2f ms expected (tolerance ±%.2f ms)", median/1000, base/1000, added, exp.AddedRTTMs, tol)
 	}
 
-	// ---- jitter: the round trip varies by at most the jitters of the two directions around its median
-	if exp.JitterMs > 0 && haveRTT {
+	// ---- jitter: the 95th percentile of the round trip lies about SpreadMs above its median (the estimate of a percentile
+	// from a run varies, so a fifth more is allowed, and the tolerance of the delay)
+	if exp.SpreadMs > 0 && haveRTT {
 		spread := (p95 - median) / 1000
-		limit := exp.JitterMs + tolerance(exp.AddedRTTMs)
-		check("jitter", spread <= limit, "the 95th percentile is %.2f ms above the median; the jitters allow %.2f ms (plus the tolerance of the delay)", spread, exp.JitterMs)
+		limit := JitterMargin*exp.SpreadMs + tolerance(exp.AddedRTTMs)
+		check("jitter", spread <= limit, "the 95th percentile is %.2f ms above the median; the jitters make %.2f ms of it, %.2f ms are allowed (a margin of %.0f %% and the tolerance of the delay)", spread, exp.SpreadMs, limit, 100*(JitterMargin-1))
 	}
 
 	// ---- loss: the measured count must lie in the 99.9 % interval of the binomial distribution of the configured rate

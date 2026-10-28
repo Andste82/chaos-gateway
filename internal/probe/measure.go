@@ -46,6 +46,13 @@ type EchoResult struct {
 	ElapsedMs int64 `json:"elapsed_ms"`
 }
 
+// DefaultEchoSize is the payload of an echo datagram that asks for no size.
+const DefaultEchoSize = 32
+
+// WireBytes is the size of a UDP datagram of payload bytes as a qdisc sees it: the Ethernet header and the IPv4 and UDP
+// headers on top.
+func WireBytes(payload int) int { return payload + 8 + 20 + 14 }
+
 const echoMagic = 0x63687a45 // "chzE"
 
 // Echo sends the datagrams of spec to an echo server (it returns each datagram unchanged) from the stack n and times the
@@ -54,7 +61,7 @@ const echoMagic = 0x63687a45 // "chzE"
 func Echo(ctx context.Context, n diag.Net, spec EchoSpec) (EchoResult, error) {
 	size := max(spec.Size, 16)
 	if spec.Size == 0 {
-		size = 32
+		size = DefaultEchoSize
 	}
 	conn, err := n.DialContext(ctx, "udp", netip.AddrPortFrom(spec.Host, uint16(spec.Port)).String())
 	if err != nil {

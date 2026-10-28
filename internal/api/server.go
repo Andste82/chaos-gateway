@@ -125,6 +125,8 @@ type Server struct {
 	diagnostics *diagnostics
 	// calibrating holds the probes whose calibration runs (M25)
 	calibrating calibrations
+	// diagnosing holds the probes that run a diagnostic: one at a time per probe (a run takes up to a minute)
+	diagnosing calibrations
 }
 
 var _ apiserver.ServerInterface = (*Server)(nil)

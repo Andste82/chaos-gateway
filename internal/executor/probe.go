@@ -439,6 +439,15 @@ func (e *Executor) probeCmd(ctx context.Context, ns string, args ...string) {
 	}
 }
 
+// probeNSIsOrphan says that a namespace of the probes' name holds no end of a pair any more. The namespace list is the host's,
+// so it also names the namespaces of a pair that belongs to another gateway on the same host (the tests of the testbed run
+// several, with the same probe ids): a namespace with its interface is somebody's probe and is left alone. Only a namespace in
+// which the interface is certainly missing is an orphan; a command that fails otherwise decides nothing (the next read asks again).
+func (e *Executor) probeNSIsOrphan(ctx context.Context, ns string) bool {
+	r, err := e.run.Run(ctx, Command{Tool: ToolIP, Args: []string{"-j", "link", "show", "dev", ProbePeerIf}, NS: ns})
+	return err == nil && r.Exit != 0 && strings.Contains(r.Stderr, "does not exist")
+}
+
 // readProbeInterface reads the probe's end of the pair from inside its namespace. A read that fails is repeated twice: `ip netns
 // exec` can fail for a moment while other commands enter namespaces at the same time, and an interface that is read as "no
 // address, not up" makes a probe look unready (a 503 on a diagnostic) and makes the next apply ensure it again.
@@ -503,7 +512,7 @@ func (e *Executor) readProbes(ctx context.Context, tg Target) ([]ProbeNSState, e
 	// it is listed without a pair, so the plan can remove it or make the pair again
 	if r, err := e.run.Run(ctx, Command{Tool: ToolIP, Args: []string{"netns", "list"}}); err == nil && r.Exit == 0 {
 		for _, line := range strings.Split(r.Stdout, "\n") {
-			if f := strings.Fields(line); len(f) > 0 && probeNSName.MatchString(f[0]) && !have[f[0]] {
+			if f := strings.Fields(line); len(f) > 0 && probeNSName.MatchString(f[0]) && !have[f[0]] && e.probeNSIsOrphan(ctx, f[0]) {
 				have[f[0]] = true
 				out = append(out, ProbeNSState{Name: f[0], HostIf: ProbeHostPrefix + strings.TrimPrefix(f[0], ProbeNSPrefix), NoPair: true})
 			}

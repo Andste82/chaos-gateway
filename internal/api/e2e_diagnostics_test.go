@@ -212,8 +212,7 @@ func TestEveryDiagnosticAgainstTheServerNamespaceOfTheTestbed(t *testing.T) {
 		t.Errorf("dns: %v", r)
 	}
 	r = g.diagnoseOK(map[string]any{"type": "dns", "host": srv, "dns_name": "nothing.example.com"})
-	// the resolver of the server namespace refuses a name outside its zone; either answer says the upstream does not know it
-	if rc := sub(r, "dns")["rcode"]; r["ok"] != false || (rc != "NXDOMAIN" && rc != "REFUSED") {
+	if r["ok"] != false || sub(r, "dns")["rcode"] != "NXDOMAIN" {
 		t.Errorf("dns nxdomain: %v", r)
 	}
 
@@ -299,7 +298,8 @@ func TestNamesAreResolvedThroughTheDNSProxyOfTheServiceNamespace(t *testing.T) {
 		t.Errorf("path by the gateway: %v", r)
 	}
 	r = g.diagnoseOK(map[string]any{"type": "dns", "host": "nothing.test"})
-	if r["ok"] != false || sub(r, "dns")["rcode"] != "NXDOMAIN" {
+	// the resolver of the server namespace refuses a name outside its zone; either answer says the upstream does not know it
+	if rc := sub(r, "dns")["rcode"]; r["ok"] != false || (rc != "NXDOMAIN" && rc != "REFUSED") {
 		t.Errorf("a name the upstream does not know: %v", r)
 	}
 

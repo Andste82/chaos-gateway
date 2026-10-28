@@ -36,6 +36,9 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/linkexport` | what a link's remote side needs besides WireGuard: its BIRD configuration |
 | `internal/appliance` | the harness of test level 2 (M5b): Ubuntu cloud images with checksum verification, the cloud-init seed, the QEMU command line, the host topology (bridges, taps, namespaces), SSH into the VM, log collection |
 | `internal/diag` | the diagnostics (M24): ping (the unprivileged ICMP datagram socket, the raw one as the fallback), TCP and UDP checks, DNS lookups, HTTP(S) requests, TLS handshake details and the path of DNS, route, TCP and TLS, from the stack of the process or of a network namespace; the structured results of `POST /diagnostics` |
+| `internal/probe` | the probes (M25): the DHCPv4 client of a probe, the echo and rate measurements it runs in its namespace |
+| `internal/calibrate` | the self-test of a probe (M25): the expected values of a profile or fault and the verdicts within the tolerances of plan §4.3 |
+| `internal/metrics` | the Prometheus text format writer of `GET /metrics` (M26) |
 | `internal/tlsresponder` | the TLS responder (M21): the two CAs (the test CA and the unknown CA), the certificates of the cases per name, the ClientHello reader, the connection handling (a case, a passed-through connection, reset on removal), the reports of the handshakes, the hand-over to the interception proxy and the control interface it asks (M22), the client of the internal API |
 | `sidecars/tls-proxy` | the interception proxy (M22): the only Python of the project, a mitmproxy addon (`chaosgw_tlsproxy`: the rules, the API client, the addon, the launcher of the container) with its unit tests; the container is `deploy/compose.tlsproxy.yaml` |
 | `internal/svcapi` | the client of the internal API that the service containers share (service token, the API's certificate from a file) |
@@ -6437,8 +6440,7 @@ and the Diagnostics screen. Probes (a diagnostic `from.probe`) are M25; tracerou
   `diagnostic_types` (`domain.DiagnosticTypes`).
 - **What is refused and what is a result.** A target that fails (no reply, refused, a name that does not resolve, a certificate that does not verify,
   a status of 400 or more) is a `200` with `ok: false` and `error`, because the failure is the answer. A request that cannot be run is `422`:
-  `validation_failed` (`domain.DecodeDiagnosticRequest`: the schema, then `ValidateDiagnosticRequest`), `unsupported_feature` for `from.probe`
-  (the problem names M25), `capacity_exceeded` when `api.MaxDiagnostics` (8) run already. The rules the schema cannot say: the host is an IPv4 address or
+  `validation_failed` (`domain.DecodeDiagnosticRequest`: the schema, then `ValidateDiagnosticRequest`), `capacity_exceeded` when `api.MaxDiagnostics` (8) run already. The rules the schema cannot say: the host is an IPv4 address or
   a host name (no URL, port, path, wildcard, IPv6 address or malformed address: `ValidDiagnosticHost`); `tcp`, `udp` and `path` need a `port`; a field
   that the type does not use is `unexpected_field` (a `count` for a TCP check is a mistake, not something to ignore); `dns_name` has no wildcard; an `http`
   `url` is http or https with a host and without credentials; the timeout is 10 ms to 60 s; a ping's echoes and its timeout fit the 60 s
@@ -6505,7 +6507,7 @@ and the Diagnostics screen. Probes (a diagnostic `from.probe`) are M25; tracerou
 
 ### Decisions
 
-Taken by best practice where the plan leaves room; none needs the maintainer:
+Taken by best practice where the plan leaves room; none needed the maintainer (decision 7 led to the question of the destinations, P6-M24-01, decided on 2026-10-28):
 
 1. **A target that fails is `200 ok: false`,** as the spec's response says ("also when the diagnosed target fails"); a `4xx` is a request the gateway cannot run. A client
    can tell its own mistake from the target's failure by the status.
@@ -6517,9 +6519,9 @@ Taken by best practice where the plan leaves room; none needs the maintainer:
    that wants only the details reads `tls` and ignores `ok`.
 5. **The ping interval is 200 ms,** the smallest an unprivileged `ping` may use, so that ten echoes take two seconds and not ten; the 60 s of the request decide the largest `count`
    with the timeout (rejected at the request, not cut silently).
-6. **`from.probe` is `unsupported_feature` until M25;** the schema already has the field and the capabilities do not claim it.
+6. **`from.probe` was `unsupported_feature` until M25** (superseded: M25 implements it, see "Probes and calibration (M25)"); M24 left the field in the schema without claiming it in the capabilities.
 7. **Every run is audited.** A diagnostic opens connections from the gateway to any address its caller names, so a run shows up in the audit log with its target; the scope
-   `overlays` that the spec gives it is for automation tokens as well.
+   `overlays` that the spec gives it is for automation tokens as well. Whether that scope may reach every destination (the loopback, the management network, the Docker networks) was the question P6-M24-01, decided on 2026-10-28 (option (a): it may, and the audit entry is the compensating control).
 8. **The sysctl is written by the host setup** and not set by the container: the API shares the host's network namespace, where a container cannot set a sysctl. The value
    is the Docker and Ubuntu default (every group), not a narrower one, because the API's group is a numeric one that the host setup does not know.
 
@@ -6572,7 +6574,7 @@ runs from it, and the self-test "measure this profile" compares what it measures
   sent by the DHCP client is the probe's name as a DNS label. A probe of a network that has no bridge in the target (a WireGuard network, which validation refuses, or a network with an
   error) is left out. The plan (`apply.probeOps`) comes after the links step, when the bridges exist: a probe that is gone from the target is deleted; one that is missing, not a port of its
   bridge, down, with another MAC or without a DHCP client is ensured. `executor.ProbeNS ensure` runs fixed commands only (`ip netns add`, `ip link add pv.. type veth peer name eth0 address MAC
-  netns cgp-..`, `ip link set master`, `ethtool -K .. gro off gso off tso off lro off` on both ends, the links up) and starts the client; `delete` stops the client and removes the pair and the
+  netns cgp-..`, `ip link set master`, `ethtool -K .. gro off gso off tso off lro off` on both ends, `sysctl -w net/ipv4/conf/{all,eth0}/rp_filter=0` in the probe's namespace, the links up) and starts the client; `delete` stops the client and removes the pair and the
   namespace. The gateway's end is not among the assigned interfaces (it is not Chaos Gateway's in the sense of tc and routing: the traffic of a probe is classified on the bridge and the uplink like
   a device's, S12) and `apply.ReadState` takes it out of the links, so the preview and the verify of a bridge's ports do not see it; `Verify` checks the probes by `ReadProbes`
   (`probes: ...` mismatches). The executor refuses a bridge that is not assigned or is OS-owned, and a namespace or interface that does not follow the pattern. An `ensure` also gives the
@@ -6645,6 +6647,7 @@ Taken by best practice where the plan leaves room; the one that needed the maint
    (`probeRunSlots`), not the four reader slots: a run lasts up to a minute (a diagnostic) or minutes (a calibration), and a few of them would have starved every read of an apply and of the observation
    (P6-AUDIT-02). A probe runs one diagnostic at a time (`409 target_busy`), as it calibrates one at a time.
 9. **Probes are configured, not created by a dedicated operation:** the spec has `probes` in the configuration and no `POST /probes`; the web UI lists, diagnoses and measures them, and since M26a adds, edits and removes them through the draft (P6-M25-01).
+10. **Reverse-path filtering is off in the probe's namespace** (`rp_filter=0` for `all` and `eth0`, written by `probe_ns ensure`): the DHCP answers come from an address the client has no route to yet, and Ubuntu's `rp_filter=2` dropped them (CI run 40578380960). It is a sysctl of the probe's own namespace, not of the host.
 
 ### Tests
 
@@ -6743,9 +6746,9 @@ Taken by best practice where the plan leaves room; none needs the maintainer.
 7. **A forwarded connection is a flow of the target device,** with the peer as its source, rather than a separate list: the device's rates already count it for the target (M35a), and the flow view is where it is picked.
    The scenario runs (M15, M16) do not treat it as the device's own: `flowInScope` skips a forwarded flow, because a check on "the device's connections" means the ones the device starts, not the ones a peer starts to it.
 8. **No per-device DNS query metric:** the DNS proxy keeps a bounded log of queries, not a counter, so a count over it would shrink as the log rotates and look like a counter reset. §2.13's "DNS queries" stay with `GET /dns/queries` and the Recent DNS queries card; a counter in the proxy would be a change of M6b and is not part of M26.
-8. **The path view asks about an address, not a host name:** a flow has the address; a hostname fault acts on the addresses the DNS proxy resolved (the DNS-derived sets), which the explanation covers.
-9. **The badge sits on the way out of the device,** where the gateway impairs the traffic (the prototype's place), and shows the winner per family; "2 faults" when several, the list under the line.
-10. **The Flows screen is polled (3 s) like the Interception screen,** not driven by events: connections come and go without one.
+9. **The path view asks about an address, not a host name:** a flow has the address; a hostname fault acts on the addresses the DNS proxy resolved (the DNS-derived sets), which the explanation covers.
+10. **The badge sits on the way out of the device,** where the gateway impairs the traffic (the prototype's place), and shows the winner per family; "2 faults" when several, the list under the line.
+11. **The Flows screen is polled (3 s) like the Interception screen,** not driven by events: connections come and go without one.
 
 ### Tests
 

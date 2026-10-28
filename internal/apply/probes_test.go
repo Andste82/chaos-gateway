@@ -18,6 +18,7 @@ const (
 	probeA   = "3a1f7c52-6b0e-4d83-9c2a-1e4d5f60a7b8"
 	probeB   = "9d2e4b61-0c3f-4a75-8e1b-2f6a7c8d9e01"
 	iotNet   = "0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21"
+	labNet   = "1c8d7b4f-2a3e-4d6c-8b9f-8e7d6c5b4a32"
 	probeAns = "cgp-3a1f7c52"
 	probeAif = "pv3a1f7c52"
 )
@@ -41,6 +42,7 @@ func newProbeEnv(t *testing.T) *env {
 	t.Helper()
 	e := newEnv(t)
 	ex, err := executor.New(e.k, executor.WithNetnsInode(e.k.NetnsInode), executor.WithProbeSocket(func(ns, ifname string) (probe.Socket, error) {
+		e.sockets.Add(1)
 		return &idleSocket{done: make(chan struct{})}, nil
 	}))
 	if err != nil {
@@ -169,5 +171,95 @@ func TestTheMACOfAProbeFollowsItsIdAndIsLocalAndUnicast(t *testing.T) {
 	hw, err := net.ParseMAC(a)
 	if err != nil || hw[0]&1 != 0 || hw[0]&2 == 0 {
 		t.Errorf("%s %v", a, err)
+	}
+}
+
+// inProbe runs an ip command inside the namespace of probe A on the simulated kernel.
+func (e *env) inProbe(args ...string) {
+	e.t.Helper()
+	r, err := e.k.Run(context.Background(), executor.Command{Tool: executor.ToolIP, Args: args, NS: probeAns})
+	if err != nil || r.Exit != 0 {
+		e.t.Fatalf("ip %v in %s: %v %+v", args, probeAns, err, r)
+	}
+}
+
+func (e *env) probeState(tg *compiler.Target) executor.ProbeNSState {
+	e.t.Helper()
+	st, err := apply.ReadState(context.Background(), e.exec(), "", apply.WantOf(tg))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return st.Probes[probeAns]
+}
+
+func TestAProbeMovedToAnotherNetworkGetsANewDHCPClientAndLosesTheOldAddress(t *testing.T) {
+	e := newProbeEnv(t)
+	e.apply(e.compile(withProbes(probeA)))
+	if n := e.sockets.Load(); n != 1 {
+		t.Fatalf("sockets after the first apply: %d", n)
+	}
+	// the lease of the IoT network is on the interface
+	e.inProbe("addr", "replace", "10.10.0.77/24", "dev", executor.ProbePeerIf)
+	// a second apply of the same probe keeps the client
+	e.apply(e.compile(withProbes(probeA)))
+	if n := e.sockets.Load(); n != 1 {
+		t.Fatalf("sockets after an apply that changes nothing: %d", n)
+	}
+	// the probe is edited into the Lab network
+	moved := func(c *model.Configuration, in *compiler.Input) {
+		withProbes(probeA)(c, in)
+		(*c.Probes)[probeA] = model.Probe{Name: "probe-a", Network: labNet}
+	}
+	tg := e.compile(moved)
+	res := e.apply(tg)
+	if !strings.Contains(summary(res), `a port of "br-iot", want br-lab`) {
+		t.Errorf("the plan does not say why:\n%s", summary(res))
+	}
+	if n := e.sockets.Load(); n != 2 {
+		t.Errorf("the DHCP client of the old network still runs: %d sockets opened", n)
+	}
+	ps := e.probeState(tg)
+	if ps.Master != "br-lab" || !ps.DHCP || len(ps.Addrs) != 0 {
+		t.Errorf("the probe keeps the lease of the old network: %+v", ps)
+	}
+}
+
+func TestAProbeWhoseNamespaceWasMadeAgainGetsANewDHCPClient(t *testing.T) {
+	e := newProbeEnv(t)
+	tg := e.compile(withProbes(probeA))
+	e.apply(tg)
+	// the namespace goes, with the pair and the socket of the client in it
+	_, _ = e.k.Run(context.Background(), executor.Command{Tool: executor.ToolIP, Args: []string{"netns", "delete", probeAns}})
+	if res := e.apply(e.compile(withProbes(probeA))); !strings.Contains(summary(res), "missing") {
+		t.Fatalf("the probe is not made again:\n%s", summary(res))
+	}
+	if n := e.sockets.Load(); n != 2 {
+		t.Errorf("the client of the old namespace still runs: %d sockets opened", n)
+	}
+	if ps := e.probeState(tg); !ps.DHCP {
+		t.Errorf("%+v", ps)
+	}
+}
+
+func TestAProbeWithAnotherMACGetsItsMACBack(t *testing.T) {
+	e := newProbeEnv(t)
+	tg := e.compile(withProbes(probeA))
+	e.apply(tg)
+	e.inProbe("link", "set", "dev", executor.ProbePeerIf, "address", "02:11:22:33:44:55")
+	if mm := apply.Verify(tg, func() *apply.State {
+		st, _ := apply.ReadState(context.Background(), e.exec(), "", apply.WantOf(tg))
+		return st
+	}()); len(mm) != 1 || !strings.Contains(mm[0].Detail, "MAC") {
+		t.Fatalf("verify: %v", mm)
+	}
+	res := e.apply(e.compile(withProbes(probeA)))
+	if !strings.Contains(summary(res), "has the MAC 02:11:22:33:44:55") {
+		t.Errorf("the plan does not say why:\n%s", summary(res))
+	}
+	if ps := e.probeState(tg); ps.MAC != compiler.ProbeMAC(probeA) || !ps.PeerUp {
+		t.Errorf("the MAC is not back: %+v", ps)
+	}
+	if res := e.apply(e.compile(withProbes(probeA))); strings.Contains(summary(res), "probe ") {
+		t.Errorf("the probe is planned again:\n%s", summary(res))
 	}
 }

@@ -194,11 +194,22 @@ func (c *Client) Run(ctx context.Context) error {
 }
 
 // acquire runs DISCOVER, OFFER, REQUEST and ACK until a lease is granted. A message is repeated with the doubling wait of
-// RFC 2131 until its answer comes.
+// RFC 2131 until its answer comes. A refusal (NAK) or a reply that cannot be used is followed by a pause that doubles up to
+// the longest wait, so that a server which refuses everything is not answered with a flood of DISCOVERs.
 func (c *Client) acquire(ctx context.Context, in <-chan *message) (*Lease, error) {
 	xid := c.xid()
 	first, most := c.retries()
-	wait := first
+	wait, pause := first, first
+	// again pauses and prepares a new exchange (the loop ends when the context ended meanwhile)
+	again := func(why string) {
+		c.log().Warn("dhcp: the exchange is started again", "reason", why, "after", pause)
+		select {
+		case <-ctx.Done():
+		case <-c.Clock.After(pause):
+		}
+		pause = min(pause*2, most)
+		xid = c.xid()
+	}
 	for ctx.Err() == nil {
 		c.drain(in)
 		if err := c.Sock.Send(c.build(msgDiscover, xid, netip.Addr{}, netip.Addr{}, netip.Addr{}), broadcast); err != nil {
@@ -212,19 +223,35 @@ func (c *Client) acquire(ctx context.Context, in <-chan *message) (*Lease, error
 			}
 			return nil, err
 		}
-		server, _ := offer.addr(optServerID)
+		server, hasServer := offer.addr(optServerID)
+		if !hasServer || !usable(offer.yiaddr) {
+			again("the offer has no server identifier or no usable address")
+			continue
+		}
 		if err := c.Sock.Send(c.build(msgRequest, xid, netip.Addr{}, offer.yiaddr, server), broadcast); err != nil {
 			return nil, err
 		}
 		ack, err := c.await(ctx, in, xid, wait, msgAck)
 		if err != nil {
-			if errors.Is(err, errNak) || errors.Is(err, errTimeout) {
+			switch {
+			case errors.Is(err, errNak):
+				again(err.Error())
+				continue
+			case errors.Is(err, errTimeout):
 				xid = c.xid()
 				continue
 			}
 			return nil, err
 		}
-		return c.leaseOf(ack), nil
+		l, err := c.leaseOf(ack)
+		if err == nil && l.Server != server {
+			err = fmt.Errorf("the ACK comes from %v, the offer from %v", l.Server, server)
+		}
+		if err != nil {
+			again(err.Error())
+			continue
+		}
+		return l, nil
 	}
 	return nil, ctx.Err()
 }
@@ -266,6 +293,8 @@ func (c *Client) keep(ctx context.Context, in <-chan *message, l *Lease) (Lease,
 // renew asks the server of the lease to extend it, unicast, until T2, then every server by broadcast until the lease runs
 // out. start is when the lease was granted, on the monotonic clock.
 func (c *Client) renew(ctx context.Context, in <-chan *message, l *Lease, start time.Duration) (*Lease, error) {
+	// one renewal is one transaction: its repetitions keep the id, so a late answer to an earlier try is still the answer
+	xid := c.xid()
 	for {
 		elapsed := c.Clock.Monotonic() - start
 		if elapsed >= l.Duration {
@@ -275,7 +304,6 @@ func (c *Client) renew(ctx context.Context, in <-chan *message, l *Lease, start 
 		if elapsed >= l.T2 {
 			dst, until = broadcast, l.Duration
 		}
-		xid := c.xid()
 		c.drain(in)
 		if err := c.Sock.Send(c.build(msgRequest, xid, l.Addr.Addr(), netip.Addr{}, netip.Addr{}), dst); err != nil {
 			c.log().Warn("dhcp: cannot renew", "error", err)
@@ -285,7 +313,17 @@ func (c *Client) renew(ctx context.Context, in <-chan *message, l *Lease, start 
 		ack, err := c.await(ctx, in, xid, wait, msgAck)
 		switch {
 		case err == nil:
-			return c.leaseOf(ack), nil
+			nl, lerr := c.leaseOf(ack)
+			if lerr == nil {
+				return nl, nil
+			}
+			// an ACK that cannot be used is no answer: ask again (after a pause) until the lease runs out
+			c.log().Warn("dhcp: the renewal is not taken", "reason", lerr)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-c.Clock.After(time.Second):
+			}
 		case errors.Is(err, errTimeout): // asked again, or the lease has run out by now
 		default:
 			return nil, err
@@ -293,32 +331,62 @@ func (c *Client) renew(ctx context.Context, in <-chan *message, l *Lease, start 
 	}
 }
 
-// leaseOf reads a lease from an ACK.
-func (c *Client) leaseOf(m *message) *Lease {
+// The smallest lease time the client takes (a server that grants less would have it asking in a loop) and the smallest
+// distance of T1 from the grant and of T2 from T1.
+const (
+	minLease = 4 * time.Second
+	minTimer = time.Second
+)
+
+// usable says whether an address can be a client's: not unspecified, not the broadcast address, no multicast, no loopback.
+func usable(a netip.Addr) bool {
+	return a.Is4() && !a.IsUnspecified() && !a.IsMulticast() && !a.IsLoopback() && a != netip.AddrFrom4([4]byte{255, 255, 255, 255})
+}
+
+// leaseOf reads a lease from an ACK. An ACK that RFC 2131 does not allow is an error: no usable address, no server
+// identifier, no lease time (0xffffffff is the infinite lease), a lease time below minLease, a mask with holes.
+func (c *Client) leaseOf(m *message) (*Lease, error) {
 	now := c.Clock.Now()
+	if !usable(m.yiaddr) {
+		return nil, fmt.Errorf("the ACK gives the address %v", m.yiaddr)
+	}
 	l := &Lease{Granted: now, Addr: netip.PrefixFrom(m.yiaddr, 24)}
 	if mask, ok := m.addr(optSubnetMask); ok {
-		if ones, bits := net.IPMask(mask.AsSlice()).Size(); bits == 32 {
-			l.Addr = netip.PrefixFrom(m.yiaddr, ones)
+		ones, bits := net.IPMask(mask.AsSlice()).Size()
+		if bits != 32 || ones == 0 {
+			return nil, fmt.Errorf("the ACK gives the subnet mask %v", mask)
 		}
+		l.Addr = netip.PrefixFrom(m.yiaddr, ones)
 	}
 	l.Router, _ = m.addr(optRouter)
 	l.DNS = m.addrs(optDNS)
 	l.Domain = string(m.opts[optDomain])
-	l.Server, _ = m.addr(optServerID)
-	if v, ok := m.u32(optLeaseTime); ok && v != 0xffffffff {
-		l.Duration = time.Duration(v) * time.Second
-		l.Expires = now.Add(l.Duration)
-		l.T1, l.T2 = l.Duration/2, l.Duration*7/8
-		if t, ok := m.u32(optRenewalT1); ok && time.Duration(t)*time.Second < l.Duration {
-			l.T1 = time.Duration(t) * time.Second
-		}
-		if t, ok := m.u32(optRebindingT2); ok && time.Duration(t)*time.Second < l.Duration {
-			l.T2 = time.Duration(t) * time.Second
-		}
-		l.T2 = max(l.T2, l.T1)
+	var ok bool
+	if l.Server, ok = m.addr(optServerID); !ok || !usable(l.Server) {
+		return nil, errors.New("the ACK has no server identifier")
 	}
-	return l
+	v, ok := m.u32(optLeaseTime)
+	switch {
+	case !ok:
+		return nil, errors.New("the ACK has no lease time")
+	case v == 0xffffffff:
+		return l, nil
+	case time.Duration(v)*time.Second < minLease:
+		return nil, fmt.Errorf("the lease time of %d s is too short", v)
+	}
+	l.Duration = time.Duration(v) * time.Second
+	l.Expires = now.Add(l.Duration)
+	l.T1, l.T2 = l.Duration/2, l.Duration*7/8
+	if t, ok := m.u32(optRenewalT1); ok && time.Duration(t)*time.Second < l.Duration {
+		l.T1 = time.Duration(t) * time.Second
+	}
+	if t, ok := m.u32(optRebindingT2); ok && time.Duration(t)*time.Second < l.Duration {
+		l.T2 = time.Duration(t) * time.Second
+	}
+	// the timers have a floor, so that a T1 of 0 does not have the client renew as fast as the server answers
+	l.T1 = max(l.T1, minTimer)
+	l.T2 = max(l.T2, l.T1+minTimer)
+	return l, nil
 }
 
 var (

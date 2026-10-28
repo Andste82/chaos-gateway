@@ -262,6 +262,8 @@ type Engine struct {
 	activeMu        sync.Mutex
 	active          map[netip.Addr]bool
 	unknown         []netip.Addr
+	// probeResyncAt is when the observation last asked for a resync because a probe had no DHCP client (unix nanoseconds)
+	probeResyncAt atomic.Int64
 	// neighSeen is when each neighbor entry (interface, address, MAC) was first read: of two
 	// entries of a device, the one seen later is its more current address (domain.Neighbor.Seen).
 	neighMu   sync.Mutex

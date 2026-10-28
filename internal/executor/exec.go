@@ -98,14 +98,17 @@ type Executor struct {
 	// readers bounds the reads that run beside the writer; rmu, rwg and closed let Close wait for
 	// the ones that are running and refuse new ones.
 	readers chan struct{}
-	rmu     sync.Mutex
-	rwg     sync.WaitGroup
-	closed  bool
-	done    chan struct{} // closed by Close
-	stopped chan struct{} // closed when the worker has returned
-	once    sync.Once
-	mu      sync.Mutex // guards gen
-	gen     uint64
+	// probeRuns bounds the probe runs (they take up to minutes): they never take a reader slot, so a few long runs
+	// cannot starve the reads of an apply or of the observation.
+	probeRuns chan struct{}
+	rmu       sync.Mutex
+	rwg       sync.WaitGroup
+	closed    bool
+	done      chan struct{} // closed by Close
+	stopped   chan struct{} // closed when the worker has returned
+	once      sync.Once
+	mu        sync.Mutex // guards gen
+	gen       uint64
 }
 
 type job struct {
@@ -164,7 +167,7 @@ func WithNetnsInode(f func(path string) (uint64, bool)) Option {
 
 // New starts an executor. Close stops it.
 func New(run Runner, opts ...Option) (*Executor, error) {
-	e := &Executor{run: run, inode: realInode, scope: NewScope(), log: slog.New(slog.DiscardHandler), wake: make(chan struct{}, 1), slots: make(chan struct{}, queueSlots), readers: make(chan struct{}, readerSlots), clock: clock.NewReal(), done: make(chan struct{}), stopped: make(chan struct{})}
+	e := &Executor{run: run, inode: realInode, scope: NewScope(), log: slog.New(slog.DiscardHandler), wake: make(chan struct{}, 1), slots: make(chan struct{}, queueSlots), readers: make(chan struct{}, readerSlots), probeRuns: make(chan struct{}, probeRunSlots), clock: clock.NewReal(), done: make(chan struct{}), stopped: make(chan struct{})}
 	e.capSlots = make(chan struct{}, MaxCaptures)
 	e.dnsSlot = make(chan struct{}, 1)
 	for _, o := range opts {
@@ -276,6 +279,10 @@ func (e *Executor) DoBatch(ctx context.Context, ops []Operation) (Outcome, error
 // readerSlots is how many reads run beside the writer at once.
 const readerSlots = 4
 
+// probeRunSlots is how many probe runs go at once: a run lasts up to a minute (a diagnostic) or minutes (the echo and the
+// throughput of a calibration), so they have slots of their own and a third one waits.
+const probeRunSlots = 2
+
 // isReadOnly reports whether a request consists of reads only (at least one).
 func isReadOnly(ops []Operation) bool {
 	if len(ops) == 0 {
@@ -283,7 +290,7 @@ func isReadOnly(ops []Operation) bool {
 	}
 	for _, op := range ops {
 		switch op.(type) {
-		case *Read, *ProbeRun: // a probe run changes nothing in the kernel; it takes a reader slot for as long as it runs
+		case *Read, *ProbeRun: // a probe run changes nothing in the kernel; it runs beside the writer like a read
 		default:
 			return false
 		}
@@ -291,18 +298,35 @@ func isReadOnly(ops []Operation) bool {
 	return true
 }
 
-// doRead runs a read-only request on a reader slot, in the goroutine of the caller. It waits for a
-// slot (never for the writer), and gives up with the context.
+// doRead runs a read-only request on a slot, in the goroutine of the caller: a reader slot for a read, a probe-run slot
+// for a probe run (a request of both takes both). It waits for the slots (never for the writer), and gives up with the
+// context.
 func (e *Executor) doRead(ctx context.Context, ops []Operation) (Outcome, error) {
 	enqueued := e.clock.Now()
-	select {
-	case e.readers <- struct{}{}:
-	case <-e.done:
-		return Outcome{}, ErrClosed
-	case <-ctx.Done():
-		return Outcome{Generation: e.Generation(), Enqueued: enqueued}, ctx.Err()
+	var needReader, needRun bool
+	for _, op := range ops {
+		if _, ok := op.(*ProbeRun); ok {
+			needRun = true
+		} else {
+			needReader = true
+		}
 	}
-	defer func() { <-e.readers }()
+	for _, need := range []struct {
+		wanted bool
+		slots  chan struct{}
+	}{{needRun, e.probeRuns}, {needReader, e.readers}} {
+		if !need.wanted {
+			continue
+		}
+		select {
+		case need.slots <- struct{}{}:
+		case <-e.done:
+			return Outcome{}, ErrClosed
+		case <-ctx.Done():
+			return Outcome{Generation: e.Generation(), Enqueued: enqueued}, ctx.Err()
+		}
+		defer func() { <-need.slots }()
+	}
 	e.rmu.Lock()
 	if e.closed {
 		e.rmu.Unlock()
@@ -628,6 +652,9 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 		return nil, e.verifyOffloads(ctx, o)
 	}
 	if p, ok := op.(*ProbeNS); ok && p.Action == "ensure" {
+		if err := e.healProbeMAC(ctx, p); err != nil {
+			return nil, err
+		}
 		return nil, e.startProbeClient(p)
 	}
 	return nil, nil

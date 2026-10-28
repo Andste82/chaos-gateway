@@ -20,6 +20,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/model"
+	"github.com/Andste82/chaos-gateway/internal/probe"
 	"github.com/Andste82/chaos-gateway/internal/tlsresponder"
 )
 
@@ -127,6 +128,10 @@ func (s *Server) runProbeDiagnostic(ctx context.Context, req *model.DiagnosticRe
 	if perr != nil {
 		return model.DiagnosticResult{}, perr
 	}
+	if !s.diagnosing.start(p.id) {
+		return model.DiagnosticResult{}, newProblem(model.ErrorCodeTargetBusy, "a diagnostic from the probe %q is running already", p.name)
+	}
+	defer s.diagnosing.end(p.id)
 	if _, perr := s.readyProbe(ctx, p); perr != nil {
 		return model.DiagnosticResult{}, perr
 	}
@@ -187,9 +192,19 @@ const (
 	calibrationBaseline = 100 // datagrams of the unimpaired reference, 10 ms apart
 	calibrationMaxEcho  = executor.MaxProbeEchoCount
 	calibrationSettle   = 3 * time.Second
+	// calibrationMaxSettle is the longest wait for the last answers (the executor takes at most a minute).
+	calibrationMaxSettle = time.Minute
 	// calibrationSlack is the time the call may take beyond its duration: the overlay's apply, the reference and the settle times.
 	calibrationSlack = 2 * time.Minute
 )
+
+// settleFor is how long the echo run waits for the answers after the last datagram: three seconds, or longer when the
+// parameters delay a round trip by more (the last answers are on their way for the round trip and its jitter, and a
+// datagram that is still on the way is no lost one).
+func settleFor(exp calibrate.Expectation) time.Duration {
+	wait := time.Duration((2*(exp.AddedRTTMs+exp.JitterMs) + 1000) * float64(time.Millisecond))
+	return min(max(calibrationSettle, wait), calibrationMaxSettle)
+}
 
 // CalibrateProbe implements POST /probes/{probeId}/calibrate: the self-test of plan §2.12.
 func (s *Server) CalibrateProbe(c *gin.Context, probeID model.Ref) {
@@ -243,6 +258,9 @@ func (s *Server) CalibrateProbe(c *gin.Context, probeID model.Ref) {
 	// the unimpaired reference: the gateway's own traffic to the same server meets no fault of a device
 	ref, err := s.echo(ctx, &executor.ProbeRun{Target: ns, Kind: executor.ProbeEcho, Host: host, Port: port, Count: calibrationBaseline,
 		IntervalUs: int(calibrationInterval / time.Microsecond), SettleMs: 1000})
+	if err == nil {
+		err = completed(ctx, ref, calibrationBaseline)
+	}
 	if err != nil {
 		s.write(c, newProblem(model.ErrorCodeUnavailable, "the gateway cannot reach the echo server %s:%d: %v", host, port, err))
 		return
@@ -259,7 +277,7 @@ func (s *Server) CalibrateProbe(c *gin.Context, probeID model.Ref) {
 	default:
 		imp, note = s.currentImpairment(p, host, port)
 	}
-	exp, err := calibrate.Expect(imp)
+	exp, err := calibrate.ExpectFor(imp, probe.WireBytes(probe.DefaultEchoSize))
 	if err != nil {
 		s.write(c, newProblem(model.ErrorCodeValidationFailed, "the parameters cannot be measured: %v", err))
 		return
@@ -271,8 +289,11 @@ func (s *Server) CalibrateProbe(c *gin.Context, probeID model.Ref) {
 			return
 		}
 		defer func() {
-			// removed even when the caller has gone: a profile left on a probe would impair it for good
-			_, _ = s.cfg.Engine.DeleteOverlay(context.WithoutCancel(contextOf(c)), id, nil, actorOf(principalOf(c)))
+			// removed even when the caller has gone: a profile left on a probe would impair it for good (its time to live
+			// ends it otherwise, but later)
+			if _, err := s.cfg.Engine.DeleteOverlay(context.WithoutCancel(contextOf(c)), id, nil, actorOf(principalOf(c))); err != nil {
+				s.log.Warn("cannot remove the overlay of a calibration: it ends with its time to live", "probe", p.name, "overlay", id, "error", err)
+			}
 		}()
 	}
 
@@ -290,9 +311,13 @@ func (s *Server) CalibrateProbe(c *gin.Context, probeID model.Ref) {
 	}
 	m := calibrate.Measurement{BaselineUs: ref.RTTUs}
 	run, err := s.echo(ctx, &executor.ProbeRun{Target: ns, Probe: p.ns, Kind: executor.ProbeEcho, Host: host, Port: port, Count: count,
-		IntervalUs: int(interval / time.Microsecond), SettleMs: int(calibrationSettle / time.Millisecond)})
+		IntervalUs: int(interval / time.Microsecond), SettleMs: int(settleFor(exp) / time.Millisecond)})
+	if err == nil {
+		err = completed(ctx, run, count)
+	}
 	if err != nil {
 		s.write(c, newProblem(model.ErrorCodeUnavailable, "the probe cannot reach the echo server %s:%d: %v", host, port, err))
+		s.recordAborted(c, p, profile, req, err)
 		return
 	}
 	m.Sent, m.Received, m.RTTUs = run.Sent, run.Received, run.RTTUs
@@ -300,8 +325,13 @@ func (s *Server) CalibrateProbe(c *gin.Context, probeID model.Ref) {
 		var rr struct {
 			RateBps int64 `json:"rate_bps"`
 		}
-		if _, err := readRun(ctx, s.cfg.Exec, &executor.ProbeRun{Target: ns, Probe: p.ns, Kind: executor.ProbeRate, Host: host, Port: port, DurationMs: int(rateFor / time.Millisecond)}, &rr); err == nil {
+		if _, err := readRun(ctx, s.cfg.Exec, &executor.ProbeRun{Target: ns, Probe: p.ns, Kind: executor.ProbeRate, Host: host, Port: port, DurationMs: int(rateFor / time.Millisecond)}, &rr); err == nil && ctx.Err() == nil {
 			m.RateBps, m.RateMeasured = rr.RateBps, true
+		} else if ctx.Err() != nil {
+			// the caller is gone or the time is up: what was measured so far is no verdict
+			s.write(c, newProblem(model.ErrorCodeUnavailable, "the calibration was cancelled: %v", ctx.Err()))
+			s.recordAborted(c, p, profile, req, ctx.Err())
+			return
 		} else {
 			note = strings.TrimSpace(note + " The throughput could not be measured: " + err.Error() + ".")
 		}
@@ -315,15 +345,35 @@ func (s *Server) CalibrateProbe(c *gin.Context, probeID model.Ref) {
 		d = strings.TrimSpace(d + " " + note)
 		res.Detail = &d
 	}
-	what := "current faults"
+	s.record(c, "probe.calibrate", &audit.Object{Kind: "probe", ID: p.id}, 0, fmt.Sprintf("%s: %s, %s", p.name, calibrationWhat(profile, req), map[bool]string{true: "within tolerance", false: "out of tolerance"}[res.WithinTolerance]))
+	c.JSON(200, res)
+}
+
+func calibrationWhat(profile *model.Profile, req *model.CalibrationRequest) string {
 	switch {
 	case profile != nil:
-		what = "profile " + profile.Name
+		return "profile " + profile.Name
 	case req.Fault != nil:
-		what = "fault parameters"
+		return "fault parameters"
 	}
-	s.record(c, "probe.calibrate", &audit.Object{Kind: "probe", ID: p.id}, 0, fmt.Sprintf("%s: %s, %s", p.name, what, map[bool]string{true: "within tolerance", false: "out of tolerance"}[res.WithinTolerance]))
-	c.JSON(200, res)
+	return "current faults"
+}
+
+// recordAborted writes the audit entry of a calibration that ended without a verdict.
+func (s *Server) recordAborted(c *gin.Context, p activeProbe, profile *model.Profile, req *model.CalibrationRequest, why error) {
+	s.record(c, "probe.calibrate", &audit.Object{Kind: "probe", ID: p.id}, 0, fmt.Sprintf("%s: %s, no verdict: %v", p.name, calibrationWhat(profile, req), why))
+}
+
+// completed says whether an echo run is whole: a run that the caller's cancellation or a failing socket cut short (the
+// executor answers with what it has) is no measurement to judge.
+func completed(ctx context.Context, r echoResult, count int) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("the run was cancelled: %w", err)
+	}
+	if r.Sent != count {
+		return fmt.Errorf("the run was cut short after %d of %d datagrams", r.Sent, count)
+	}
+	return nil
 }
 
 // echo runs an echo run and decodes its result.

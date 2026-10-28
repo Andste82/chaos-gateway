@@ -6565,12 +6565,20 @@ runs from it, and the self-test "measure this profile" compares what it measures
   netns cgp-..`, `ip link set master`, `ethtool -K .. gro off gso off tso off lro off` on both ends, the links up) and starts the client; `delete` stops the client and removes the pair and the
   namespace. The gateway's end is not among the assigned interfaces (it is not Chaos Gateway's in the sense of tc and routing: the traffic of a probe is classified on the bridge and the uplink like
   a device's, S12) and `apply.ReadState` takes it out of the links, so the preview and the verify of a bridge's ports do not see it; `Verify` checks the probes by `ReadProbes`
-  (`probes: ...` mismatches). The executor refuses a bridge that is not assigned or is OS-owned, and a namespace or interface that does not follow the pattern.
+  (`probes: ...` mismatches). The executor refuses a bridge that is not assigned or is OS-owned, and a namespace or interface that does not follow the pattern. An `ensure` also gives the
+  interface in the namespace its MAC back when it has another (down, `ip link set dev eth0 address MAC`, up: P6-AUDIT-11). `ReadProbes` lists a namespace `cgp-xxxxxxxx` whose pair is gone
+  too, as `no_pair`: the plan makes the pair again when the probe is wanted (`its pair is gone`) and deletes the namespace when it is not (a delete that stopped between its two steps, a pair removed by
+  hand: P6-AUDIT-10). The insides of the namespaces are read at most four at a time (P6-AUDIT-13).
 - **The address.** The DHCP client is `internal/probe.Client`, a DHCPv4 client in Go (RFC 2131): DISCOVER, OFFER, REQUEST, ACK with the broadcast flag and the client id, the retry with the doubling wait,
   renewing by unicast at T1, rebinding by broadcast at T2, the loss of the lease when it runs out or the server says NAK, an infinite lease kept for ever. Its socket is UDP port 68 bound to
   `eth0` inside the namespace (`ListenDHCP`, `SO_BINDTODEVICE`, `SO_BROADCAST`), made on a thread that entered the namespace. The executor runs one client per probe in its own process
   (`probeClients`) and configures the interface with the lease: `ip addr replace` (the old address is deleted), the default route via the lease's router. A client that is gone (the executor
-  restarted) is started again by the next apply (the read `probes` says `dhcp: false`). Why not `udhcpc` as the testbed's clients do: the production image has no busybox, and a client
+  restarted) is started again by the next apply (the read `probes` says `dhcp: false`), and the engine asks for that apply itself: an observation that finds a configured probe without a client
+  resyncs, at most every 30 s (P6-AUDIT-12). A client is bound to what it was started for, the bridge, the MAC and the namespace (its inode): an `ensure` for another one (a probe edited into another
+  network, a namespace removed and made again) stops it, takes the address of the old network off the interface and starts a new one that asks from scratch (P6-AUDIT-01). The client takes only a
+  reply RFC 2131 allows: an OFFER with a server identifier and an address that can be a client's (not 0.0.0.0, the broadcast, a multicast or a loopback address), an ACK from the server of the offer
+  with a lease time (0xffffffff is infinite; under 4 s is refused), a subnet mask without holes (P6-AUDIT-06). It paces itself: T1 is at least 1 s and T2 at least 1 s after T1, a NAK or a reply it
+  cannot use is followed by a pause that doubles from 2 s to 16 s before the next DISCOVER, and the repetitions of one renewal keep their transaction id (P6-AUDIT-07). Why not `udhcpc` as the testbed's clients do: the production image has no busybox, and a client
   in Go is a unit of logic that level 0 tests with a scripted server and a fake clock.
 - **Observation and identity.** `ReadProbes` (a read of the executor) lists the gateway ends with their namespaces, the MAC, the addresses and the lease; the engine feeds `Observed.Probes`
   (the MAC and the IPs by probe id) to the identity resolution that M6a prepared, so the probe's address is a claim of the device (and its MAC keeps the lease from becoming a "discovered"
@@ -6588,10 +6596,17 @@ runs from it, and the self-test "measure this profile" compares what it measures
   targets the probe (a TTL of the duration plus three minutes as the net behind the explicit removal), `PutOverlay` returns when it is applied and verified; without either, the
   expectation is the impairment that wins for the probe's traffic to the echo server now (`domain.World.Resolve`); (4) the probe sends numbered datagrams, one every 10 ms (at most 20 000;
   2000 in the 20 s the loss statistic needs) and times the answers; with a rate limit in the expectation the last third of the duration is a TCP echo loaded as fast as the path allows
-  (`probe.Rate`: the bytes that come back in the last three quarters of the run); (5) the overlay is removed whatever happened, also when the caller has gone; (6) `calibrate.Evaluate`:
+  (`probe.Rate`: the bytes that come back in the last three quarters of the run); the wait for the last answers is 3 s or, for a profile that delays a round trip by more, twice its
+  delay and jitter plus 1 s (at most a minute: P6-AUDIT-08), and a run the caller's cancellation or a failing socket cut short (`sent` is not the planned count) is no measurement: the call answers `503
+  unavailable` and the audit log says `no verdict` (P6-AUDIT-05); (5) the overlay is removed whatever happened, also when the caller has gone (a failing removal is logged as a warning;
+  P6-AUDIT-04); (6) `calibrate.Evaluate`:
   - **delay**: the median of the round trips minus the reference median is the added delay; it must lie within ±(2 ms + 5 % of the configured added delay) of the sum of the delays of the two
-    directions (upload and download are both on the round trip);
-  - **jitter**: the 95th percentile minus the median is at most the sum of the two jitters plus the delay's tolerance;
+    directions (upload and download are both on the round trip), plus the time a datagram takes to leave a direction with a rate (the frame of 74 bytes over the rate: 10.6 ms at 56 kbit/s;
+    P6-AUDIT-09);
+  - **jitter**: the 95th percentile minus the median is at most 1.2 times the spread the jitters make plus the delay's tolerance. The directions delay independently, so the spread is that of
+    their sum around its median (`calibrate.spreadOf`): for two uniform delays of ±a and ±b it is a+b-sqrt(0.4ab) (0.9a when a >= 10b), for normal ones 1.645 sqrt(a²+b²) (netem draws mu + jitter times a
+    table of standard deviation 1; the first, wrong limit was the sum of the jitters, which a correct `normal` profile exceeded in most runs: P6-AUDIT-03), for a mix of the two the normal approximation
+    with J²/3 for a uniform one. A pareto or paretonormal distribution has no bound and is named in `detail` as not checked;
   - **loss**: the number of datagrams without an answer must lie in the 99.9 % acceptance interval of the binomial distribution of the datagrams sent and the round trip loss `1 - (1-p_up)(1-p_down)`
     (exact, by the summed probability mass); fewer than 2000 datagrams are said to be indicative only; correlated loss (`loss_correlation`, `burst_loss`: the steady-state share of the Gilbert-Elliott
     model) gets the wider tolerance of ±max(2 points, half the expected loss), because bursts are not independent; flapping has no rate and is not judged;
@@ -6616,7 +6631,9 @@ Taken by best practice where the plan leaves room; the one that needed the maint
 5. **The verdict of the loss uses the binomial interval of the expectation (plan §4.3),** and the field `loss_ci99` of the spec stays the 99 % interval of the measurement; both are in the answer.
 6. **The datagram interval is fixed at 10 ms** (100 per second): 2000 datagrams in 20 s; a duration under 20 s still runs and is marked indicative.
 7. **A calibration needs the scope `overlays`** like the overlays it makes; a token with that scope removes its own overlay (the engine removes it with no owner limit, as the call made it).
-8. **The probe_run operation is a read for the executor** (it changes nothing in the kernel): it runs beside the writer on a reader slot and does not wait for an apply that is running.
+8. **The probe_run operation is a read for the executor** (it changes nothing in the kernel): it runs beside the writer and does not wait for an apply that is running. It has two slots of its own
+   (`probeRunSlots`), not the four reader slots: a run lasts up to a minute (a diagnostic) or minutes (a calibration), and a few of them would have starved every read of an apply and of the observation
+   (P6-AUDIT-02). A probe runs one diagnostic at a time (`409 target_busy`), as it calibrates one at a time.
 9. **Probes are configured, not created by a dedicated operation:** the spec has `probes` in the configuration and no `POST /probes`; the web UI lists, diagnoses and measures them, and since M26a adds, edits and removes them through the draft (P6-M25-01).
 
 ### Tests
@@ -6626,7 +6643,10 @@ broadcast at T2, the loss of the lease and the new discover, NAK, an infinite le
 measurement against servers on the loopback with a delay, a loss and a throttle), `internal/calibrate` (the expectation of flat and per-direction parameters, burst loss, flapping, the exact binomial interval
 against the normal approximation and by simulation, the Wilson interval, every verdict: inside and outside of each tolerance), `internal/executor/probe_test.go` (the operations decoded strictly, the commands of
 `probe_ns`, the scope, the read, the client's start and stop, the lease configuring the interface, the diagnostic with the servers of the lease, the runs from the stack of a probe and beside the writer),
-`internal/apply/probes_test.go` (the plan, the verify, the healing and the removal against the simulated kernel), `internal/domain/calibration_test.go`, `internal/api/probes_test.go` (the list, paging, the
+`internal/apply/probes_test.go` and `probes_orphan_test.go` (the plan, the verify, the healing and the removal against the simulated kernel, a probe moved to another network, a namespace made
+again, another MAC, a namespace without its pair), `internal/executor/proberun_slots_test.go` (probe runs and the reader slots), `internal/engine/probes_resync_test.go` (an executor restart),
+`internal/api/probes_cleanup_test.go` (the overlay of a calibration on every path, a cut-short run, a long round trip, a low rate, one diagnostic per probe), `internal/calibrate/calibrate_spread_test.go`
+(the jitter check against simulated uniform and normal round trips: it passes 198 of 200 correct runs and more), `internal/domain/calibration_test.go`, `internal/api/probes_test.go` (the list, paging, the
 address and the device, a diagnostic from a probe in the namespace the simulated kernel has, the test CA only for the probe that trusts it, the self-test of a delay, a loss and a rate against a stack
 that delays, drops and throttles like netem, the current faults, every refusal, one calibration at a time, the scopes, the audit entry), `misc_test.go` (the operations belong to M25 in the build). Web unit tests
 (`make test-web`): `lib/calibration.test.ts`, `lib/probes.test.ts` and the probe cases of `lib/diagnostics.test.ts`. Playwright against the mocked API (`e2e/probes.spec.ts`, 14 tests).

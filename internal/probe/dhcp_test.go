@@ -349,6 +349,10 @@ func TestAnOfferThatIsRefusedByANakMakesANewExchange(t *testing.T) {
 	h.sock.rx <- reply(msgOffer, m.xid, "10.10.0.77", leaseOpts(3600))
 	r := request(t, h.next())
 	h.sock.rx <- reply(msgNak, r.xid, "", nil)
+	time.Sleep(50 * time.Millisecond) // the client takes the NAK and sets its pause
+	// after a refusal the client pauses, so a server that refuses everything is not flooded
+	h.clk.BlockUntil(1)
+	h.clk.Advance(2 * time.Second)
 	again := request(t, h.next())
 	if again.typ != msgDiscover || again.xid == m.xid {
 		t.Errorf("a refused request starts a new exchange: %+v", again)

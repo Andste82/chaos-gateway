@@ -21,6 +21,9 @@ import (
 // observeTimeout bounds one reading.
 const observeTimeout = 10 * time.Second
 
+// probeResyncEvery is the shortest time between two resyncs that the observation asks for because a probe has no DHCP client.
+const probeResyncEvery = 30 * time.Second
+
 // PollObserved reads what the gateway sees (the neighbor table, the connections, the DHCP leases)
 // every interval and whenever TriggerObserve asks for it, and hands it to the state owner, which works
 // out identity and device state and emits the device events (plan §2.3). It runs until ctx or the
@@ -569,11 +572,13 @@ func (e *Engine) readProbes(ctx context.Context, snap *Snapshot, ns executor.Tar
 		byNS[st.Name] = st
 	}
 	obs := map[string]domain.ProbeObservation{}
+	clientless := false
 	for id := range *snap.Config.Probes {
 		st, ok := byNS[executor.ProbeNSPrefix+compiler.ProbeShort(id)]
 		if !ok {
 			continue
 		}
+		clientless = clientless || !st.DHCP
 		po := domain.ProbeObservation{MAC: st.MAC}
 		for _, a := range st.Addrs {
 			if p, err := netip.ParsePrefix(a); err == nil {
@@ -582,5 +587,21 @@ func (e *Engine) readProbes(ctx context.Context, snap *Snapshot, ns executor.Tar
 		}
 		obs[strings.ToLower(id)] = po
 	}
+	if clientless {
+		e.resyncProbes(ctx)
+	}
 	return obs
+}
+
+// resyncProbes applies the current revision again because a probe has no DHCP client: the clients are goroutines of the
+// executor, so an executor that restarted left the namespaces and the addresses but nobody to renew the leases, and only an
+// apply starts a client (apply.probeDiffers). It asks at most every probeResyncEvery, so a client that cannot start is
+// tried again and not every second.
+func (e *Engine) resyncProbes(ctx context.Context) {
+	now := e.cfg.Clock.Now().UnixNano()
+	if last := e.probeResyncAt.Load(); last != 0 && time.Duration(now-last) < probeResyncEvery {
+		return
+	}
+	e.probeResyncAt.Store(now)
+	_ = e.send(ctx, cmdResync{})
 }

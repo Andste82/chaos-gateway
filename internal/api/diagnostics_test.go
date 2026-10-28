@@ -23,6 +23,7 @@ import (
 	"github.com/miekg/dns"
 
 	"github.com/Andste82/chaos-gateway/internal/api"
+	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/diag"
 	"github.com/Andste82/chaos-gateway/internal/model"
 	"github.com/Andste82/chaos-gateway/internal/tlsresponder"
@@ -462,18 +463,26 @@ func TestACanceledRequestEndsItsDiagnostic(t *testing.T) {
 	}
 }
 
-func TestADiagnosticIsAuditedAndTheCapabilitiesListThem(t *testing.T) {
-	g := diagGateway(t)
-	g.diagnoseOK(map[string]any{"type": "tcp", "host": loopback, "port": listenTCPServer(t)})
-	g.diagnoseOK(map[string]any{"type": "tcp", "host": loopback, "port": freeTCPPort(t)})
+// auditDetails are the details of the diagnostic.run entries of the audit log, newest first.
+func auditDetails(g *gw) []string {
+	g.t.Helper()
 	var details []string
-	for _, i := range g.do("GET", "/audit", nil, nil, nil).json(t)["items"].([]any) {
+	for _, i := range g.do("GET", "/audit?limit=500", nil, nil, nil).json(g.t)["items"].([]any) {
 		if e := i.(map[string]any); e["action"] == "diagnostic.run" {
 			details = append(details, fmt.Sprint(e["detail"]))
 		}
 	}
-	if len(details) != 2 || !strings.HasSuffix(details[0], " failed") && !strings.HasSuffix(details[1], " failed") || !strings.HasPrefix(details[0], "tcp 127.0.0.1:") {
-		t.Errorf("audit: %v", details)
+	return details
+}
+
+func TestADiagnosticIsAuditedAndTheCapabilitiesListThem(t *testing.T) {
+	g := diagGateway(t)
+	open, shut := listenTCPServer(t), freeTCPPort(t)
+	g.diagnoseOK(map[string]any{"type": "tcp", "host": loopback, "port": open})
+	g.diagnoseOK(map[string]any{"type": "tcp", "host": loopback, "port": shut})
+	want := []string{fmt.Sprintf("tcp 127.0.0.1:%d failed", shut), fmt.Sprintf("tcp 127.0.0.1:%d ok", open)}
+	if details := auditDetails(g); fmt.Sprint(details) != fmt.Sprint(want) {
+		t.Errorf("audit: %q, want %q", details, want)
 	}
 	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
 	if !strings.Contains(fmt.Sprint(caps["features"]), "diagnostics") {
@@ -481,5 +490,102 @@ func TestADiagnosticIsAuditedAndTheCapabilitiesListThem(t *testing.T) {
 	}
 	if got := fmt.Sprint(caps["diagnostic_types"]); got != "[ping tcp udp dns http tls path]" {
 		t.Errorf("diagnostic_types %s", got)
+	}
+}
+
+// The entry is the compensating control of the decision that a diagnostic may reach every destination: it names what was
+// contacted, not what the request says in the fields that the type ignores (P6-AUDIT-14).
+func TestTheAuditEntryOfADiagnosticNamesWhatWasContacted(t *testing.T) {
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer web.Close()
+	dnsPort := int(dnsServer(t, "203.0.113.77").Port())
+	g := diagGateway(t)
+	// an http run with a url ignores host and port
+	g.diagnoseOK(map[string]any{"type": "http", "host": "example.com", "port": 8080, "url": web.URL + "/admin/quit?token=secret"})
+	g.diagnoseOK(map[string]any{"type": "http", "host": loopback, "port": 1, "url": web.URL + "/" + strings.Repeat("a", 500)})
+	// the name asked and the server it was asked of
+	g.diagnoseOK(map[string]any{"type": "dns", "host": loopback, "dns_name": "broker.example.com", "port": dnsPort})
+	// the datagram is not quoted, its size is
+	g.diagnoseOK(map[string]any{"type": "udp", "host": loopback, "port": freeTCPPort(t), "payload": "GET /secret", "timeout": "50ms"})
+	got := auditDetails(g)
+	if len(got) != 4 {
+		t.Fatalf("%q", got)
+	}
+	host := strings.TrimPrefix(web.URL, "http://")
+	if !strings.HasPrefix(got[0], "udp 127.0.0.1:") || !strings.HasSuffix(got[0], " payload 11 bytes failed") || strings.Contains(got[0], "secret") {
+		t.Errorf("udp: %q", got[0])
+	}
+	if want := fmt.Sprintf(`dns "broker.example.com" @127.0.0.1:%d ok`, dnsPort); got[1] != want {
+		t.Errorf("dns: %q, want %q", got[1], want)
+	}
+	if !strings.HasPrefix(got[2], "http http://"+host+"/aaaa") || !strings.HasSuffix(got[2], "... ok") || len(got[2]) > 260 {
+		t.Errorf("a long url: %q", got[2])
+	}
+	if got[3] != "http http://"+host+"/admin/quit?... ok" {
+		t.Errorf("an http run with a url: %q", got[3])
+	}
+}
+
+// A principal starts a few diagnostics at once and a few more every second; the audit log keeps what was started
+// (P6-AUDIT-15).
+func TestADiagnosticLoopIsRefusedAfterTheBurst(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC))
+	g := newGW(t, func(o *options) { o.apiClock = clk })
+	g.finishSetup()
+	body := map[string]any{"type": "tcp", "host": loopback, "port": freeTCPPort(t), "timeout": "100ms"}
+	for i := 0; i < api.DiagnosticBurst; i++ {
+		if r := g.diagnose(body); r.Status != 200 {
+			t.Fatalf("run %d: %d %s", i+1, r.Status, r.Body)
+		}
+	}
+	r := g.diagnose(body)
+	if r.Status != 429 || r.code(t) != "rate_limited" || r.Header.Get("Retry-After") != "1" {
+		t.Fatalf("after the burst: %d %s %v", r.Status, r.Body, r.Header)
+	}
+	for i := 0; i < 180; i++ {
+		if r := g.diagnose(body); r.Status != 429 {
+			t.Fatalf("a refused loop: %d %s", r.Status, r.Body)
+		}
+	}
+	if n := len(auditDetails(g)); n != api.DiagnosticBurst {
+		t.Errorf("%d entries for %d runs", n, api.DiagnosticBurst)
+	}
+	// the place is paid back with time, one every 1/DiagnosticRate of a second
+	clk.Advance(time.Second / api.DiagnosticRate)
+	if r := g.diagnose(body); r.Status != 200 {
+		t.Errorf("after the wait: %d %s", r.Status, r.Body)
+	}
+	if r := g.diagnose(body); r.Status != 429 {
+		t.Errorf("only one place was paid back: %d %s", r.Status, r.Body)
+	}
+	// another principal has its own
+	g.mintToken("overlays")
+	if r := g.diagnose(body); r.Status != 200 {
+		t.Errorf("another token: %d %s", r.Status, r.Body)
+	}
+}
+
+// The request ends at the ceiling, whatever its timeouts add up to, and frees its place (P6-AUDIT-20).
+func TestADiagnosticEndsAtTheCeilingAndFreesItsPlace(t *testing.T) {
+	old := api.DiagnosticCeiling
+	api.DiagnosticCeiling = 300 * time.Millisecond
+	t.Cleanup(func() { api.DiagnosticCeiling = old })
+	b := &blocking{entered: make(chan struct{}, 64), release: make(chan struct{})}
+	defer close(b.release)
+	g := newGW(t, func(o *options) { o.diagnostics = api.DiagnosticsConfig{Net: b} })
+	g.finishSetup()
+	start := time.Now()
+	r := g.diagnoseOK(map[string]any{"type": "path", "host": "203.0.113.10", "port": 80, "timeout": "60s"})
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("the path took %s with a ceiling of 300ms", d)
+	}
+	if r["ok"] != false {
+		t.Errorf("%v", r)
+	}
+	// all places are free
+	for i := 0; i < api.MaxDiagnostics; i++ {
+		if r := g.diagnose(map[string]any{"type": "tcp", "host": "203.0.113.10", "port": 80, "timeout": "60s"}); r.Status != 200 {
+			t.Fatalf("run %d: %d %s", i+1, r.Status, r.Body)
+		}
 	}
 }

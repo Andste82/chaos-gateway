@@ -16,6 +16,12 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
+// The identifiers a script gives to a reply: that of the echo it answers, or another one.
+const (
+	ownID   = -1
+	otherID = -2
+)
+
 // fakeICMP is the socket of the echoes with a script: reply says what comes back for the echo with that sequence
 // number and when.
 type fakeICMP struct {
@@ -30,6 +36,8 @@ type fakeICMP struct {
 	once     sync.Once
 	deadline time.Time
 	wrote    int
+	// also are the other sockets that get every reply too, as the raw sockets of a host do
+	also []*fakeICMP
 }
 
 func newFakeICMP(datagram bool, peer string, reply func(seq int) (icmp.Type, int, time.Duration, bool)) *fakeICMP {
@@ -49,15 +57,23 @@ func (f *fakeICMP) WriteTo(b []byte, _ net.Addr) (int, error) {
 	f.wrote++
 	f.mu.Unlock()
 	if typ, id, delay, ok := f.reply(echo.Seq); ok {
+		switch id {
+		case ownID:
+			id = echo.ID
+		case otherID:
+			id = echo.ID + 1
+		}
 		var body icmp.MessageBody = &icmp.Echo{ID: id, Seq: echo.Seq, Data: echo.Data}
 		if typ == ipv4.ICMPTypeDestinationUnreachable {
 			body = &icmp.DstUnreach{Data: b}
 		}
 		out, _ := (&icmp.Message{Type: typ, Body: body}).Marshal(nil)
 		time.AfterFunc(delay, func() {
-			select {
-			case f.queue <- out:
-			case <-f.closed:
+			for _, c := range append([]*fakeICMP{f}, f.also...) {
+				select {
+				case c.queue <- out:
+				case <-c.closed:
+				}
 			}
 		})
 	}
@@ -114,7 +130,7 @@ func pingReq(host string, count int, timeout string) model.DiagnosticRequest {
 
 func ok(delay time.Duration) func(int) (icmp.Type, int, time.Duration, bool) {
 	return func(int) (icmp.Type, int, time.Duration, bool) {
-		return ipv4.ICMPTypeEchoReply, os.Getpid() & 0xffff, delay, true
+		return ipv4.ICMPTypeEchoReply, ownID, delay, true
 	}
 }
 
@@ -173,9 +189,9 @@ func TestPingOnARawSocketTakesOnlyItsOwnRepliesFromTheTarget(t *testing.T) {
 	// a raw socket sees the ICMP of every host and every process: the identifier and the source decide
 	f := newFakeICMP(false, "203.0.113.10", func(seq int) (icmp.Type, int, time.Duration, bool) {
 		if seq == 1 {
-			return ipv4.ICMPTypeEchoReply, (os.Getpid() + 1) & 0xffff, time.Millisecond, true // somebody else's
+			return ipv4.ICMPTypeEchoReply, otherID, time.Millisecond, true // somebody else's
 		}
-		return ipv4.ICMPTypeEchoReply, os.Getpid() & 0xffff, time.Millisecond, true
+		return ipv4.ICMPTypeEchoReply, ownID, time.Millisecond, true
 	})
 	res := run(t, New(Config{Net: icmpNet{conn: f}}), pingReq("203.0.113.10", 2, "300ms"))
 	if !res.Ok || *res.Ping.Received != 1 || *res.Ping.LossPercent != 50 {
@@ -186,6 +202,55 @@ func TestPingOnARawSocketTakesOnlyItsOwnRepliesFromTheTarget(t *testing.T) {
 	if res.Ok {
 		t.Errorf("a reply of another host counted: %+v", res.Ping)
 	}
+}
+
+// Up to eight pings run at once, and a raw socket gets the ICMP of every socket: a run takes the replies of its own
+// echoes only (P6-AUDIT-19).
+func TestTwoPingsAtOnceOnRawSocketsDoNotTakeEachOthersReplies(t *testing.T) {
+	// A is answered, slowly; B starts a little later and is never answered, but its socket sees A's replies
+	a := newFakeICMP(false, "203.0.113.10", ok(300*time.Millisecond))
+	b := newFakeICMP(false, "203.0.113.10", func(int) (icmp.Type, int, time.Duration, bool) { return nil, 0, 0, false })
+	a.also = []*fakeICMP{b}
+	var resA, resB model.DiagnosticResult
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		resA = run(t, New(Config{Net: icmpNet{conn: a}}), pingReq("203.0.113.10", 3, "1s"))
+	}()
+	go func() {
+		defer wg.Done()
+		time.Sleep(100 * time.Millisecond)
+		resB = run(t, New(Config{Net: icmpNet{conn: b}}), pingReq("203.0.113.10", 3, "300ms"))
+	}()
+	wg.Wait()
+	if !resA.Ok || *resA.Ping.Received != 3 {
+		t.Errorf("A: %+v", resA.Ping)
+	}
+	if resB.Ok || *resB.Ping.Received != 0 || *resB.Ping.LossPercent != 100 {
+		t.Errorf("B counted replies that belong to A: ok %v, %+v", resB.Ok, resB.Ping)
+	}
+}
+
+// The identifier alone is not enough on a raw socket: a ping of another process may use the same one.
+func TestPingOnARawSocketIgnoresAReplyWithAnotherPayload(t *testing.T) {
+	f := newFakeICMP(false, "203.0.113.10", ok(time.Millisecond))
+	res := run(t, New(Config{Net: icmpNet{conn: &foreignData{fakeICMP: f}}}), pingReq("203.0.113.10", 2, "200ms"))
+	if res.Ok || *res.Ping.Received != 0 {
+		t.Errorf("%+v", res.Ping)
+	}
+}
+
+// foreignData changes the last byte of every reply, as the echo of another run would carry other data (the parser of
+// the package does not check the checksum).
+type foreignData struct{ *fakeICMP }
+
+func (d *foreignData) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, a, err := d.fakeICMP.ReadFrom(b)
+	if err == nil && n > 0 {
+		b[n-1] ^= 0xff
+	}
+	return n, a, err
 }
 
 func TestPingCountsADuplicateReplyOnce(t *testing.T) {

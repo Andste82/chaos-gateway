@@ -6443,7 +6443,15 @@ and the Diagnostics screen. Probes (a diagnostic `from.probe`) are M25; tracerou
   that the type does not use is `unexpected_field` (a `count` for a TCP check is a mistake, not something to ignore); `dns_name` has no wildcard; an `http`
   `url` is http or https with a host and without credentials; the timeout is 10 ms to 60 s; a ping's echoes and its timeout fit the 60 s
   (`(count-1) × 200 ms + timeout`). The request context carries the 60 s as well, so a `tls` or `path` with long timeouts ends there.
-  The run is recorded in the audit log (`diagnostic.run`, with the type, the target and ok or failed).
+  The ceiling is `api.DiagnosticCeiling` (a variable for the tests, as `api.ReadTimeout` is; `TestADiagnosticEndsAtTheCeilingAndFreesItsPlace`).
+  The run is recorded in the audit log (`diagnostic.run`) with what was really contacted, as the decision P6-M24-01 (every destination, audited) needs: for `http` the URL that
+  is asked (scheme, host, port and path, a query as `?...`, cut at 200 characters; `host` and `port` are ignored by a request with a `url`), for `dns` the name and the server,
+  for `udp` the size of the datagram (not its text), the address a name resolved to, `from probe "<ref>"` for a run from a probe, and `ok` or `failed`
+  (`TestTheAuditEntryOfADiagnosticNamesWhatWasContacted`). A principal (a token, a session) may start `api.DiagnosticRate` (5) diagnostics a second, `api.DiagnosticBurst` (20) at
+  once; more is `429 rate_limited` with `Retry-After`, a token bucket on the server's clock (P6-AUDIT-15). The audit log keeps at most 100000 entries and enforces it in
+  `Append`, not only at the start and once a day: it drops the oldest `diagnostic.run` entries first (`audit.WithBulkActions`, set in `openAudit`), then the oldest half, so
+  a flood of runs cannot push out who changed what. The daily prune and this one write the file anew and go on appending to the new file (before, the entries after the
+  daily prune went to the replaced file).
 - **Where it runs.** `internal/diag.Runner` takes a `Net` (a dial for TCP and UDP, and the ICMP socket): `HostNet{Namespace}` is the stack of
   the process, or the network namespace `Namespace` (`Config.Namespace`: the gateway's namespace in the testbed, where the API runs in the root
   namespace of the VM). The sockets are made on a thread that entered the namespace and stay in it (as the capture and the observer do). In production the API
@@ -6455,7 +6463,8 @@ and the Diagnostics screen. Probes (a diagnostic `from.probe`) are M25; tracerou
   - `ping` (one reply or more, as `ping(8)`): `count` echoes (5), 200 ms apart, then the wait for the last reply up to `timeout`; a reply ends the wait early.
     Sent, received, loss, minimum, average, maximum and deviation of the round trip times, as `ping` prints them. The socket is the unprivileged
     ICMP datagram socket (`net.ipv4.ping_group_range`, see below), with the raw socket as the fallback for a process that has `CAP_NET_RAW`. On a raw socket
-    the identifier and the sender decide which reply is ours; the datagram socket only delivers ours. An ICMP error that comes back (unreachable) is named in the
+    the sender, the identifier and the payload decide which reply is ours (the identifier is the process id plus the number of the run, the last four bytes of the payload
+    are the number of the run, so pings that go at once do not take each other's replies: P6-AUDIT-19); the datagram socket only delivers ours. An ICMP error that comes back (unreachable) is named in the
     sentence of a ping without a reply.
   - `tcp` (connected): the time to connect; `connection refused`, `no route to host`, `network is unreachable`, `timed out after 5s` are the kernel's words.
   - `udp` (a reply came back): sends `payload` (an empty datagram by default) and waits. A closed port answers with ICMP port unreachable, which a connected UDP
@@ -6466,7 +6475,8 @@ and the Diagnostics screen. Probes (a diagnostic `from.probe`) are M25; tracerou
     and its upstream answer, so the gateway sees what a device sees without the faults that name a device. NXDOMAIN, SERVFAIL, REFUSED and an answer without an A
     record are results; the answers list the A records and the CNAMEs. A truncated UDP answer is asked again over TCP.
   - `http` (a status below 400): one GET with the user agent `chaos-gateway/<version>`, no proxy from the environment, no redirects followed (the status
-    and `Location` are the result), the headers of the response (the first 64, each cut at 1 KiB), the time until the response arrives.
+    and `Location` are the result), no `Accept-Encoding` and no decoding (`Content-Encoding` and `Content-Length` of a gzip answer are in the result: P6-AUDIT-17), the headers of the
+    response (the first 64 by name, each name and value cut at 1 KiB; a header block above 64 KiB is `the response headers are too large`: P6-AUDIT-18), the time until the response arrives.
   - `tls` (the certificate verifies for the SNI, else the host): connects, makes the handshake and reports the version (down to TLS 1.0, so an old server can be
     shown), the cipher, the ALPN protocol and the whole chain with its subjects, issuers, validity and DNS names. The handshake does not stop at a certificate that
     does not verify: it is made without the client's check and verified afterwards, so the details of an expired or unknown certificate are there next to

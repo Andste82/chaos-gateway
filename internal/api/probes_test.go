@@ -358,12 +358,16 @@ func TestADiagnosticFromAProbeRunsInTheProbesNamespace(t *testing.T) {
 	}
 	// and the audit log has the run
 	items, _, _ := b.log.List(auditFilter(), "", 50)
-	found := false
+	// and the entry names the probe, which meets other routes than the gateway (P6-AUDIT-14)
+	var details []string
 	for _, e := range items {
-		found = found || (e.Action == "diagnostic.run" && strings.Contains(e.Detail, "tcp"))
+		if e.Action == "diagnostic.run" {
+			details = append(details, e.Detail)
+		}
 	}
-	if !found {
-		t.Error("no diagnostic.run in the audit log")
+	if len(details) < 2 || !strings.Contains(details[1], "tcp 127.0.0.1:") || !strings.HasSuffix(details[1], ` from probe "probe-a" ok`) ||
+		!strings.HasSuffix(details[0], ` from probe "`+probeID+`" failed`) {
+		t.Errorf("the audit log: %q", details)
 	}
 }
 

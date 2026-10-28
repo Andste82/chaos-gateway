@@ -13,7 +13,6 @@ import (
 
 	"github.com/Andste82/chaos-gateway/internal/audit"
 	"github.com/Andste82/chaos-gateway/internal/auth"
-	"github.com/Andste82/chaos-gateway/internal/clock"
 )
 
 // minPassword is the shortest admin password (the API's rule).
@@ -124,7 +123,7 @@ func readNewPassword(fromStdin bool, file string, stdin io.Reader, stderr io.Wri
 // recordPasswordReset audits the reset as the CLI's own doing (plan §2.16: every change is
 // recorded), separate from whatever actor the running API process would otherwise attribute it to.
 func recordPasswordReset(dataDir string) error {
-	lg, err := audit.Open(dataDir, &clock.Real{})
+	lg, err := openAudit(dataDir)
 	if err != nil {
 		return err
 	}

@@ -225,6 +225,9 @@ func diagnosticDetail(req *model.DiagnosticRequest, res model.DiagnosticResult) 
 	default:
 		what = string(req.Type) + " " + hostPort(req)
 	}
+	if req.Sni != nil && *req.Sni != "" && (req.Type == model.DiagnosticRequestTypeTls || req.Type == model.DiagnosticRequestTypePath) {
+		what += " sni " + quoted(*req.Sni)
+	}
 	if req.Type == model.DiagnosticRequestTypeUdp && req.Payload != nil {
 		what += " payload " + strconv.Itoa(len(*req.Payload)) + " bytes"
 	}

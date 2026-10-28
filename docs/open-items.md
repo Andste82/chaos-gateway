@@ -1461,7 +1461,7 @@ plan:
   (the `inet chaosgw` nftables table, its policy rules and routing tables 100 to 109 (the policy table 100, the table 101
   of the replies of a management-side port forward, the service table 102 and the PMTU mirror tables 103 to 109; the own
   range is 100 to 110), the test bridges with their
-  addresses, the service veth pair `svc0`/`svc1`, the probes' namespaces `cgp-<8 hex digits>` and the gateway ends `pv<8 hex digits>` of their veth pairs (M25) and the name `cgsvc` under `/run/netns`; the namespace itself belongs to the
+  addresses, the service veth pair `svc0`/`svc1`, the probes' namespaces `cgp-<8 hex digits>` and the gateway ends `pv<8 hex digits>` of their veth pairs (M25) with their DHCP clients (goroutines of the executor, stopped first; the ends are removed by name because a deleted bridge does not delete its ports) and the name `cgsvc` under `/run/netns`; the namespace itself belongs to the
   `svcns` holder container and ends with it). Recorded as D35 in plan §7.1. The volumes stay, so `compose up` rebuilds
   the kernel state from the last confirmed revision (plan "Restart"). The plan's Stop lines (§3.11 and the Restart
   paragraph) now say the same.

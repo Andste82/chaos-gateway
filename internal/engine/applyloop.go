@@ -133,7 +133,10 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			if last != nil {
 				was = last.target
 			}
-			if d.IdentityOnly && last != nil && last.d.Config == d.Config && last.d.Revision == d.Revision && hostEqual(last.d.Host, d.Host) {
+			// an identity update is applied as element updates only when nothing but the identity changed since the last apply: a
+			// state that carries a newer change (a resync because a probe lost its DHCP client, an overlay written while the loop was
+			// busy) is applied in full, whatever the update after it brings (P6-AUDIT-63)
+			if d.IdentityOnly && last != nil && last.d.Config == d.Config && last.d.Revision == d.Revision && hostEqual(last.d.Host, d.Host) && d.Changed <= last.d.Generation {
 				ops, ierr := identityOps(e.cfg.Namespace, last.target, target)
 				if ierr != nil && d.Changed <= last.d.Generation && onlyDevicesCameOrWent(last.d.Identity, d.Identity) {
 					// devices that came or went need a full apply this time: a burst of them (a host
@@ -164,7 +167,7 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			} else if d.IdentityOnly {
 				e.cfg.Log.Debug("an identity update cannot be incremental", "generation", d.Generation, "has_last", last != nil,
 					"same_config", last != nil && last.d.Config == d.Config, "same_revision", last != nil && last.d.Revision == d.Revision,
-					"same_host", last != nil && hostEqual(last.d.Host, d.Host))
+					"same_host", last != nil && hostEqual(last.d.Host, d.Host), "newer_change", last != nil && d.Changed > last.d.Generation)
 			}
 			// after is the kernel state the apply read back, before the DHCP server is configured
 			var after *apply.State

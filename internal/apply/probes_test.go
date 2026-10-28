@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -238,6 +239,53 @@ func TestAProbeWhoseNamespaceWasMadeAgainGetsANewDHCPClient(t *testing.T) {
 	}
 	if ps := e.probeState(tg); !ps.DHCP {
 		t.Errorf("%+v", ps)
+	}
+}
+
+// The clients are goroutines of the executor: a restarted executor finds the namespace and the pair as they were and has no
+// client for them (P6-AUDIT-63). Nothing else is wrong, and the next apply starts one.
+func TestAProbeWhoseExecutorLostItsClientGetsANewDHCPClient(t *testing.T) {
+	e := newProbeEnv(t)
+	// what the executor owns is in its state file, which a restarted one reads
+	state := executor.WithStateFile(filepath.Join(t.TempDir(), "executor-state.json"))
+	idle := executor.WithProbeSocket(func(ns, ifname string) (probe.Socket, error) {
+		e.sockets.Add(1)
+		return &idleSocket{done: make(chan struct{})}, nil
+	})
+	start := func() *executor.Executor {
+		ex, err := executor.New(e.k, executor.WithNetnsInode(e.k.NetnsInode), state, idle)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(ex.Close)
+		return ex
+	}
+	e.ex = start()
+	tg := e.compile(withProbes(probeA))
+	e.apply(tg)
+	e.inProbe("addr", "replace", "10.10.0.77/24", "dev", executor.ProbePeerIf)
+	if n := e.sockets.Load(); n != 1 || !e.probeState(tg).DHCP {
+		t.Fatalf("sockets after the first apply: %d", n)
+	}
+	// the executor process restarts: the kernel is the same, its clients are gone
+	e.ex.Close()
+	e.ex = start()
+	if ps := e.probeState(tg); ps.DHCP || ps.Master != "br-iot" || !ps.PeerUp {
+		t.Fatalf("the state of a probe without a client: %+v", ps)
+	}
+	res := e.apply(e.compile(withProbes(probeA)))
+	if !strings.Contains(summary(res), probeAns+" (probe-a): has no DHCP client") {
+		t.Errorf("the plan does not say why:\n%s", summary(res))
+	}
+	if n := e.sockets.Load(); n != 2 {
+		t.Errorf("no client was started: %d sockets opened", n)
+	}
+	if ps := e.probeState(tg); !ps.DHCP || len(ps.Addrs) == 0 {
+		t.Errorf("the probe has no client or lost its address: %+v", ps)
+	}
+	// with the client back an apply changes nothing
+	if res := e.apply(e.compile(withProbes(probeA))); strings.Contains(summary(res), probeAns) || e.sockets.Load() != 2 {
+		t.Errorf("an apply that has nothing to do touches the probe:\n%s", summary(res))
 	}
 }
 

@@ -542,10 +542,16 @@ func TestTheAuditEntryOfADiagnosticNamesWhatWasContacted(t *testing.T) {
 	g.diagnoseOK(map[string]any{"type": "dns", "host": loopback, "dns_name": "broker.example.com", "port": dnsPort})
 	// the datagram is not quoted, its size is
 	g.diagnoseOK(map[string]any{"type": "udp", "host": loopback, "port": freeTCPPort(t), "payload": "GET /secret", "timeout": "50ms"})
+	// the name a certificate is verified for
+	g.diagnoseOK(map[string]any{"type": "tls", "host": loopback, "port": freeTCPPort(t), "sni": "broker.example.com", "timeout": "100ms"})
 	got := auditDetails(g)
-	if len(got) != 4 {
+	if len(got) != 5 {
 		t.Fatalf("%q", got)
 	}
+	if !strings.HasPrefix(got[0], "tls 127.0.0.1:") || !strings.HasSuffix(got[0], ` sni "broker.example.com" failed`) {
+		t.Errorf("tls: %q", got[0])
+	}
+	got = got[1:]
 	host := strings.TrimPrefix(web.URL, "http://")
 	if !strings.HasPrefix(got[0], "udp 127.0.0.1:") || !strings.HasSuffix(got[0], " payload 11 bytes failed") || strings.Contains(got[0], "secret") {
 		t.Errorf("udp: %q", got[0])

@@ -128,6 +128,22 @@ test('probes: a probe only the draft has is taken out of the draft with Undo', a
   await expect(page.getByTestId('unapplied-bar')).toHaveCount(0);
 });
 
+test('probes: a network without DHCP is noted under the field, and does not block the probe (P6-AUDIT-67)', async ({ page }) => {
+  await open(page);
+  await page.getByTestId('probe-add').click();
+  const dialog = page.getByRole('dialog', { name: 'Add probe' });
+  const note = dialog.getByTestId('probe-dhcp-off');
+  await expect(note).toHaveCount(0);
+  await dialog.getByLabel('Network').selectOption({ label: 'IoT (10.10.0.0/24)' });
+  await expect(note).toHaveCount(0);
+  // the network Test has no DHCP scope
+  await dialog.getByLabel('Network').selectOption({ label: 'Test (10.20.0.0/24)' });
+  await expect(note).toContainText('DHCP is off in this network: the probe would get no address');
+  await dialog.getByLabel('Name').fill('probe-b');
+  await dialog.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(drawer(page).getByTestId('preview-changes')).toContainText('probe probe-b added');
+});
+
 test('probes: the form checks the name and the network under their fields before the gateway does', async ({ page }) => {
   await open(page);
   await page.getByTestId('probe-add').click();

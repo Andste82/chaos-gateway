@@ -38,6 +38,9 @@ func ctlManagesProbes(t *testing.T, g *gw, clk *clock.Fake) {
 	if r.code != 0 || !strings.HasPrefix(r.out, "added probe ci-probe (") || !strings.Contains(r.out, "in revision") {
 		t.Fatalf("add: %+v", r)
 	}
+	if strings.Contains(r.err, "warning") {
+		t.Errorf("a warning for a network with DHCP: %q", r.err)
+	}
 	ids := probeIDsOf(t, g)
 	id := ids["ci-probe"]
 	if id == "" || !strings.Contains(r.out, id) {
@@ -130,6 +133,34 @@ func ctlManagesProbes(t *testing.T, g *gw, clk *clock.Fake) {
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}
 
+	// a scenario that targets the probe, or a step of it, keeps it too: a scenario is a file of its own and chaosctl does not change it
+	scn := "5c000000-0000-4000-8000-000000000001"
+	for name, target := range map[string]map[string]any{
+		"the scenario's target": {"device": id},
+		"a step's target":       {"network": "IoT"},
+	} {
+		sc := map[string]any{"name": "probe-outage", "target": map[string]any{"network": "IoT"},
+			"steps": []any{map[string]any{"id": "cut", "at": "0s", "fault": map[string]any{"latency": "100ms"}}}}
+		if name == "the scenario's target" {
+			sc["target"] = target
+		} else {
+			sc["steps"] = []any{map[string]any{"id": "cut", "at": "0s", "target": map[string]any{"device": id}, "fault": map[string]any{"latency": "100ms"}}}
+		}
+		if r := g.apply(g.mustPatch(map[string]any{"scenarios": map[string]any{scn: sc}})); r.Status != 200 {
+			t.Fatalf("%s: %d %s", name, r.Status, r.Body)
+		}
+		n = revisions()
+		if r := g.ctl("probe", "remove", "ci-probe"); r.code != 2 || !strings.Contains(r.err, "/scenarios/") || r.out != "" {
+			t.Errorf("a probe a scenario names (%s): %+v", name, r)
+		}
+		if got := revisions(); got != n || probeIDsOf(t, g)["ci-probe"] != id {
+			t.Errorf("a refused removal changes nothing and stores no revision (%s): %d revisions, was %d", name, got, n)
+		}
+		if r := g.apply(g.mustPatch(map[string]any{"scenarios": map[string]any{scn: nil}})); r.Status != 200 {
+			t.Fatalf("%d %s", r.Status, r.Body)
+		}
+	}
+
 	// an overlay on the probe blocks the removal until --force takes it along
 	ov := g.do("POST", "/overlays", map[string]any{"target": map[string]any{"device": id}, "fault": map[string]any{"latency": "20ms"}}, nil, nil)
 	if ov.Status != 201 && ov.Status != 200 {
@@ -168,6 +199,25 @@ func ctlManagesProbes(t *testing.T, g *gw, clk *clock.Fake) {
 	if r := g.ctl("probe", "remove", "second"); r.code != 2 || !strings.Contains(r.err, `there is no probe "second"`) {
 		t.Errorf("remove of a probe that is gone: %+v", r)
 	}
+
+	// a network with DHCP switched off gives the probe no address: add still adds it and says so (P6-AUDIT-67)
+	dhcp := func(on bool) {
+		t.Helper()
+		if r := g.apply(g.mustPatch(map[string]any{"networks": map[string]any{iotID: map[string]any{"dhcp": map[string]any{"enabled": on}}}})); r.Status != 200 {
+			t.Fatalf("%d %s", r.Status, r.Body)
+		}
+	}
+	dhcp(false)
+	for _, network := range []string{"IoT", iotID} {
+		r = g.ctl("probe", "add", "no-address", "--network", network)
+		if r.code != 0 || !strings.HasPrefix(r.out, "added probe no-address (") || !strings.Contains(r.err, "warning: DHCP is off in the network IoT: the probe will get no address") {
+			t.Errorf("add in a network without DHCP (%s): %+v", network, r)
+		}
+		if r := g.ctl("probe", "remove", "no-address"); r.code != 0 {
+			t.Errorf("remove: %+v", r)
+		}
+	}
+	dhcp(true)
 
 	// listing needs the scope read, adding and removing the scope full: a token for overlays lists and is refused the rest
 	admin := g.token

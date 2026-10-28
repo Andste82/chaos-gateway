@@ -240,6 +240,50 @@ test('Show more on the last page leaves the focus on the count line, not on the 
   await expect(page.getByTestId('flows-count')).toBeFocused();
 });
 
+test('a connection without a device says unknown host, with no link, and the network under it where it is known (plan §2.17)', async ({ page }) => {
+  const gw = lab();
+  // a source in the subnet of a test network that no device has the address of
+  const STRANGER: Flow = { ...NTP, id: 'udp/10.10.0.99:4000>192.0.2.123:123', device: undefined, src: '10.10.0.99', sport: 4000, started_at: ago(5) };
+  const BEYOND: Flow = { ...NTP, id: 'udp/10.77.0.9:4001>192.0.2.123:123', device: undefined, network: undefined, src: '10.77.0.9', sport: 4001, started_at: ago(4) };
+  gw.flows = [MQTT, STRANGER, BEYOND];
+  await gw.install(page);
+  await page.goto('/flows');
+  const rows = page.getByTestId('connection-row');
+  await expect(rows).toHaveCount(3);
+  // newest first: the one of no network, the stranger, the known device
+  for (const [i, from] of [[0, '10.77.0.9:4001'], [1, '10.10.0.99:4000']] as const) {
+    const cell = rows.nth(i).getByTestId('connection-device');
+    await expect(cell).toContainText('unknown host');
+    await expect(cell.getByRole('link')).toHaveCount(0);
+    await expect(rows.nth(i).getByTestId('connection-from')).toHaveText(from);
+    await expect(rows.nth(i).getByRole('link', { name: /^Explain the connection/ })).toBeVisible();
+  }
+  await expect(rows.nth(1).getByTestId('connection-device')).toContainText('IoT');
+  await expect(rows.nth(0).getByTestId('connection-device')).not.toContainText('IoT');
+  await expect(rows.nth(2).getByTestId('connection-device').getByRole('link', { name: 'ESP32-42' })).toBeVisible();
+});
+
+test('200 connections are drawn and Show more adds 200 each time, and the list is kept while the table is read again (plan §2.17)', async ({ page }) => {
+  const gw = lab();
+  gw.flows = Array.from({ length: 450 }, (_, i) => ({ ...NTP, id: `udp/10.10.0.42:${2000 + i}>192.0.2.123:123`, sport: 2000 + i, started_at: ago(10 + i) }));
+  await gw.install(page);
+  await page.goto('/flows');
+  const rows = page.getByTestId('connection-row');
+  const more = page.getByTestId('flows-more');
+  await expect(rows).toHaveCount(200);
+  await expect(page.getByTestId('flows-count')).toHaveText('450 connections, newest first');
+  await more.click();
+  await expect(rows).toHaveCount(400);
+  await expect(more).toBeVisible();
+  // the table is read every 3 s: the 400 rows stay, the button too
+  const reads = gw.requestsTo('GET', '/flows').length;
+  await expect.poll(() => gw.requestsTo('GET', '/flows').length, { timeout: 15_000 }).toBeGreaterThan(reads);
+  await expect(rows).toHaveCount(400);
+  await more.click();
+  await expect(rows).toHaveCount(450);
+  await expect(more).toHaveCount(0);
+});
+
 test('the flow view says when there is no connection and when it cannot read them', async ({ page }) => {
   const gw = lab();
   gw.flows = [];

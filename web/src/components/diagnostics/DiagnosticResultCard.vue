@@ -9,16 +9,22 @@ import { describeTarget, diagnosticTypes, formatMs, pathSteps, resultSentence, r
 import { formatClock } from '../../lib/format';
 import StatusDot from '../ui/StatusDot.vue';
 
-const props = defineProps<{ request: DiagnosticRequest; result: DiagnosticResult; at: Date }>();
+const props = defineProps<{
+  request: DiagnosticRequest;
+  result: DiagnosticResult;
+  at: Date;
+  /** The name of the probe the run was made from; the id the request names when there is none (P6-AUDIT-44). */
+  probe?: string;
+}>();
 
 const state = computed(() => resultTone(props.result));
 const typeLabel = computed(() => diagnosticTypes.find((t) => t.value === props.result.type)?.label ?? props.result.type);
 const steps = computed(() => (props.result.type === 'path' ? pathSteps(props.result) : []));
 const headers = computed(() => Object.entries(props.result.http?.headers ?? {}).sort(([a], [b]) => a.localeCompare(b)));
-/** "the gateway", or "the probe probe-a" for `probe:cgp-...` (the namespace) when the request named the probe. */
+/** "the gateway", or "the probe probe-a" for `probe:cgp-...` (the namespace) when the request named the probe (by its name, not its id). */
 function fromText(from: string | undefined): string {
   if (!from || from === 'gateway') return 'the gateway';
-  return props.request.from?.probe ? `the probe ${props.request.from.probe}` : 'a probe';
+  return props.request.from?.probe ? `the probe ${props.probe ?? props.request.from.probe}` : 'a probe';
 }
 const when = (iso: string | undefined) => (iso ? iso.slice(0, 10) : '—');
 </script>

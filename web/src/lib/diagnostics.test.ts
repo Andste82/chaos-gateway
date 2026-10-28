@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DiagnosticResult } from '../api/generated/model';
 import {
   describeTarget,
+  failureTone,
   diagnosticErrors,
   diagnosticFieldOf,
   emptyDiagnosticForm,
@@ -15,6 +16,7 @@ import {
   pathSteps,
   resultSentence,
   resultTone,
+  runAnnouncement,
   type DiagnosticForm,
   type DiagnosticType,
 } from './diagnostics';
@@ -211,5 +213,22 @@ describe('the steps of a path', () => {
     expect(pathSteps(r).map((s) => s.step)).toEqual(['dns', 'route', 'tcp']);
     // but a path that failed at its third step has a TLS step that did not run
     expect(pathSteps({ ok: false, path: [ok('dns'), ok('route'), { step: 'tcp', ok: false }] }).map((s) => s.step)).toEqual(['dns', 'route', 'tcp', 'tls']);
+  });
+});
+
+describe('a run without a result and the sentence a screen reader hears', () => {
+  it('names the failure: refused, gateway error, no answer', () => {
+    expect(failureTone('refused').label).toBe('Refused');
+    expect(failureTone('failed').label).toBe('Gateway error');
+    expect(failureTone('unreachable').label).toBe('No answer');
+    expect(failureTone('unreachable').tone).toBe('offline');
+  });
+
+  it('announces the state and what happened', () => {
+    const ok: DiagnosticResult = { type: 'tcp', from: 'gateway', ok: true, started_at: '2026-10-28T10:00:00Z', duration_ms: 3, connect: { reachable: true, rtt_ms: 1.2 } };
+    expect(runAnnouncement({ result: ok })).toBe('Succeeded: Connected in 1.20 ms');
+    expect(runAnnouncement({ result: { ...ok, ok: false, error: 'connection refused' } })).toBe('Failed: connection refused');
+    expect(runAnnouncement({ error: 'the request is not valid', failure: 'refused' })).toBe('Refused: the request is not valid');
+    expect(runAnnouncement({ error: 'the gateway does not answer', failure: 'unreachable' })).toBe('No answer: the gateway does not answer');
   });
 });

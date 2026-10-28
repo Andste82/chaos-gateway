@@ -3,7 +3,8 @@
 // for the duration, the gateway compares the round trips, the losses and the throughput with what the profile (or the faults
 // that act on the probe now) should produce, within the tolerances of plan §4.3, and says for each of delay, jitter, loss and
 // rate whether it matches. The profile is activated on the probe for the run and removed afterwards; the call waits for the
-// whole duration, so the dialog shows that it is under way.
+// whole duration, so the dialog shows that it is under way and cannot be closed meanwhile: the answer belongs to this opening,
+// and a dialog opened again must not show the measuring or the result of another probe's run (P6-AUDIT-41).
 import { computed, ref, useId, watch } from 'vue';
 import { errorMessage } from '../../api/fetcher';
 import { calibrateProbe } from '../../api/generated/hooks/diagnostics/diagnostics';
@@ -23,6 +24,7 @@ import {
   type CalibrationField,
   type CalibrationForm,
 } from '../../lib/calibration';
+import { useGatewayState } from '../../composables/gateway';
 import { useApiPanelStore } from '../../stores/apiPanel';
 import ModalDialog from '../ui/ModalDialog.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
@@ -41,6 +43,7 @@ const open = defineModel<boolean>('open', { required: true });
 
 const uid = useId();
 const apiPanel = useApiPanelStore();
+const state = useGatewayState();
 const probeId = ref('');
 const form = ref<CalibrationForm>(emptyCalibrationForm());
 const busy = ref(false);
@@ -49,6 +52,9 @@ const refusal = ref('');
 const serverErrors = ref<Partial<Record<CalibrationField, string>>>({});
 const refusedForm = ref('');
 const tried = ref(false);
+// what a screen reader hears when the measurement ends: the verdict section is inserted with its text, which a live region
+// that appears with its content does not announce (P6-AUDIT-49)
+const announcement = ref('');
 
 watch(open, (o) => {
   if (!o) return;
@@ -58,6 +64,7 @@ watch(open, (o) => {
   refusal.value = '';
   serverErrors.value = {};
   tried.value = false;
+  announcement.value = '';
 });
 
 const clientErrors = computed(() => calibrationErrors(form.value));
@@ -68,6 +75,9 @@ const probe = computed(() => props.probes.find((p) => p.id === probeId.value));
 const rows = computed(() => (result.value ? calibrationRows(result.value) : []));
 const verdict = computed(() => (result.value ? verdictTone(result.value) : undefined));
 const seconds = computed(() => calibrationSeconds(form.value));
+// a profile is activated on the probe as an overlay for the run: a revision that waits for confirmation can be rolled back
+// meanwhile and takes the overlay with it, so the profile waits too (the faults now make no overlay: P6-AUDIT-43)
+const waits = computed(() => form.value.what === 'profile' && !!state.data.value?.pending_confirm);
 const hasAddress = computed(() => (probe.value?.observed.addresses ?? []).length > 0);
 
 async function run() {
@@ -77,9 +87,11 @@ async function run() {
   result.value = undefined;
   refusal.value = '';
   serverErrors.value = {};
+  announcement.value = '';
   const body = request.value;
   try {
     result.value = await calibrateProbe(probeId.value, body);
+    announcement.value = `${verdictTone(result.value).label}: ${calibrationSentence(result.value)}`;
     apiPanel.record('Measure with a probe', [{ method: 'POST', path: `/probes/${probeId.value}/calibrate`, body }]);
   } catch (e) {
     refusal.value = errorMessage(e);
@@ -98,6 +110,7 @@ async function run() {
 <template>
   <ModalDialog
     v-model:open="open"
+    :busy="busy"
     title="Measure with a probe"
     description="The probe sends datagrams to an echo server and the gateway compares what came back with the parameters."
     width="640px"
@@ -143,6 +156,10 @@ async function run() {
         <TextField v-model="form.duration" label="Duration" mono :placeholder="DEFAULT_DURATION" :error="tried ? errors.duration : undefined" hint="5s to 5m." />
       </div>
 
+      <p class="sr-only" role="status" data-testid="calibrate-announcement">{{ announcement }}</p>
+      <p v-if="waits" class="m-0 text-sm text-fault-text" data-testid="calibrate-pending-confirm">
+        Another revision waits for confirmation; measure a profile after it is resolved: a rollback would take the profile off the probe during the run.
+      </p>
       <p v-if="busy" class="m-0 text-sm text-text-2" role="status" data-testid="calibrate-running">Measuring for {{ seconds }} s…</p>
       <p v-if="refusal" class="m-0 text-sm text-block-text" role="alert" data-testid="calibrate-refused">{{ refusal }}</p>
 
@@ -175,8 +192,8 @@ async function run() {
       </section>
 
       <div class="dialog-actions flex justify-end gap-2">
-        <button type="button" class="btn" @click="open = false">Close</button>
-        <button type="submit" class="btn btn-primary" :disabled="busy || (tried && !valid) || !hasAddress" data-testid="calibrate-run">{{ busy ? 'Measuring…' : 'Measure' }}</button>
+        <button type="button" class="btn" :disabled="busy" @click="open = false">Close</button>
+        <button type="submit" class="btn btn-primary" :disabled="busy || waits || (tried && !valid) || !hasAddress" data-testid="calibrate-run">{{ busy ? 'Measuring…' : 'Measure' }}</button>
       </div>
     </form>
   </ModalDialog>

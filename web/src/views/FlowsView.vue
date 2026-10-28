@@ -16,6 +16,7 @@ import StatusDot from '../components/ui/StatusDot.vue';
 import { useFlows, useNames } from '../composables/gateway';
 import { useNow } from '../composables/useNow';
 import { filterFlows, flowPageSize, flowParams, flowsFiltered, noFlowFilters, sortFlows, type FlowFilters } from '../lib/flows';
+import { focusAfterUpdate } from '../lib/focus';
 import { formatCount } from '../lib/format';
 import { useApiScreen } from '../stores/apiPanel';
 
@@ -90,7 +91,14 @@ function togglePause() {
   if (!paused.value) frozen.value = [...live.value];
   paused.value = !paused.value;
 }
+// the button goes away with the last page: the focus moves to the count line instead of falling to the page start (P6-AUDIT-48)
+function showMore() {
+  shown.value += flowPageSize;
+  if (shown.value >= items.value.length) focusAfterUpdate('[data-testid="flows-count"]');
+}
 const visible = computed(() => items.value.slice(0, shown.value));
+// a read of the live table that fails keeps the rows of the last good one: they say they are not updating (P6-AUDIT-47)
+const stale = computed(() => !paused.value && !!flows.error.value && !!flows.data.value);
 const total = computed(() => flows.data.value?.length ?? 0);
 
 useApiScreen('the flows', () => [
@@ -109,7 +117,7 @@ useApiScreen('the flows', () => [
 
   <SectionCard title="Connections">
     <template #actions>
-      <StatusDot :tone="paused ? 'offline' : 'normal'" :label="paused ? 'Paused' : 'Live'" data-testid="flows-live" />
+      <StatusDot :tone="paused ? 'offline' : stale ? 'fault' : 'normal'" :label="paused ? 'Paused' : stale ? 'Not updating' : 'Live'" data-testid="flows-live" />
       <button type="button" class="btn btn-sm" :aria-pressed="paused" data-testid="flows-pause" @click="togglePause">{{ paused ? 'Resume' : 'Pause' }}</button>
     </template>
 
@@ -147,6 +155,7 @@ useApiScreen('the flows', () => [
       </label>
     </div>
 
+    <LoadError v-if="stale" :error="flows.error.value" what="The connections are not updating" :retry="flows.refetch" />
     <p v-if="flows.isPending.value && !flows.data.value" class="m-0 text-sm text-text-2" role="status">Loading the connections…</p>
     <LoadError v-else-if="flows.error.value && !flows.data.value" :error="flows.error.value" what="The connections are not loaded" :retry="flows.refetch" />
     <EmptyState v-else-if="items.length === 0 && flowsFiltered(applied)" text="No connection matches these filters." data-testid="flows-none-match">
@@ -156,11 +165,11 @@ useApiScreen('the flows', () => [
     <template v-else>
       <ConnectionTable :items="visible" :device-name="(id: string) => names.device?.(id)" :network-name="(id: string) => names.network?.(id)" :now="now" />
       <div class="flex flex-wrap items-center justify-between gap-3 text-[13px] text-text-3">
-        <span data-testid="flows-count"
+        <span data-testid="flows-count" tabindex="-1"
           >{{ formatCount(items.length) }} connection{{ items.length === 1 ? '' : 's' }}<template v-if="flowsFiltered(applied) && total > items.length"> of {{ formatCount(total) }}</template
           >, newest first</span
         >
-        <button v-if="items.length > shown" type="button" class="btn btn-sm" data-testid="flows-more" @click="shown += flowPageSize">Show more</button>
+        <button v-if="items.length > shown" type="button" class="btn btn-sm" data-testid="flows-more" @click="showMore">Show more</button>
       </div>
     </template>
   </SectionCard>

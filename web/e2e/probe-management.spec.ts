@@ -273,3 +273,38 @@ test('probes: a gateway without the feature has no Add probe', async ({ page }) 
   await expect(page.getByTestId('probe-add')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Probes' })).toHaveCount(0);
 });
+
+test('probes: while a revision waits for confirmation the dialogs say so and wait (P6-AUDIT-43)', async ({ page }) => {
+  const gw = withProbes(withNetworks(MockGateway.sample()));
+  gw.state = { ...gw.state, pending_confirm: { revision: 42, deadline: new Date(Date.now() + 60_000).toISOString() } };
+  await open(page, gw);
+  await expect(page.getByTestId('countdown-banner')).toBeVisible();
+  // Add
+  await page.getByTestId('probe-add').click();
+  const add = page.getByRole('dialog', { name: 'Add probe' });
+  await add.getByLabel('Name').fill('probe-b');
+  await add.getByLabel('Network').selectOption({ label: 'Test (10.20.0.0/24)' });
+  await expect(add.getByTestId('probe-pending-confirm')).toContainText('Another revision waits for confirmation; change the probe after it is resolved.');
+  await expect(add.getByRole('button', { name: 'Preview & apply' })).toBeDisabled();
+  await add.getByRole('button', { name: 'Cancel' }).click();
+  // Edit
+  await probe(page, 'probe-a').getByRole('button', { name: 'Edit probe-a' }).click();
+  const edit = page.getByRole('dialog', { name: 'Edit probe-a' });
+  await expect(edit.getByTestId('probe-pending-confirm')).toBeVisible();
+  await expect(edit.getByRole('button', { name: 'Preview & apply' })).toBeDisabled();
+  await edit.getByRole('button', { name: 'Cancel' }).click();
+  // Measure a profile waits (its overlay would go with a rollback), the probe's faults now do not
+  await probe(page, 'probe-a').getByRole('button', { name: 'Measure with probe-a' }).click();
+  const measure = page.getByRole('dialog', { name: 'Measure with a probe' });
+  await measure.getByLabel('Echo server').fill('203.0.113.10');
+  await expect(measure.getByTestId('calibrate-run')).toBeEnabled(); // the faults now: no overlay
+  await measure.getByRole('group', { name: 'Measure' }).getByRole('button', { name: 'A profile' }).click();
+  await expect(measure.getByTestId('calibrate-pending-confirm')).toContainText('Another revision waits for confirmation');
+  await expect(measure.getByTestId('calibrate-run')).toBeDisabled();
+  await measure.getByRole('button', { name: 'Close', exact: true }).last().click();
+  // resolved: the dialogs work again
+  await page.getByTestId('countdown-banner').getByRole('button', { name: 'Confirm' }).click();
+  await page.getByTestId('probe-add').click();
+  await expect(page.getByRole('dialog', { name: 'Add probe' }).getByTestId('probe-pending-confirm')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Add probe' }).getByRole('button', { name: 'Preview & apply' })).toBeEnabled();
+});

@@ -23,7 +23,7 @@ import StatusDot from '../components/ui/StatusDot.vue';
 import { firstError, useActiveConfig, useCanDiagnose, useCanProbe, useNames, useProbes, useProfiles } from '../composables/gateway';
 import { findProbe, measurableProfiles, probeRows } from '../lib/probes';
 import type { ProbeView } from '../api/generated/model';
-import { describeTarget, formFromQuery, formatMs, formToDiagnosticRequest, resultTone, type DiagnosticForm as Form } from '../lib/diagnostics';
+import { describeTarget, failureTone, formFromQuery, formatMs, formToDiagnosticRequest, resultTone, runAnnouncement, type DiagnosticForm as Form } from '../lib/diagnostics';
 import { formatClock } from '../lib/format';
 import { useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
@@ -73,15 +73,22 @@ function editProbe(id: string) {
 const measuring = ref<{ open: boolean; probe?: string }>({ open: false });
 const refusal = ref<{ path?: string; message?: string }[]>();
 const shown = ref<number>();
+// what a screen reader hears when a run ends: the result card appears where the "Running…" line was, which a live region
+// that is inserted with its text does not announce, so this one stays (P6-AUDIT-49)
+const announcement = ref('');
 
 /** The run shown: the one picked below, else the newest. */
 const current = computed<DiagnosticRun | undefined>(() => store.runs.find((r) => r.id === shown.value) ?? store.runs[0]);
 
 async function run(request: DiagnosticRequest) {
   refusal.value = undefined;
-  const r = await store.run(request);
+  announcement.value = '';
+  // the run keeps the probe's name as it was when the run started: the request holds the id
+  const from = request.from?.probe ? (findProbe(probes.value, request.from.probe)?.config.name ?? request.from.probe) : undefined;
+  const r = await store.run(request, from);
   shown.value = r.id;
   if (r.fieldErrors) refusal.value = r.fieldErrors;
+  announcement.value = runAnnouncement(r);
 }
 
 // the request the form would send, until a run records the one that was sent
@@ -101,9 +108,11 @@ useApiScreen('the diagnostics', () => [
     </SectionCard>
 
     <SectionCard v-if="canProbe !== false" title="Probes">
-      <template v-if="rows.length" #actions>
+      <template v-if="rows.length || probesQuery.error.value" #actions>
         <button type="button" class="btn btn-sm" :disabled="!draft.baseConfig" data-testid="probe-add" @click="addProbe">Add probe</button>
       </template>
+      <!-- the list is read every 5 s: a failed read says so also when older rows are kept, and never reads as "no probes" -->
+      <LoadError v-if="probesQuery.error.value" :error="probesQuery.error.value" what="The probes are not loaded" :retry="probesQuery.refetch" />
       <ProbesCard
         v-if="rows.length"
         :rows="rows"
@@ -115,7 +124,7 @@ useApiScreen('the diagnostics', () => [
         @remove="(id: string) => (removing = { open: true, probe: id })"
       />
       <EmptyState
-        v-else
+        v-else-if="!probesQuery.error.value"
         text="No probes: a probe is a virtual client of a test network. Add one to diagnose and measure from the network's side before a device is connected."
         data-testid="probes-empty"
       >
@@ -128,9 +137,10 @@ useApiScreen('the diagnostics', () => [
     <CalibrateDialog v-model:open="measuring.open" :probes="probes" :profiles="measurable" :probe="measuring.probe" />
 
     <SectionCard title="Result">
+      <p class="sr-only" role="status" data-testid="diagnostic-announcement">{{ announcement }}</p>
       <template v-if="current">
         <p v-if="current.error" class="m-0 text-sm text-block-text" role="alert" data-testid="diagnostic-refused">{{ current.error }}</p>
-        <DiagnosticResultCard v-else-if="current.result" :request="current.request" :result="current.result" :at="current.at" />
+        <DiagnosticResultCard v-else-if="current.result" :request="current.request" :result="current.result" :at="current.at" :probe="current.from" />
       </template>
       <p v-else-if="store.running > 0" class="m-0 text-sm text-text-2" role="status">Running…</p>
       <EmptyState v-else text="Nothing run yet: choose a diagnostic and press Run." />
@@ -149,9 +159,10 @@ useApiScreen('the diagnostics', () => [
           >
             <span class="mono w-[70px] text-text-3">{{ formatClock(r.at) }}</span>
             <StatusDot v-if="r.result" v-bind="resultTone(r.result)" />
-            <StatusDot v-else tone="fault" label="Refused" />
+            <StatusDot v-else v-bind="failureTone(r.failure)" />
             <span class="uppercase">{{ r.request.type }}</span>
             <span class="mono text-text-2">{{ describeTarget(r.request) }}</span>
+            <span class="text-xs text-text-3" data-testid="diagnostic-history-from">from {{ r.from ?? 'the gateway' }}</span>
             <span v-if="r.result" class="ml-auto text-xs text-text-3">{{ formatMs(r.result.duration_ms) }}</span>
           </button>
         </li>

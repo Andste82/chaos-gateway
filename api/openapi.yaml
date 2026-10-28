@@ -1943,7 +1943,8 @@ paths:
         `trusts_test_ca`. A diagnostic that fails because its target fails (no reply, refused, a certificate that does not verify)
         is a `200` with `ok: false`; a request that cannot be run is a `422`: `validation_failed`, `capacity_exceeded` when eight
         diagnostics run already; `404 not_found` for a probe that does not exist and `503 unavailable` for one that is not built
-        yet or has no address.
+        yet or has no address. A principal may start five diagnostics a second, twenty at once; more is a `429 rate_limited`
+        with `Retry-After`. Every run is recorded in the audit log (`diagnostic.run`) with the target that was contacted.
         The request must fit the 60 s: for `ping`, `count` echoes 200 ms apart plus `timeout` must not exceed it.
         Host names are resolved IPv4 only, by the gateway's DNS proxy, and by the uplink's resolvers when the proxy is
         not reachable at all.

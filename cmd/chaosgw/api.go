@@ -139,7 +139,7 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 	if err != nil {
 		return err
 	}
-	lg, err := audit.Open(o.dataDir, &clock.Real{})
+	lg, err := openAudit(o.dataDir)
 	if err != nil {
 		return err
 	}
@@ -467,4 +467,10 @@ func readHolderPIDFile(path string) (pid int, inode uint64) {
 		}
 	}
 	return pid, inode
+}
+
+// openAudit opens the audit log with the actions that a caller can make in numbers named: when the log is full they are
+// dropped first (P6-AUDIT-15).
+func openAudit(dir string) (*audit.Log, error) {
+	return audit.Open(dir, &clock.Real{}, audit.WithBulkActions(api.ActionDiagnosticRun))
 }

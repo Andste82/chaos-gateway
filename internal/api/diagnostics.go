@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/x509"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -18,6 +20,22 @@ import (
 
 // MaxDiagnostics is how many diagnostics run at once: each holds a request and sockets for up to a minute.
 const MaxDiagnostics = 8
+
+// ActionDiagnosticRun is the audit action of a diagnostic: the decision P6-M24-01 lets the scope `overlays` point it at
+// any destination, so every run is recorded. A caller can make them in numbers, so the audit log drops them first when
+// it is full (audit.WithBulkActions) and a principal may start DiagnosticRate of them per second, DiagnosticBurst at once
+// (P6-AUDIT-15).
+const ActionDiagnosticRun = "diagnostic.run"
+
+// The rate at which one principal may start diagnostics.
+const (
+	DiagnosticRate  = 5
+	DiagnosticBurst = 20
+)
+
+// DiagnosticCeiling is how long a diagnostic may take, whatever its timeouts add up to (a variable for the tests, as
+// ReadTimeout is).
+var DiagnosticCeiling = domain.MaxDiagnosticDuration
 
 // DiagnosticsConfig is what the diagnostics (M24) are set up with; the zero value is the production setup.
 type DiagnosticsConfig struct {
@@ -37,6 +55,55 @@ type diagnostics struct {
 	sysMu   sync.Once
 	sys     *x509.CertPool
 	running chan struct{}
+	rate    runRate
+}
+
+// runRate is a token bucket per principal: DiagnosticBurst places, DiagnosticRate more every second.
+type runRate struct {
+	mu      sync.Mutex
+	buckets map[string]*bucket
+}
+
+type bucket struct {
+	tokens float64
+	last   time.Duration
+}
+
+// take uses one place of the principal's bucket. If there is none it reports how long until there is one.
+func (r *runRate) take(key string, now time.Duration) (wait time.Duration, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.buckets == nil {
+		r.buckets = map[string]*bucket{}
+	}
+	if len(r.buckets) > 256 {
+		// a bucket that has filled up again is the state of a principal that never ran: forget it
+		for k, b := range r.buckets {
+			if float64(DiagnosticBurst) <= b.tokens+(now-b.last).Seconds()*DiagnosticRate {
+				delete(r.buckets, k)
+			}
+		}
+	}
+	b := r.buckets[key]
+	if b == nil {
+		b = &bucket{tokens: DiagnosticBurst, last: now}
+		r.buckets[key] = b
+	}
+	b.tokens = min(DiagnosticBurst, b.tokens+(now-b.last).Seconds()*DiagnosticRate)
+	b.last = now
+	if b.tokens < 1 {
+		return time.Duration((1 - b.tokens) / DiagnosticRate * float64(time.Second)), false
+	}
+	b.tokens--
+	return 0, true
+}
+
+// principalKey tells the principals apart: a token by its id, a session by its.
+func principalKey(p *Principal) string {
+	if p == nil {
+		return ""
+	}
+	return p.Kind + ":" + p.TokenID + p.SessionID
 }
 
 func (s *Server) initDiagnostics() {
@@ -120,7 +187,13 @@ func (s *Server) RunDiagnostic(c *gin.Context) {
 		s.write(c, newProblem(model.ErrorCodeCapacityExceeded, "%d diagnostics run already: wait for one to end", MaxDiagnostics))
 		return
 	}
-	ctx, cancel := context.WithTimeout(contextOf(c), domain.MaxDiagnosticDuration)
+	if wait, ok := s.diagnostics.rate.take(principalKey(principalOf(c)), s.clk.Monotonic()); !ok {
+		secs := int(wait.Seconds()) + 1
+		s.write(c, newProblem(model.ErrorCodeRateLimited, "at most %d diagnostics a second (%d at once); try again in %d seconds", DiagnosticRate, DiagnosticBurst, secs).
+			withHeader("Retry-After", strconv.Itoa(secs)))
+		return
+	}
+	ctx, cancel := context.WithTimeout(contextOf(c), DiagnosticCeiling)
 	defer cancel()
 	var res model.DiagnosticResult
 	if req.From != nil && req.From.Probe != nil {
@@ -133,18 +206,69 @@ func (s *Server) RunDiagnostic(c *gin.Context) {
 		s.fail(c, err)
 		return
 	}
-	s.record(c, "diagnostic.run", nil, 0, diagnosticDetail(req, res))
+	s.record(c, ActionDiagnosticRun, nil, 0, diagnosticDetail(req, res))
 	c.JSON(200, res)
 }
 
-// diagnosticDetail is the line the audit log keeps of a diagnostic.
+// maxDetailPart bounds each part of a request that the audit line quotes.
+const maxDetailPart = 200
+
+// diagnosticDetail is the line the audit log keeps of a diagnostic: what was really contacted (an `http` run with a
+// `url` ignores `host` and `port`), where it ran from, and how it ended.
 func diagnosticDetail(req *model.DiagnosticRequest, res model.DiagnosticResult) string {
-	what := string(req.Type) + " " + req.Host
-	if req.Port != nil {
-		what += ":" + strconv.Itoa(*req.Port)
+	var what string
+	switch {
+	case req.Type == model.DiagnosticRequestTypeHttp:
+		what = "http " + httpTarget(req)
+	case req.Type == model.DiagnosticRequestTypeDns && req.DnsName != nil:
+		what = "dns " + quoted(string(*req.DnsName)) + " @" + hostPort(req)
+	default:
+		what = string(req.Type) + " " + hostPort(req)
+	}
+	if req.Type == model.DiagnosticRequestTypeUdp && req.Payload != nil {
+		what += " payload " + strconv.Itoa(len(*req.Payload)) + " bytes"
+	}
+	if res.Address != nil {
+		what += " (" + *res.Address + ")"
+	}
+	if req.From != nil && req.From.Probe != nil {
+		what += " from probe " + quoted(string(*req.From.Probe))
 	}
 	if res.Ok {
 		return what + " ok"
 	}
 	return what + " failed"
+}
+
+func hostPort(req *model.DiagnosticRequest) string {
+	if req.Port != nil {
+		return req.Host + ":" + strconv.Itoa(*req.Port)
+	}
+	return req.Host
+}
+
+// httpTarget is the URL an `http` run asks: scheme, host, port and path, without a query (it may carry a secret).
+func httpTarget(req *model.DiagnosticRequest) string {
+	if req.Url == nil {
+		return "http://" + hostPort(req) + "/"
+	}
+	u, err := url.Parse(*req.Url)
+	if err != nil {
+		return quoted(*req.Url)
+	}
+	t := u.Scheme + "://" + u.Host + u.EscapedPath()
+	if u.RawQuery != "" {
+		t += "?..."
+	}
+	return cut(t, maxDetailPart)
+}
+
+// quoted is a value of the request in the audit line: cut, and free of anything that could pass for the end of it.
+func quoted(v string) string { return strconv.Quote(cut(v, maxDetailPart)) }
+
+func cut(v string, n int) string {
+	if len(v) > n {
+		return v[:n] + "..."
+	}
+	return v
 }

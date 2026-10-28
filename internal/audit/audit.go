@@ -60,6 +60,11 @@ type Log struct {
 	retention time.Duration
 	// err is the error of the last failed Append, nil after a successful one (M5-04).
 	err error
+	// max is how many entries the log keeps (maxEntries, unless an option says otherwise).
+	max int
+	// bulk are the actions that happen in numbers and mean less than the rest: a log that exceeds max drops the oldest
+	// of these first.
+	bulk map[string]bool
 }
 
 // Option configures Open.
@@ -70,10 +75,27 @@ func WithRetention(d time.Duration) Option {
 	return func(l *Log) { l.retention = d }
 }
 
+// WithMaxEntries overrides maxEntries (tests use a small one).
+func WithMaxEntries(n int) Option {
+	return func(l *Log) { l.max = n }
+}
+
+// WithBulkActions names the actions that a caller can make in numbers (a diagnostic is one per run): when the log
+// exceeds its bound they go first, so a flood of them does not push out the history of who changed what (P6-AUDIT-15).
+func WithBulkActions(actions ...string) Option {
+	return func(l *Log) {
+		l.bulk = map[string]bool{}
+		for _, a := range actions {
+			l.bulk[a] = true
+		}
+	}
+}
+
 // DefaultRetention is §3.6's one year, used when Open is not given one.
 const DefaultRetention = 365 * 24 * time.Hour
 
-// maxEntries bounds the file: when it grows beyond, the oldest half is dropped at the next start.
+// maxEntries bounds the file: when it grows beyond, the oldest half is dropped (bulk actions first), by Append as soon
+// as the bound is exceeded and at the start.
 const maxEntries = 100000
 
 // Open opens or creates the log file in dir.
@@ -82,7 +104,7 @@ func Open(dir string, c clock.Clock, opts ...Option) (*Log, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, "audit.jsonl")
-	l := &Log{clk: c, next: 1, path: path, retention: DefaultRetention}
+	l := &Log{clk: c, next: 1, path: path, retention: DefaultRetention, max: maxEntries}
 	for _, o := range opts {
 		o(l)
 	}
@@ -129,10 +151,49 @@ func (l *Log) pruneEntries() bool {
 		}
 		l.entries = l.entries[i:]
 	}
-	if len(l.entries) > maxEntries {
-		l.entries = l.entries[len(l.entries)-maxEntries/2:]
+	if len(l.entries) > l.max {
+		l.dropBulk(l.max / 2)
+	}
+	if len(l.entries) > l.max {
+		l.entries = l.entries[len(l.entries)-l.max/2:]
 	}
 	return len(l.entries) != before
+}
+
+// dropBulk drops the oldest entries of the bulk actions until the log has down to keep entries or there are none
+// left. Callers hold l.mu.
+func (l *Log) dropBulk(keep int) {
+	drop := len(l.entries) - keep
+	if drop <= 0 || len(l.bulk) == 0 {
+		return
+	}
+	kept := l.entries[:0]
+	for _, e := range l.entries {
+		if drop > 0 && l.bulk[e.Action] {
+			drop--
+			continue
+		}
+		kept = append(kept, e)
+	}
+	l.entries = kept
+}
+
+// compact prunes the log and, if that dropped anything, writes the file anew and appends to the new one from then
+// on (the old file is gone once the new one replaces it). Callers hold l.mu.
+func (l *Log) compact() error {
+	if !l.pruneEntries() {
+		return nil
+	}
+	if err := rewrite(l.path, l.entries); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	_ = l.f.Close()
+	l.f = f
+	return nil
 }
 
 // Run drops entries past retention once a day, until ctx ends (§3.6: retention 1 year).
@@ -145,17 +206,10 @@ func (l *Log) Run(ctx context.Context) {
 			return
 		case <-t.C():
 			l.mu.Lock()
-			changed := l.pruneEntries()
-			entries := append([]Entry(nil), l.entries...)
-			l.mu.Unlock()
-			if !changed {
-				continue
-			}
-			if err := rewrite(l.path, entries); err != nil {
-				l.mu.Lock()
+			if err := l.compact(); err != nil {
 				l.err = err
-				l.mu.Unlock()
 			}
+			l.mu.Unlock()
 		}
 	}
 }
@@ -212,6 +266,12 @@ func (l *Log) Append(e Entry) (Entry, error) {
 	l.err = nil
 	l.next++
 	l.entries = append(l.entries, e)
+	if len(l.entries) > l.max {
+		// the entry is kept whatever the compaction does; a failing one is the health of the log, as in Run
+		if cerr := l.compact(); cerr != nil {
+			l.err = cerr
+		}
+	}
 	return e, nil
 }
 

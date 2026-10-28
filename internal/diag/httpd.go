@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,10 +15,13 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
-// maxHeaders and maxHeaderValue bound the headers a result carries.
+// The bounds of the headers a result carries: their number, the length of each name and value, and the size of the
+// whole block that is read before the result is built.
 const (
-	maxHeaders     = 64
-	maxHeaderValue = 1024
+	maxHeaders       = 64
+	maxHeaderValue   = 1024
+	maxHeaderBlock   = 64 << 10
+	errHeadersTooBig = "the response headers are too large"
 )
 
 // httpGet is the diagnostic `http`: one GET request, whose first response is the result (a redirect is reported, not
@@ -63,6 +67,10 @@ func (r *Runner) httpGet(ctx context.Context, req *model.DiagnosticRequest, time
 		TLSClientConfig:     tcfg,
 		TLSHandshakeTimeout: timeout,
 		DisableKeepAlives:   true,
+		// the diagnostic shows what the server answered: no Accept-Encoding of its own, no decoding that would take
+		// Content-Encoding and Content-Length from the result (nothing reads the body)
+		DisableCompression:     true,
+		MaxResponseHeaderBytes: maxHeaderBlock,
 	}
 	defer tr.CloseIdleConnections()
 	client := &http.Client{
@@ -89,16 +97,18 @@ func (r *Runner) httpGet(ctx context.Context, req *model.DiagnosticRequest, time
 	h := newOf(res.Http)
 	res.Http = h
 	h.Status, h.RttMs = ptr(resp.StatusCode), ptr(ms(rtt))
+	// the first 64 by name, so that the same answer gives the same result; names and values are cut like each other
+	names := make([]string, 0, len(resp.Header))
+	for k := range resp.Header {
+		names = append(names, k)
+	}
+	sort.Strings(names)
 	headers := map[string]string{}
-	for k, v := range resp.Header {
+	for _, k := range names {
 		if len(headers) == maxHeaders {
 			break
 		}
-		val := strings.Join(v, ", ")
-		if len(val) > maxHeaderValue {
-			val = val[:maxHeaderValue]
-		}
-		headers[k] = val
+		headers[cut(k, maxHeaderValue)] = cut(strings.Join(resp.Header[k], ", "), maxHeaderValue)
 	}
 	h.Headers = &headers
 	if res.Ok = resp.StatusCode < 400; !res.Ok {
@@ -106,8 +116,19 @@ func (r *Runner) httpGet(ctx context.Context, req *model.DiagnosticRequest, time
 	}
 }
 
+// cut returns s, at most n bytes of it.
+func cut(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
+}
+
 // httpFailure is the error of a request in a sentence: a certificate that does not verify says why.
 func (r *Runner) httpFailure(err error, timeout time.Duration) string {
+	if strings.Contains(err.Error(), "response headers exceeded") {
+		return errHeadersTooBig
+	}
 	var cve *tls.CertificateVerificationError
 	if errors.As(err, &cve) {
 		if len(cve.UnverifiedCertificates) > 0 {

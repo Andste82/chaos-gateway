@@ -143,3 +143,73 @@ func TestHTTPSVerifiesTheCertificate(t *testing.T) {
 		}
 	}
 }
+
+// The type exists to show what the server answered: the transport decodes nothing and asks for nothing of its own
+// (P6-AUDIT-17).
+func TestHTTPShowsTheContentEncodingOfAGzipAnswerAndSendsNoAcceptEncoding(t *testing.T) {
+	var accept atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		accept.Store(r.Header.Get("Accept-Encoding"))
+		w.Header().Set("Content-Encoding", "gzip")
+		_, _ = w.Write([]byte("not really gzip"))
+	}))
+	defer srv.Close()
+	res := run(t, runner(nil), httpReq(srv.URL))
+	if !res.Ok || res.Http == nil {
+		t.Fatalf("%+v / %s", res, str(res.Error))
+	}
+	h := *res.Http.Headers
+	if h["Content-Encoding"] != "gzip" || h["Content-Length"] != "15" {
+		t.Errorf("headers %v", h)
+	}
+	if v := accept.Load().(string); v != "" {
+		t.Errorf("the request carried Accept-Encoding: %q", v)
+	}
+}
+
+// The headers of a result are bounded in number and in the length of each name and value (P6-AUDIT-18, P6-AUDIT-20).
+func TestHTTPBoundsTheHeadersOfTheResult(t *testing.T) {
+	long := strings.Repeat("n", 5<<10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for i := 0; i < 70; i++ {
+			w.Header().Set("X-Header-"+strconv.Itoa(1000+i), "v")
+		}
+		w.Header().Set("A-Long-"+long, long) // sorts among the first 64
+	}))
+	defer srv.Close()
+	res := run(t, runner(nil), httpReq(srv.URL))
+	if !res.Ok || res.Http == nil {
+		t.Fatalf("%+v / %s", res, str(res.Error))
+	}
+	h := *res.Http.Headers
+	if len(h) != maxHeaders {
+		t.Errorf("%d headers, want %d", len(h), maxHeaders)
+	}
+	for k, v := range h {
+		if len(k) > maxHeaderValue || len(v) > maxHeaderValue {
+			t.Errorf("a header of %d and %d bytes", len(k), len(v))
+		}
+	}
+	// the same answer gives the same headers: the first by name
+	if _, ok := h["Content-Length"]; !ok {
+		t.Errorf("Content-Length is not among the first by name: %d headers", len(h))
+	}
+	if _, ok := h["X-Header-1069"]; ok {
+		t.Errorf("a header past the 64th by name is in the result")
+	}
+}
+
+// What is read before the result is built is bounded too.
+func TestHTTPRefusesAHeaderBlockThatIsTooLarge(t *testing.T) {
+	long := strings.Repeat("v", 900)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for i := 0; i < 100; i++ {
+			w.Header().Set("X-Header-"+strconv.Itoa(1000+i), long)
+		}
+	}))
+	defer srv.Close()
+	res := run(t, runner(nil), httpReq(srv.URL))
+	if res.Ok || res.Http != nil || str(res.Error) != errHeadersTooBig {
+		t.Errorf("%+v / %s", res, str(res.Error))
+	}
+}

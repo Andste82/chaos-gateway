@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -123,4 +124,125 @@ func TestATimeFilter(t *testing.T) {
 	if len(got) != 2 {
 		t.Errorf("%+v", got)
 	}
+}
+
+func countActions(t *testing.T, l *Log) map[string]int {
+	t.Helper()
+	all, _, err := l.List(Filter{}, "", 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := map[string]int{}
+	for _, e := range all {
+		n[e.Action]++
+	}
+	return n
+}
+
+// The bound holds while the log runs, not only at the start, and a flood of bulk entries pushes out bulk entries, not
+// the history (P6-AUDIT-15).
+func TestTheBoundHoldsWhileTheLogRunsAndBulkEntriesGoFirst(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC))
+	dir := t.TempDir()
+	l, err := Open(dir, clk, WithMaxEntries(20), WithBulkActions("flood"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	system := Actor{Type: "system", ID: "system"}
+	for i := 0; i < 5; i++ {
+		if _, err := l.Append(Entry{Actor: system, Action: "history"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 200; i++ {
+		if _, err := l.Append(Entry{Actor: system, Action: "flood"}); err != nil {
+			t.Fatal(err)
+		}
+		if n := size(l); n > 20 {
+			t.Fatalf("%d entries after %d appends, the bound is 20", n, i+1)
+		}
+	}
+	if n := countActions(t, l); n["history"] != 5 || n["flood"] == 0 || n["flood"] > 20 {
+		t.Errorf("%v", n)
+	}
+	// the file is what the memory is, and later entries go to the new file
+	if _, err := l.Append(Entry{Actor: system, Action: "after"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = l.Close()
+	l2, err := Open(dir, clk, WithMaxEntries(20), WithBulkActions("flood"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l2.Close() }()
+	if n := countActions(t, l2); n["history"] != 5 || n["after"] != 1 || n["flood"] == 0 || size(l2) > 20 {
+		t.Errorf("after the restart: %v", n)
+	}
+}
+
+// Without bulk actions the oldest half goes, as before; ids keep growing.
+func TestTheOldestHalfGoesWhenTheBoundIsExceeded(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC))
+	l, err := Open(t.TempDir(), clk, WithMaxEntries(10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	var last Entry
+	for i := 0; i < 11; i++ {
+		if last, err = l.Append(Entry{Actor: Actor{Type: "system", ID: "system"}, Action: "x" + strconv.Itoa(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, _, _ := l.List(Filter{}, "", 100)
+	if len(all) != 5 || all[0].ID != last.ID || last.ID != "11" {
+		t.Errorf("%d entries, newest %s", len(all), all[0].ID)
+	}
+}
+
+// The daily prune writes the file anew; an entry after it must not go to the file that was replaced.
+func TestEntriesAfterTheDailyPruneReachTheFile(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC))
+	dir := t.TempDir()
+	l, err := Open(dir, clk, WithRetention(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { l.Run(ctx); close(done) }()
+	if _, err := l.Append(Entry{Actor: Actor{Type: "system", ID: "system"}, Action: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	clk.BlockUntil(1)
+	clk.Advance(24 * time.Hour)
+	deadline := time.Now().Add(5 * time.Second)
+	for size(l) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the entry past retention is not dropped")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := l.Append(Entry{Actor: Actor{Type: "system", ID: "system"}, Action: "new"}); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	<-done
+	_ = l.Close()
+	l2, err := Open(dir, clk, WithRetention(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l2.Close() }()
+	if n := countActions(t, l2); n["new"] != 1 || n["old"] != 0 {
+		t.Errorf("%v", n)
+	}
+}
+
+// size is how many entries the log holds.
+func size(l *Log) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.entries)
 }

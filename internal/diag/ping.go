@@ -1,13 +1,16 @@
 package diag
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/icmp"
@@ -17,8 +20,13 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
-// pingPayload is the data of an echo: 32 bytes, as ping sends.
+// pingPayload is the data of an echo: 32 bytes, as ping sends. The last four are the number of the run.
 var pingPayload = []byte("chaos-gateway diagnostics ping..")
+
+// pingRuns counts the pings of the process. A raw socket gets the ICMP of every socket of the host, so a run takes
+// the replies of its own echoes only: its identifier differs from that of every other run that goes at the same time,
+// and its payload carries its number (a ping of another process may use the same identifier).
+var pingRuns atomic.Uint32
 
 // ping is the diagnostic `ping`: `count` echoes, 200 ms apart, and the wait for the last reply. It succeeds with one
 // reply, as ping(8) does.
@@ -34,7 +42,10 @@ func (r *Runner) ping(ctx context.Context, req *model.DiagnosticRequest, timeout
 	}
 	defer func() { _ = conn.Close() }()
 	count := domain.DiagnosticCount(req)
-	id := os.Getpid() & 0xffff
+	run := pingRuns.Add(1)
+	id := (os.Getpid() + int(run)) & 0xffff
+	data := append([]byte(nil), pingPayload...)
+	binary.BigEndian.PutUint32(data[len(data)-4:], run)
 	dst := &net.IPAddr{IP: addr.AsSlice()}
 	// the datagram socket is addressed like a UDP socket, the raw one by the address alone
 	var to net.Addr = dst
@@ -77,7 +88,7 @@ func (r *Runner) ping(ctx context.Context, req *model.DiagnosticRequest, timeout
 			switch m.Type {
 			case ipv4.ICMPTypeEchoReply:
 				e, ok := m.Body.(*icmp.Echo)
-				if !ok || (!datagram && e.ID != id) {
+				if !ok || (!datagram && e.ID != id) || !bytes.Equal(e.Data, data) {
 					continue
 				}
 				mu.Lock()
@@ -102,7 +113,7 @@ func (r *Runner) ping(ctx context.Context, req *model.DiagnosticRequest, timeout
 	defer tick.Stop()
 send:
 	for i := 1; i <= count; i++ {
-		msg := icmp.Message{Type: ipv4.ICMPTypeEcho, Body: &icmp.Echo{ID: id, Seq: i, Data: pingPayload}}
+		msg := icmp.Message{Type: ipv4.ICMPTypeEcho, Body: &icmp.Echo{ID: id, Seq: i, Data: data}}
 		b, err := msg.Marshal(nil)
 		if err != nil {
 			sendErr = err

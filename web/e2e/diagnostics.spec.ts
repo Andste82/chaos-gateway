@@ -301,6 +301,65 @@ test('a diagnostic under way shows it, and the screen keeps the runs of the sess
   await expect(page.getByTestId('empty-state')).toContainText('Nothing run yet');
 });
 
+test('the session list says why a run has no result: refused, gateway error, no answer (P6-AUDIT-45)', async ({ page }) => {
+  const gw = MockGateway.sample();
+  await open(gw, page, '/diagnostics?type=tcp&host=203.0.113.10&port=9000');
+  gw.diagnose = () => ({ refuse: { status: 422, code: 'capacity_exceeded', detail: '8 diagnostics run already: wait for one to end' } });
+  await run(page).click();
+  await expect(page.getByTestId('diagnostic-refused')).toBeVisible();
+  gw.diagnose = () => ({ refuse: { status: 500, code: 'internal', detail: 'the diagnostic failed inside the gateway' } });
+  await run(page).click();
+  await expect(page.getByTestId('diagnostic-refused')).toHaveText('the diagnostic failed inside the gateway');
+  // the connection drops while the diagnostic runs
+  await page.route('**/api/v1/diagnostics', (route) => route.abort());
+  await run(page).click();
+  const rows = page.getByTestId('diagnostic-history').getByRole('button');
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toContainText('No answer');
+  await expect(rows.nth(1)).toContainText('Gateway error');
+  await expect(rows.nth(2)).toContainText('Refused');
+});
+
+test('a message under a collapsed Advanced section stands below its button, and Run points to it (P6-AUDIT-46)', async ({ page }) => {
+  const gw = MockGateway.sample();
+  await open(gw, page, '/diagnostics?type=tcp&host=203.0.113.10&port=9000');
+  const advanced = page.getByTestId('diagnostic-advanced');
+  await advanced.click();
+  await page.getByLabel('Timeout').fill('abc');
+  await expect(page.getByText('A duration like 5s or 500ms.')).toBeVisible();
+  await expect(page.getByTestId('diagnostic-advanced-errors')).toHaveCount(0); // the message stands under its field
+  await advanced.click();
+  await expect(page.getByLabel('Timeout')).toHaveCount(0);
+  const errors = page.getByTestId('diagnostic-advanced-errors');
+  await expect(errors).toHaveText('Timeout: A duration like 5s or 500ms.');
+  await expect(run(page)).toBeDisabled();
+  await expect(run(page)).toHaveAttribute('aria-describedby', (await errors.getAttribute('id'))!);
+  // opened again, the message is under the field and the list is gone; a valid timeout lets Run through
+  await advanced.click();
+  await expect(errors).toHaveCount(0);
+  await page.getByLabel('Timeout').fill('3s');
+  await advanced.click();
+  await expect(errors).toHaveCount(0);
+  await expect(run(page)).toBeEnabled();
+  await expect(run(page)).not.toHaveAttribute('aria-describedby');
+});
+
+test('the end of a run is announced by a status that was there before (P6-AUDIT-49)', async ({ page }) => {
+  const gw = MockGateway.sample();
+  await open(gw, page, '/diagnostics?type=tcp&host=203.0.113.10&port=9000');
+  const status = page.getByTestId('diagnostic-announcement');
+  await expect(status).toHaveAttribute('role', 'status');
+  await expect(status).toHaveText('');
+  await run(page).click();
+  await expect(status).toHaveText('Succeeded: Connected in 1.20 ms');
+  gw.diagnose = (r) => failing(r, { error: 'connection refused' });
+  await run(page).click();
+  await expect(status).toHaveText('Failed: connection refused');
+  gw.diagnose = () => ({ refuse: { status: 422, code: 'capacity_exceeded', detail: '8 diagnostics run already: wait for one to end' } });
+  await run(page).click();
+  await expect(status).toHaveText('Refused: 8 diagnostics run already: wait for one to end');
+});
+
 test('the device page links to a ping of the device’s address', async ({ page }) => {
   const gw = MockGateway.sample();
   await open(gw, page, `/devices/${ESP}`);

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { WireGuardNetwork } from '../src/api/generated/model';
-import { BGP, CLIENT_RA, HUB, IOT, MockGateway, withNetworks } from './mock';
+import { BGP, CLIENT_RA, HUB, IOT, MockGateway, withNetworks, withProbes } from './mock';
 
 // The Phase 3 audit: a revision applied while an edit dialog is open, on a clean draft. The form was
 // built on the revision before; the edit is saved against that revision, so the next preview meets
@@ -125,4 +125,17 @@ test("a client's keys rotated while another revision changes it: their field sta
   const req = await reapplied(page, gw);
   expect((req.body as { networks: unknown }).networks).toEqual({ [HUB]: { clients: { [CLIENT_RA]: { key: { generation: 2 } } } } });
   expect((gw.config.networks![HUB] as WireGuardNetwork).clients![CLIENT_RA]!.keepalive).toBe('5s');
+});
+
+test('a probe removed while another revision is applied: the first removal meets the concurrent-change dialog (P6-AUDIT-42)', async ({ page }) => {
+  const gw = withProbes(withNetworks(MockGateway.sample()));
+  await gw.install(page);
+  await page.goto('/diagnostics');
+  // the first Remove of the page mounts its dialog in the tick that opens it
+  await page.getByRole('button', { name: 'Remove probe-a' }).click();
+  const d = page.getByRole('dialog', { name: 'Remove probe-a' });
+  await expect(d.getByTestId('remove-probe-preview')).toBeVisible();
+  await appliedMeanwhile(page, gw, { networks: { [IOT]: { dhcp: { lease_time: '2h' } } } });
+  await d.getByRole('button', { name: 'Preview & apply' }).click();
+  await expect(conflict(page)).toContainText('Revision 43 was applied by token ci-runner while you were editing (your change is based on revision 42)');
 });

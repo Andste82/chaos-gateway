@@ -104,6 +104,14 @@ function familyText(f: { family: string; tunnel?: string }): string {
   return families[f.family] ?? f.family;
 }
 
+/** What a screen reader hears when the explanation arrives: the access verdict and how many fault families apply. */
+const announcement = computed(() => {
+  const r = result.value;
+  if (!r) return '';
+  const faults = r.faults.length === 0 ? 'no fault applies' : `${r.faults.length} fault famil${r.faults.length === 1 ? 'y applies' : 'ies apply'}`;
+  return `Explained: access ${r.access.verdict} by ${layers[r.access.layer] ?? r.access.layer}; ${faults}.`;
+});
+
 function refText(r: FaultRef): string {
   const what = r.profile?.name ? `profile ${profileTitle(r.profile.name)}` : r.name ? `fault ${r.name}` : r.layer === 'overlay' ? 'an overlay' : 'a configured fault';
   return `${what}${r.summary ? ` (${r.summary})` : ''}`;
@@ -224,7 +232,9 @@ async function run() {
     <p v-if="portError" :id="`${uid}-port-error`" class="field-error m-0">{{ portError }}</p>
     <p v-if="error" class="field-error m-0" role="alert">{{ error }}</p>
 
-    <div v-if="result" class="flex flex-col gap-2 text-sm" data-testid="explain-result" aria-live="polite">
+    <!-- the result is inserted with its text, which a live region that appears with its content does not announce (P6-AUDIT-49) -->
+    <p class="sr-only" role="status" data-testid="explain-announcement">{{ announcement }}</p>
+    <div v-if="result" class="flex flex-col gap-2 text-sm" data-testid="explain-result">
       <div class="flex flex-wrap items-center gap-2">
         <span class="text-text-2">Access</span>
         <AccessChip :action="result.access.verdict" />

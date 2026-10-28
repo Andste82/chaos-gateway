@@ -6823,6 +6823,16 @@ Taken by best practice where the plan leaves room; none needs the maintainer.
    lockout-relevant, so the apply never waits for a confirmation; if the gateway ever asked for one, the command would say so and exit with 2 rather than confirm for the user.
 7. **`add` is not idempotent:** a name that exists is refused (`409 name_taken`). A pipeline that wants "a probe called x" lists first; an idempotent flag would hide a probe on another network.
 8. **The id of a new probe is made by the client** (the web UI and `chaosctl`), like that of every object of the configuration; the gateway keeps it.
+9. **The dialog of a measurement cannot be closed while it measures** (P6-AUDIT-41). The call lasts up to 5 minutes and its answer belongs to the opening that asked, so `ModalDialog` has a `busy` like
+   `SideDrawer`: Escape, a click outside, the X and Close wait. The alternative, to let it go on in the background, would need the state outside the dialog and does not stop a second Measure on the same probe
+   from meeting `409 target_busy`.
+10. **A revision that waits for confirmation stops the dialog of a probe** (P6-AUDIT-43), as it stops every other dialog of the draft. Measuring a profile waits too, on the Diagnostics screen and on the
+   Profiles screen, because a rollback of that revision removes the overlay the measurement made; the probe's faults now make no overlay and are measured.
+11. **A run of the session says what it was and what happened to it** (P6-AUDIT-44, -45, -49): the probe is named by its name at the start of the run (the request holds its id), a run without a result is *Refused*
+   (a 4xx), *Gateway error* (a 5xx: it may have run) or *No answer*, and the end of a run, a measurement and an explanation is put into a `role="status"` that is on the page before (a live region that appears with its
+   text is not announced). A field under *Advanced* that is not valid is named below its button while the section is collapsed, and Run points to it (P6-AUDIT-46).
+12. **A list that is read again and again says when it cannot be read** (P6-AUDIT-47): the probes card shows the error beside the rows it has, the Flows screen turns *Live* into *Not updating* and keeps the
+   last rows. *Show more* on the last page puts the focus on the count line (P6-AUDIT-48).
 
 ### Tests
 
@@ -6832,10 +6842,10 @@ network, a missing flag or name) that leave no candidate behind, a removal refus
 away, removal by id, the probe that is gone, and a token with the scope `overlays` that lists and is refused the changes); the harness gives every gateway of the tests a probe's DHCP socket (nobody answers), so
 an API test can make a probe without `probeNet`. Web unit tests (`make test-web`): `src/lib/probeForm.test.ts` (the checks, the form and the stored probe, the words, the rows and their state) and
 `src/stores/draft.probes.test.ts` (the changes, the patch, the server's messages, discard, the removal together with a rule, a fault, a group and a forward and its Undo with and without the record, the
-removal of a device unchanged, and the overlaps and the reapply on another revision). Playwright against the mocked API (`e2e/probe-management.spec.ts`, 11 tests): a probe added through the dialog and the
+removal of a device unchanged, and the overlaps and the reapply on another revision). Playwright against the mocked API (`e2e/probe-management.spec.ts`, 13 tests): a probe added through the dialog and the
 drawer is NEW without an address until the apply and listed with its address after it, removed through the dialog and the drawer, edited (CHANGED, "change not applied yet", Undo), Remove then Undo, a probe only
 the draft has taken out with Undo, the checks under the fields, the gateway's refusal under the field with *Fix*, the removal together with a rule, an overlay named in the removal, the empty state that opens the
-dialog, and a gateway without the feature. No level 1 test: a probe built by an apply is M25's (`M25_LEVEL1`), and the path the commands take is the API's.
+dialog, a gateway without the feature, and a revision that waits for confirmation (the dialogs wait). No level 1 test: a probe built by an apply is M25's (`M25_LEVEL1`), and the path the commands take is the API's.
 
 ### Acceptance map (plan M26a "Scope" and "Tests")
 

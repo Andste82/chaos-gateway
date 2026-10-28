@@ -85,7 +85,18 @@ test('Diagnose from here chooses the probe, and the request names it', async ({ 
   await run(page).click();
   await expect(page.getByTestId('diagnostic-state')).toHaveText('Succeeded');
   expect(diagnostics(gw)).toEqual([{ type: 'ping', host: '203.0.113.10', from: { probe: PROBE } }]);
-  await expect(page.getByTestId('diagnostic-result')).toContainText('from the probe ' + PROBE);
+  // the name, not the id the request holds, in the result and in the session list (P6-AUDIT-44)
+  await expect(page.getByTestId('diagnostic-result')).toContainText('from the probe probe-a');
+  await expect(page.getByTestId('diagnostic-result')).not.toContainText(PROBE);
+  await page.getByTestId('diagnostic-from').selectOption('');
+  await run(page).click();
+  const rows = page.getByTestId('diagnostic-history').getByRole('button');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toContainText('203.0.113.10');
+  await expect(rows.nth(0)).toContainText('from the gateway');
+  await expect(rows.nth(1)).toContainText('203.0.113.10');
+  await expect(rows.nth(1)).toContainText('from probe-a');
+  await expect(rows.nth(1)).not.toContainText(PROBE);
 });
 
 test('the choice From is filled in from the address, by name', async ({ page }) => {
@@ -209,6 +220,67 @@ test('the call waits for the whole duration and says so', async ({ page }) => {
   await expect(d.getByTestId('calibrate-run')).toBeDisabled();
   await expect(d.getByTestId('calibrate-verdict')).toBeVisible();
   await expect(d.getByTestId('calibrate-running')).toHaveCount(0);
+});
+
+test('the measuring dialog cannot be closed while it measures, and the next opening starts clean (P6-AUDIT-41)', async ({ page }) => {
+  const gw = lab();
+  gw.probes = [...gw.probes, sampleProbe({ id: '3a1f7c52-6b0e-4d83-9c2a-1e4d5f60a7b9', name: 'probe-b', address: '10.10.0.78' })];
+  gw.calibrationDelay = 1500;
+  await open(gw, page);
+  await page.getByRole('button', { name: 'Measure with probe-a' }).click();
+  const d = dialog(page);
+  await d.getByLabel('Echo server').fill('203.0.113.10');
+  await d.getByTestId('calibrate-run').click();
+  await expect(d.getByTestId('calibrate-running')).toBeVisible();
+  // neither Escape, nor a click outside, nor the buttons close it
+  await page.keyboard.press('Escape');
+  await page.mouse.click(5, 5);
+  await expect(d).toBeVisible();
+  await expect(d.getByRole('button', { name: 'Close', exact: true }).first()).toBeDisabled();
+  await expect(d.getByRole('button', { name: 'Close', exact: true }).last()).toBeDisabled();
+  // the answer arrives in the dialog that asked
+  await expect(d.getByTestId('calibrate-verdict')).toBeVisible();
+  await expect(d.getByTestId('calibrate-running')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(d).toBeHidden();
+  // another opening shows neither the measuring nor the old result
+  await page.getByRole('button', { name: 'Measure with probe-b' }).click();
+  await expect(d).toBeVisible();
+  await expect(d.getByTestId('calibrate-running')).toHaveCount(0);
+  await expect(d.getByTestId('calibrate-result')).toHaveCount(0);
+  await expect(d.getByLabel('Echo server')).toHaveValue('');
+  await d.getByLabel('Echo server').fill('203.0.113.11');
+  await expect(d.getByTestId('calibrate-run')).toBeEnabled();
+});
+
+test('the end of a measurement is announced by a status that was there before (P6-AUDIT-49)', async ({ page }) => {
+  const gw = lab();
+  await open(gw, page);
+  await page.getByRole('button', { name: 'Measure with probe-a' }).click();
+  const d = dialog(page);
+  const status = d.getByTestId('calibrate-announcement');
+  await expect(status).toHaveAttribute('role', 'status');
+  await expect(status).toHaveText('');
+  await d.getByLabel('Echo server').fill('203.0.113.10');
+  await d.getByTestId('calibrate-run').click();
+  await expect(status).toHaveText(/^Within tolerance: /);
+});
+
+test('a list of probes the gateway did not deliver says so and does not claim there are none (P6-AUDIT-47)', async ({ page }) => {
+  const gw = lab();
+  gw.failing = { '/probes': 500 };
+  await open(gw, page);
+  const card = page.getByRole('region', { name: 'Probes' });
+  await expect(card.getByTestId('load-error')).toContainText('The probes are not loaded: the gateway failed to read /probes.');
+  await expect(page.getByTestId('probes-empty')).toHaveCount(0);
+  gw.failing = {};
+  await card.getByRole('button', { name: 'Try again' }).click();
+  await expect(page.locator('[data-probe="probe-a"]')).toContainText('10.10.0.77');
+  await expect(card.getByTestId('load-error')).toHaveCount(0);
+  // a later read that fails keeps the rows and says so
+  gw.failing = { '/probes': 500 };
+  await expect(card.getByTestId('load-error')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('[data-probe="probe-a"]')).toBeVisible();
 });
 
 test('a profile card has Measure with probe, which opens the dialog with the profile chosen', async ({ page }) => {

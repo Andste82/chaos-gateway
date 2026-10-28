@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { ProfileView } from '../src/api/generated/model';
-import { LINK, MockGateway, toast, withNetworks } from './mock';
+import { LINK, MockGateway, sampleProbe, toast, withNetworks } from './mock';
 
 // M13: profile cards with their parameters and where they are active (TTL), the scope selector and
 // the duration, activate and deactivate on the chosen scope (one profile per scope).
@@ -127,7 +127,20 @@ test('activating waits while a revision waits for confirmation', async ({ page }
   await gw.install(page);
   await page.goto('/profiles');
   await expect(card(page, 'Bad LTE').getByRole('button', { name: /^Activate Bad LTE on/ })).toBeDisabled();
+});
 
+test('Measure with probe waits while a revision waits for confirmation (P6-AUDIT-43)', async ({ page }) => {
+  const gw = lab();
+  gw.capabilities.features = [...gw.capabilities.features, 'probes'];
+  gw.probes = [sampleProbe()];
+  gw.state = { ...gw.state, pending_confirm: { revision: 42, deadline: new Date(Date.now() + 60_000).toISOString() } };
+  await gw.install(page);
+  await page.goto('/profiles');
+  const measure = card(page, 'Bad LTE').getByRole('button', { name: 'Measure Bad LTE with a probe' });
+  await expect(measure).toBeDisabled();
+  await expect(measure).toHaveAttribute('title', 'Another revision waits for confirmation.');
+  await page.getByTestId('countdown-banner').getByRole('button', { name: 'Confirm' }).click();
+  await expect(measure).toBeEnabled();
 });
 
 // P3-M13-03: the profile editor — custom profiles are created, edited and deleted through the

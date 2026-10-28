@@ -209,6 +209,37 @@ test('Pause holds the table while the gateway goes on, and Resume reads it again
   await expect(page.getByTestId('connection-row')).toHaveCount(6, { timeout: 8_000 });
 });
 
+test('a read of the live table that fails says it is not updating, and keeps the rows it has (P6-AUDIT-47)', async ({ page }) => {
+  const gw = lab();
+  await gw.install(page);
+  await page.goto('/flows');
+  await expect(page.getByTestId('connection-row')).toHaveCount(5);
+  await expect(page.getByTestId('flows-live')).toContainText('Live');
+  gw.failing = { '/flows': 500 };
+  await expect(page.getByTestId('flows-live')).toContainText('Not updating', { timeout: 15_000 });
+  await expect(page.getByTestId('load-error')).toContainText('The connections are not updating: the gateway failed to read /flows.');
+  await expect(page.getByTestId('connection-row')).toHaveCount(5);
+  // the gateway answers again: Try again reads the table and the dot is Live
+  gw.failing = {};
+  await page.getByTestId('load-error').getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByTestId('flows-live')).toContainText('Live');
+  await expect(page.getByTestId('load-error')).toHaveCount(0);
+});
+
+test('Show more on the last page leaves the focus on the count line, not on the page start (P6-AUDIT-48)', async ({ page }) => {
+  const gw = lab();
+  gw.flows = Array.from({ length: 230 }, (_, i) => ({ ...NTP, id: `udp/10.10.0.42:${2000 + i}>192.0.2.123:123`, sport: 2000 + i, started_at: ago(10 + i) }));
+  await gw.install(page);
+  await page.goto('/flows');
+  await expect(page.getByTestId('connection-row')).toHaveCount(200);
+  const more = page.getByTestId('flows-more');
+  await more.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('connection-row')).toHaveCount(230);
+  await expect(more).toHaveCount(0);
+  await expect(page.getByTestId('flows-count')).toBeFocused();
+});
+
 test('the flow view says when there is no connection and when it cannot read them', async ({ page }) => {
   const gw = lab();
   gw.flows = [];

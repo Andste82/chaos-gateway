@@ -58,6 +58,16 @@ watch(
   () => (refusedForm.value = JSON.stringify(form.value)),
 );
 const errors = computed(() => ({ ...serverErrors.value, ...clientErrors.value }));
+// the fields that exist only under Advanced: while it is collapsed their messages stand below its button, so a Run that waits
+// for them says why (P6-AUDIT-46)
+const advancedFields: { field: DiagnosticField; label: string }[] = [
+  { field: 'timeout', label: 'Timeout' },
+  { field: 'count', label: 'Echoes' },
+  { field: 'sni', label: 'SNI' },
+  { field: 'payload', label: 'Datagram' },
+];
+const advancedMessages = computed(() => (advancedOpen.value ? [] : advancedFields.filter((a) => errors.value[a.field]).map((a) => `${a.label}: ${errors.value[a.field]}`)));
+const advancedErrorsId = `${uid}-advanced-errors`;
 
 function setType(t: string) {
   const old = form.value;
@@ -119,6 +129,9 @@ const hostPlaceholder = computed(() => (form.value.type === 'dns' ? 'broker.exam
     />
 
     <DisclosureButton v-model:open="advancedOpen" :controls="advancedId" data-testid="diagnostic-advanced">Advanced</DisclosureButton>
+    <ul v-if="advancedMessages.length" :id="advancedErrorsId" class="m-0 flex list-none flex-col gap-0.5 p-0 text-xs text-block-text" role="alert" data-testid="diagnostic-advanced-errors">
+      <li v-for="m in advancedMessages" :key="m">{{ m }}</li>
+    </ul>
     <div v-if="advancedOpen" :id="advancedId" class="grid grid-cols-2 items-start gap-3 max-sm:grid-cols-1" data-testid="diagnostic-advanced-fields">
       <TextField v-model="form.timeout" label="Timeout" mono placeholder="5s" :error="errors.timeout" hint="How long to wait for an answer, 60s at most." />
       <TextField v-if="fields.count" v-model="form.count" label="Echoes" mono placeholder="5" :error="errors.count" hint="1 to 100, 200 ms apart." />
@@ -131,7 +144,15 @@ const hostPlaceholder = computed(() => (form.value.type === 'dns' ? 'broker.exam
     </div>
 
     <div class="flex items-center gap-3">
-      <button type="submit" class="btn btn-primary" :disabled="!valid || busy || disabled" data-testid="run-diagnostic">{{ busy ? 'Running…' : 'Run' }}</button>
+      <button
+        type="submit"
+        class="btn btn-primary"
+        :disabled="!valid || busy || disabled"
+        :aria-describedby="advancedMessages.length ? advancedErrorsId : undefined"
+        data-testid="run-diagnostic"
+      >
+        {{ busy ? 'Running…' : 'Run' }}
+      </button>
       <span v-if="!form.from" class="text-xs text-text-3">From the gateway's own address: the faults of a device do not apply.</span>
     </div>
   </form>

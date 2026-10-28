@@ -84,6 +84,8 @@ function shown(f: ProbeField): string | undefined {
   return tried.value ? errors.value[f] : undefined;
 }
 
+const pendingConfirm = computed(() => !!state.data.value?.pending_confirm);
+
 const title = computed(() => (props.probe ? `Edit ${before.value?.name ?? 'probe'}` : 'Add probe'));
 watch(
   [open, form],
@@ -155,11 +157,12 @@ async function submit() {
         <p class="m-0 mt-1 text-xs text-text-3">A diagnostic from the probe then verifies certificates that the gateway's test CA signed (the interception, the TLS responder).</p>
       </div>
 
+      <p v-if="pendingConfirm" class="m-0 text-sm text-fault-text" data-testid="probe-pending-confirm">Another revision waits for confirmation; change the probe after it is resolved.</p>
       <p v-if="server.general.length" class="field-error" role="alert" data-testid="probe-form-refused">The gateway refused the probe: {{ server.general.join(' ') }}</p>
       <p v-if="error" class="field-error" role="alert">{{ error }}</p>
       <div class="dialog-actions">
         <button type="button" class="btn" @click="open = false">Cancel</button>
-        <button type="submit" class="btn btn-primary" :disabled="busy || (tried && !valid)">Preview &amp; apply</button>
+        <button type="submit" class="btn btn-primary" :disabled="busy || pendingConfirm || (tried && !valid)">Preview &amp; apply</button>
       </div>
     </form>
   </ModalDialog>

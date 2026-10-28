@@ -222,6 +222,24 @@ export function resultTone(r: Pick<DiagnosticResult, 'ok'>): { tone: DotTone; la
   return r.ok ? { tone: 'normal', label: 'Succeeded' } : { tone: 'block', label: 'Failed' };
 }
 
+/**
+ * Why a run has no result (P6-AUDIT-45): the gateway refused the request (a 4xx about it), failed on it (a 5xx: the diagnostic
+ * may have run) or did not answer at all.
+ */
+export type RunFailure = 'refused' | 'failed' | 'unreachable';
+
+export function failureTone(f: RunFailure | undefined): { tone: DotTone; label: string } {
+  if (f === 'unreachable') return { tone: 'offline', label: 'No answer' };
+  if (f === 'failed') return { tone: 'fault', label: 'Gateway error' };
+  return { tone: 'fault', label: 'Refused' };
+}
+
+/** The sentence a screen reader hears when a run ends (P6-AUDIT-49): the state as the screen shows it, then what happened. */
+export function runAnnouncement(run: { result?: DiagnosticResult; error?: string; failure?: RunFailure }): string {
+  if (run.result) return `${resultTone(run.result).label}: ${resultSentence(run.result)}`;
+  return `${failureTone(run.failure).label}: ${run.error ?? 'no answer'}`;
+}
+
 export interface PathStep {
   step: 'dns' | 'route' | 'tcp' | 'tls';
   label: string;

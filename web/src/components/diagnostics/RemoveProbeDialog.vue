@@ -26,11 +26,16 @@ const error = ref('');
 const busy = ref(false);
 let origin: EditOrigin | undefined;
 
-watch(open, (o) => {
-  if (!o) return;
-  error.value = '';
-  origin = draft.editOrigin();
-});
+// immediate: the view mounts the dialog (v-if) in the same tick as it opens it, so the first opening never changes
+watch(
+  open,
+  (o) => {
+    if (!o) return;
+    error.value = '';
+    origin = draft.editOrigin();
+  },
+  { immediate: true },
+);
 
 /** The probe as the draft has it (an edit not applied yet included). */
 const config = computed(() => draft.effectiveProbes[props.probe] ?? draft.baseConfig?.probes?.[props.probe]);

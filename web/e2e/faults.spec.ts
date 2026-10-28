@@ -576,8 +576,12 @@ test('Explain names the access verdict and the winning fault per family with the
   await explain.getByLabel('Destination').fill('203.0.113.10');
   await explain.getByLabel('Protocol').selectOption('tcp');
   await explain.getByLabel('Port').fill('8883');
+  const status = page.getByTestId('explain-announcement');
+  await expect(status).toHaveAttribute('role', 'status');
+  await expect(status).toHaveText('');
   await explain.getByRole('button', { name: 'Explain' }).click();
   const result = page.getByTestId('explain-result');
+  await expect(status).toHaveText('Explained: access allow by the access matrix; 3 fault families apply.');
   await expect(result).toContainText('Allow');
   await expect(result).toContainText('by the access matrix — IoT → uplink: allow (default)');
   await expect(result.getByTestId('explain-family')).toHaveCount(3);

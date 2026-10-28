@@ -619,7 +619,7 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 			}
 		}
 		if s.Probe != nil {
-			r, err := e.run.Run(ctx, *s.Probe)
+			r, err := e.runStepProbe(ctx, s)
 			if err != nil {
 				return nil, err
 			}
@@ -658,6 +658,35 @@ func (e *Executor) runOp(ctx context.Context, op Operation) (json.RawMessage, er
 		return nil, e.startProbeClient(p)
 	}
 	return nil, nil
+}
+
+// runStepProbe runs the probe of a step. A probe that asks for a network namespace (Step.ProbeAsksForNS) answers "no" only when
+// the namespace cannot be opened; a command that fails for another reason is repeated, and when it keeps failing the step
+// fails with that error instead of acting on a guess (the step may delete the probe's pair, and with it its address).
+func (e *Executor) runStepProbe(ctx context.Context, s Step) (Result, error) {
+	if !s.ProbeAsksForNS {
+		return e.run.Run(ctx, *s.Probe)
+	}
+	var r Result
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return Result{}, ctx.Err()
+			case <-e.clock.After(100 * time.Millisecond):
+			}
+		}
+		var err error
+		r, err = e.run.Run(ctx, *s.Probe)
+		if err != nil {
+			return Result{}, err
+		}
+		// 0: there; no message at all or the message of a namespace that is not there: not there
+		if r.Exit == 0 || strings.TrimSpace(r.Stderr) == "" || strings.Contains(r.Stderr, "Cannot open network namespace") {
+			return r, nil
+		}
+	}
+	return Result{}, &CommandError{Cmd: *s.Probe, Exit: r.Exit, Stderr: r.Stderr}
 }
 
 // benign reports whether a failed idempotent step only said that nothing was left to do.

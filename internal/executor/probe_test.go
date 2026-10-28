@@ -217,6 +217,52 @@ func TestTheReadOfProbesListsTheGatewayEndsWithTheirNamespaces(t *testing.T) {
 	}
 }
 
+// The question "is the namespace of the probe there?" is asked by a command inside it. A command that fails for a moment
+// must not be read as "no": the pair would be deleted and made again, and the probe would lose its address (CI run
+// 40721700824). Only the message of a namespace that cannot be opened says it is gone.
+func TestAProbesPairIsDeletedOnlyWhenItsNamespaceIsGone(t *testing.T) {
+	const transient = "setting the network namespace failed: Invalid argument"
+	const gone = `Cannot open network namespace "cgp-3a1f7c52": No such file or directory`
+	for _, tc := range []struct {
+		name    string
+		failing int // how many asks fail, 0: all of them
+		stderr  string
+		deleted bool
+		err     bool
+	}{
+		{"a failure for a moment", 1, transient, false, false},
+		{"a failure that stays", 0, transient, false, true},
+		{"a namespace that is gone", 0, gone, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var asks int
+			fr := &fakeRunner{respond: func(c Command) (Result, error) {
+				switch {
+				case isLinkRead(c):
+					return Result{Stdout: linkJSON("br-iot", true)}, nil
+				case c.Tool == ToolIP && c.NS == pNS && len(c.Args) >= 3 && c.Args[0] == "-j" && c.Args[1] == "addr":
+					return Result{Stdout: addrJSON}, nil
+				case c.Tool == ToolIP && c.NS == pNS && len(c.Args) >= 3 && c.Args[0] == "link" && c.Args[1] == "show":
+					asks++
+					if tc.failing == 0 || asks <= tc.failing {
+						return Result{Exit: 1, Stderr: tc.stderr}, nil
+					}
+					return Result{}, nil
+				}
+				return Result{}, nil // the pair exists, everything else works
+			}}
+			e := newExec(t, fr, WithProbeSocket(idleOpen))
+			_, err := e.DoBatch(context.Background(), ops(t, `{"type":"assign_interfaces","devs":["br-iot"]}`, pEnsure))
+			if (err != nil) != tc.err {
+				t.Fatalf("error %v, want error: %v", err, tc.err)
+			}
+			if got := hasCmd(argvs(fr), "ip link delete dev "+pIf+" type veth"); got != tc.deleted {
+				t.Errorf("pair deleted: %v, want %v\n%s", got, tc.deleted, strings.Join(argvs(fr), "\n"))
+			}
+		})
+	}
+}
+
 // A read of the probe's interface that fails for a moment (an `ip netns exec` that raced with another) does not make the probe
 // look like one without an address: it is repeated, and only a read that keeps failing leaves the probe without one.
 func TestTheReadOfAProbesInterfaceIsRepeatedWhenItFailsForAMoment(t *testing.T) {

@@ -240,8 +240,8 @@ func planProbeNS(o *ProbeNS) []Step {
 		return Step{Cmd: Command{Tool: ToolSysctl, Args: []string{"-w", "net/ipv4/conf/" + conf + "/rp_filter=0"}, NS: o.Name}}
 	}
 	return []Step{
-		{Guard: &exists, Probe: &nsThere, RunIfProbeOK: false, Cmd: ip("link", "delete", "dev", o.HostIf, "type", "veth")},
-		{Probe: &nsThere, RunIfProbeOK: false, Cmd: Command{Tool: ToolIP, Args: []string{"netns", "add", o.Name}}},
+		{Guard: &exists, Probe: &nsThere, RunIfProbeOK: false, ProbeAsksForNS: true, Cmd: ip("link", "delete", "dev", o.HostIf, "type", "veth")},
+		{Probe: &nsThere, RunIfProbeOK: false, ProbeAsksForNS: true, Cmd: Command{Tool: ToolIP, Args: []string{"netns", "add", o.Name}}},
 		{Probe: &exists, RunIfProbeOK: false, Cmd: ip("link", "add", o.HostIf, "type", "veth", "peer", "name", ProbePeerIf, "address", o.MAC, "netns", o.Name)},
 		{Cmd: ip("link", "set", "dev", o.HostIf, "master", o.Bridge)},
 		off(o.NS, o.HostIf),

@@ -3,6 +3,7 @@
 package api_test
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os/exec"
@@ -73,6 +74,20 @@ func addProbe(t *testing.T, g *gw, top *testbed.Topology, patch func(p map[strin
 		}
 	}
 	addressTheProbe(t)
+	probeState = func() string {
+		var b strings.Builder
+		for _, args := range [][]string{{"ip", "netns", "list"}, {"ip", "netns", "exec", probeNS, "ip", "-d", "addr"}, {"ip", "netns", "exec", probeNS, "ip", "route"}} {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			out, err := top.GW.Run(ctx, args[0], args[1:]...)
+			cancel()
+			fmt.Fprintf(&b, "$ %s\n%s\n", strings.Join(args, " "), out)
+			if err != nil {
+				fmt.Fprintf(&b, "(%v)\n", err)
+			}
+		}
+		return b.String()
+	}
+	t.Cleanup(func() { probeState = nil })
 	// the observation as the daemon runs it
 	if err := g.e.PollObserved(t.Context(), 200*time.Millisecond); err != nil {
 		t.Fatal(err)
@@ -167,10 +182,16 @@ func TestAFaultOnTheProbeIsSeenByItsDiagnosticsAndNotByTheGatewaysOnTheRealKerne
 }
 
 // calibrate runs the self-test and returns its answer.
+// probeState tells what the probe's namespace holds (set by addProbe), for the message of a failed call.
+var probeState func() string
+
 func (g *gw) calibrate(body map[string]any) map[string]any {
 	g.t.Helper()
 	r := g.do("POST", "/probes/probe-a/calibrate", body, nil, nil)
 	if r.Status != 200 {
+		if probeState != nil {
+			g.t.Logf("the probe's namespace when the calibration failed:\n%s", probeState())
+		}
 		g.t.Fatalf("calibrate: %d %s", r.Status, r.Body)
 	}
 	return r.json(g.t)

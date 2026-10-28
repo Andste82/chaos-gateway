@@ -106,6 +106,12 @@ type options struct {
 	resolvers []netip.Addr
 	// procDir is where the metrics endpoint reads the load and memory of the machine (empty: /proc)
 	procDir string
+	// apiExecWrap, when set, wraps the apply.Exec the API reads the kernel with (the engine has its own: execWrap).
+	apiExecWrap func(apply.Exec) apply.Exec
+	// version is the build version the API reports (empty: "test")
+	version string
+	// metricsTimeout is the deadline of each source the metrics endpoint reads (zero: the default of 3 s)
+	metricsTimeout time.Duration
 	// execWrap, when set, wraps the engine's apply.Exec (fault injection, e.g. a panicking goroutine).
 	execWrap func(apply.Exec) apply.Exec
 	// root reuses an existing data directory instead of a fresh t.TempDir(), to simulate a restart
@@ -248,8 +254,16 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	if started.IsZero() {
 		started = time.Now()
 	}
-	apiCfg := api.Config{Engine: e, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: apply.Local{E: ex}, Namespace: o.namespace, StateDir: filepath.Join(root, "api"),
-		BootID: "boot-1", Started: started, Version: "test", ConfirmTimeout: o.confirm, UI: o.ui, Preflight: o.preflight, Log: o.log, Clock: o.apiClock, RunMax: o.maxRuns,
+	var apiExec apply.Exec = apply.Local{E: ex}
+	if o.apiExecWrap != nil {
+		apiExec = o.apiExecWrap(apiExec)
+	}
+	version := o.version
+	if version == "" {
+		version = "test"
+	}
+	apiCfg := api.Config{Engine: e, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: apiExec, Namespace: o.namespace, StateDir: filepath.Join(root, "api"),
+		BootID: "boot-1", Started: started, Version: version, ConfirmTimeout: o.confirm, UI: o.ui, Preflight: o.preflight, Log: o.log, Clock: o.apiClock, RunMax: o.maxRuns,
 		Resolvers: func() []netip.Addr {
 			if len(o.resolvers) > 0 {
 				return o.resolvers
@@ -259,6 +273,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	capCfg(&apiCfg)
 	apiCfg.Diagnostics = o.diagnostics
 	apiCfg.ProcDir = o.procDir
+	apiCfg.MetricsReadTimeout = o.metricsTimeout
 	// the CAs of the TLS responder (M21): the API makes them when it starts, like the daemon
 	apiCfg.TLSCADir = filepath.Join(root, "tlsca")
 	if err := tlsresponder.EnsureCAs(apiCfg.TLSCADir, time.Now()); err != nil {

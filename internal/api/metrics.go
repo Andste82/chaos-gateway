@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sys/unix"
@@ -27,8 +28,24 @@ import (
 // read from the engine's snapshot and the kernel at the moment of the scrape, by the code that serves the same
 // numbers over the REST API (the views of overlays, faults, rules and forwards), so the endpoint and the API
 // cannot disagree. A counter that cannot be read is left out, and `chaosgw_collector_up` says which source
-// failed; a counter that starts over (a reboot, a recreated object) is a counter reset for Prometheus, and
+// failed; every source is read within a deadline, so a read that hangs leaves its source out instead of failing the scrape;
+// a counter that starts over (a reboot, a recreated object) is a counter reset for Prometheus, and
 // `chaosgw_counter_epoch` is the epoch the API reports.
+
+// defaultMetricsReadTimeout bounds each source a scrape reads (the counters and queues, the links, the health): a few of them in
+// turn stay below the 10 s that Prometheus waits for a scrape by default.
+const defaultMetricsReadTimeout = 3 * time.Second
+
+// bounded runs read with a context that ends after the deadline of a source read (Config.MetricsReadTimeout).
+func (s *Server) bounded(ctx context.Context, read func(context.Context)) {
+	d := s.cfg.MetricsReadTimeout
+	if d <= 0 {
+		d = defaultMetricsReadTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	read(ctx)
+}
 
 // faultHelp is the help text of the chaosgw_fault_* families.
 const faultHelp = "Counted into a fault, a profile activation or another overlay (DNS and TLS cases count answers and handshakes as packets), in both directions."
@@ -63,8 +80,8 @@ func (s *Server) GetMetrics(c *gin.Context) {
 	m.Gauge("chaosgw_apply_ok", "1 while the last apply succeeded, 0 while it failed.", boolValue(snap.LastError == ""))
 	m.Gauge("chaosgw_counter_epoch", "The epoch of the counters as a whole: it changes when they start over.", float64(snap.CounterEpoch))
 
-	s.collectCounters(ctx, m, snap)
-	s.collectInterfaces(ctx, m, snap)
+	s.bounded(ctx, func(ctx context.Context) { s.collectCounters(ctx, m, snap) })
+	s.bounded(ctx, func(ctx context.Context) { s.collectInterfaces(ctx, m, snap) })
 	s.collectDevices(m, snap)
 	s.collectSystem(ctx, m)
 	if err := m.Err(); err != nil {
@@ -248,7 +265,6 @@ func (s *Server) collectInterfaces(ctx context.Context, m *metrics.Set, snap *en
 // collectDevices reports the devices the gateway sees (plan §2.12: "per device: traffic rates, current flows").
 func (s *Server) collectDevices(m *metrics.Set, snap *engine.Snapshot) {
 	online := 0
-	flows := 0
 	for _, d := range snap.Devices {
 		lb := labels("device", d.ID, "name", d.Name, "network", d.Network, "origin", string(d.Origin))
 		m.Gauge("chaosgw_device_online", "1 while the device gave a sign of life within the last 60 s.", boolValue(d.Online), lb...)
@@ -258,13 +274,14 @@ func (s *Server) collectDevices(m *metrics.Set, snap *engine.Snapshot) {
 		if d.TrafficKnown {
 			m.Gauge("chaosgw_device_upload_bytes_per_second", "Bytes per second the device sent, averaged over the conntrack reads of the last 10 s.", float64(d.UploadBps), lb...)
 			m.Gauge("chaosgw_device_download_bytes_per_second", "Bytes per second the device received, averaged over the conntrack reads of the last 10 s.", float64(d.DownloadBps), lb...)
-			m.Gauge("chaosgw_device_flows_active", "Tracked connections the device is a party to.", float64(d.FlowsActive), lb...)
-			flows += d.FlowsActive
+			m.Gauge("chaosgw_device_flows_active", "Tracked connections the device is a party to; one between two devices counts for both.", float64(d.FlowsActive), lb...)
 		}
 	}
 	m.Gauge("chaosgw_devices", "Devices the gateway knows, configured and discovered.", float64(len(snap.Devices)))
 	m.Gauge("chaosgw_devices_online", "Devices that are online.", float64(online))
-	m.Gauge("chaosgw_flows_active", "Tracked connections of the devices that report them.", float64(flows))
+	if snap.FlowsKnown {
+		m.Gauge("chaosgw_flows_active", "Tracked connections that have a device as a party, each counted once; left out while unknown.", float64(snap.FlowsActive))
+	}
 	m.Gauge("chaosgw_overlays_active", "Overlays in force.", float64(len(snap.Overlays)))
 	m.Gauge("chaosgw_leases", "DHCP leases of the last observation.", float64(len(snap.Leases)))
 	running, queued, _ := s.runs.Busy()

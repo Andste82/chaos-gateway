@@ -154,32 +154,60 @@ const explanation = (o: Partial<Explanation>): Explanation => ({
 
 describe('the badge of the path', () => {
   it('has nothing for a path as configured', () => {
-    expect(pathState(undefined)).toEqual({ faults: [] });
-    expect(pathState(explanation({}))).toEqual({ faults: [] });
-    expect(pathState(explanation({ faults: [{ family: 'impairment' }] }))).toEqual({ faults: [] });
+    expect(pathState(undefined)).toEqual({ faults: [], elsewhere: [] });
+    expect(pathState(explanation({}))).toEqual({ faults: [], elsewhere: [] });
+    expect(pathState(explanation({ faults: [{ family: 'impairment' }] }))).toEqual({ faults: [], elsewhere: [] });
   });
 
-  it('lists the fault that wins in each family by its summary, its name or its profile', () => {
+  it('lists the fault that wins in each family that acts on the connection by its summary, its name or its profile', () => {
     const e = explanation({
       faults: [
         { family: 'impairment', winner: { family: 'impairment', layer: 'overlay', id: 'a', summary: '↑↓ 200 ms ±50' } },
-        { family: 'dns', winner: { family: 'dns', layer: 'config', id: 'b', name: 'slow-dns' } },
         { family: 'mtu', winner: { family: 'mtu', layer: 'overlay', id: 'c', profile: { name: 'lte' } } },
         { family: 'tls', winner: { family: 'tls', layer: 'overlay', id: 'd' } },
+        { family: 'tunnel', winner: { family: 'tunnel', layer: 'overlay', id: 'f', summary: 'wireguard blackhole' } },
       ],
     });
     expect(pathState(e).faults).toEqual([
       { family: 'impairment', text: '↑↓ 200 ms ±50' },
-      { family: 'dns', text: 'slow-dns' },
       { family: 'mtu', text: 'profile LTE' },
       { family: 'tls', text: 'tls' },
+      { family: 'tunnel', text: 'wireguard blackhole' },
     ]);
     expect(faultBadgeText({ family: 'dhcp', layer: 'config', id: 'e' })).toBe('dhcp');
+  });
+
+  it('keeps a DNS or DHCP fault off the path: GET /explain resolves them for every destination, and they do not act on a connection (P6-AUDIT-50)', () => {
+    const e = explanation({
+      faults: [
+        { family: 'dns', winner: { family: 'dns', layer: 'config', id: 'b', name: 'slow-dns' } },
+        { family: 'dhcp', winner: { family: 'dhcp', layer: 'overlay', id: 'g', summary: 'dhcp short_lease 30s' } },
+      ],
+    });
+    expect(pathState(e)).toEqual({
+      faults: [],
+      elsewhere: [
+        { family: 'dns', text: 'slow-dns' },
+        { family: 'dhcp', text: 'dhcp short_lease 30s' },
+      ],
+    });
   });
 
   it('says when an access rule stops the connection', () => {
     expect(pathState(explanation({ access: { verdict: 'drop', layer: 'config_rule' } })).blocked).toBe('Dropped by a configured rule');
     expect(pathState(explanation({ access: { verdict: 'reject', layer: 'access_matrix' } })).blocked).toBe('Rejected by the access matrix');
+  });
+
+  it('calls a TCP reset a reset, not a drop (P6-AUDIT-53)', () => {
+    expect(pathState(explanation({ access: { verdict: 'reset', layer: 'overlay_rule' } })).blocked).toBe('Reset by an overlay rule');
+  });
+
+  it('carries the address the connections came from, for the question to the gateway (P6-AUDIT-58)', () => {
+    const t = pathTargets([
+      flow({ id: '1', src: '10.10.0.50', dport: 8883, upload: { packets: 1, bytes: 100 } }),
+      flow({ id: '2', src: '10.10.0.20', dport: 8883, upload: { packets: 1, bytes: 10 } }),
+    ]);
+    expect(t[0]!.src).toBe('10.10.0.50');
   });
 });
 

@@ -143,6 +143,10 @@ type tracker struct {
 	traffic map[string][]trafficSample
 	// leases is the expiry of each MAC's active lease as last seen: a new or renewed lease is evidence.
 	leases map[string]time.Time
+	// flowsActive is the number of tracked connections that have a device as a party, each counted once, and flowsKnown
+	// whether it is known (the same conditions as DeviceState.TrafficKnown).
+	flowsActive int
+	flowsKnown  bool
 }
 
 // trafficSample is what one device sent and received between two conntrack reads.
@@ -298,6 +302,35 @@ func (t *tracker) applyTraffic(st *DeviceState, obs observation, deltas map[neti
 		st.DownloadBps = int64(float64(down) / dt)
 	}
 	st.TrafficKnown = true
+}
+
+// countFlows counts the connections of the last conntrack read that have a device as a party. A connection between two devices
+// is one connection, whereas it is a flow of each of the devices (DeviceState.FlowsActive), so the sum over the devices is not
+// the total. An observation without a read keeps the count, and a failed one makes it unknown.
+func (t *tracker) countFlows(obs observation, id domain.Identity) {
+	switch {
+	case !obs.ConntrackRead:
+		if obs.ObserveError != "" {
+			t.flowsKnown = false
+		}
+	case t.lastRead.IsZero():
+		// the first read: the devices' traffic is not known yet either
+	default:
+		seen := make(map[string]bool, len(obs.Flows))
+		n := 0
+		for _, f := range obs.Flows {
+			if seen[f.Key] {
+				continue
+			}
+			seen[f.Key] = true
+			_, src := id.Owner[f.Src]
+			_, dst := id.Owner[f.Dst]
+			if src || dst {
+				n++
+			}
+		}
+		t.flowsActive, t.flowsKnown = n, true
+	}
 }
 
 // leaseNews returns the MACs whose active lease is new or renewed since the last step: a device that
@@ -575,6 +608,7 @@ func (t *tracker) step(cfg *model.Configuration, obs observation) (domain.Identi
 		st.Online = !st.LastSeen.IsZero() && obs.At.Sub(st.LastSeen) < t.offlineAfter
 		t.applyTraffic(st, obs, deltas, p)
 	}
+	t.countFlows(obs, id)
 	if obs.ConntrackRead {
 		t.lastRead = obs.At
 	}

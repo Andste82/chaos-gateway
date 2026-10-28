@@ -43,23 +43,36 @@ var (
 )
 
 // parseScrape parses the text format and fails on anything that is not valid: a series without a TYPE before it, a
-// series twice, a value that is no number.
+// series twice, a value that is no number, a family that is not in one block (the HELP before the TYPE, then all its
+// series, and nothing of it again later).
 func parseScrape(t *testing.T, body string) *scrape {
 	t.Helper()
 	sc := &scrape{t: t, types: map[string]string{}}
 	seen := map[string]bool{}
+	helped := map[string]bool{}
+	current := ""
 	for _, line := range strings.Split(strings.TrimSuffix(body, "\n"), "\n") {
 		switch {
 		case line == "":
 			t.Errorf("an empty line in the exposition")
 		case strings.HasPrefix(line, "# HELP "):
+			f := strings.Fields(line)
+			if len(f) < 3 || helped[f[2]] || sc.types[f[2]] != "" {
+				t.Errorf("a HELP line that is twice or after its TYPE: %q", line)
+				continue
+			}
+			helped[f[2]] = true
 		case strings.HasPrefix(line, "# TYPE "):
 			f := strings.Fields(line)
 			if len(f) != 4 || (f[3] != "counter" && f[3] != "gauge") {
 				t.Errorf("bad TYPE line %q", line)
 				continue
 			}
+			if sc.types[f[2]] != "" {
+				t.Errorf("%s has two TYPE lines", f[2])
+			}
 			sc.types[f[2]] = f[3]
+			current = f[2]
 		default:
 			m := sampleRE.FindStringSubmatch(line)
 			if m == nil {
@@ -68,6 +81,9 @@ func parseScrape(t *testing.T, body string) *scrape {
 			}
 			if sc.types[m[1]] == "" {
 				t.Errorf("%s has no TYPE before its first series", m[1])
+			}
+			if m[1] != current {
+				t.Errorf("%s: its series are not together after its TYPE line (after %s): %q", m[1], current, line)
 			}
 			if seen[line[:strings.LastIndex(line, " ")]] {
 				t.Errorf("series twice: %q", line)
@@ -550,4 +566,347 @@ func TestAForwardedConnectionIsAFlowOfTheTargetDevice(t *testing.T) {
 	if fw, ok := ex["forward"].(map[string]any); !ok || fw["id"] != fwdWeb {
 		t.Errorf("explain %v", ex)
 	}
+}
+
+// readFault makes the engine's reads of one kind fail (or hang until their context ends) while it is set, and lets the others through.
+// A read of the links with a device name is the apply's: only the listing of all links is the metrics endpoint's.
+type readFault struct {
+	inner apply.Exec
+	what  atomic.Value // the executor read to disturb, "" for none
+	hang  atomic.Bool
+}
+
+func (f *readFault) set(what string, hang bool) {
+	f.what.Store(what)
+	f.hang.Store(hang)
+}
+
+func (f *readFault) Do(ctx context.Context, ops ...executor.Operation) (executor.Outcome, error) {
+	return f.through(ctx, f.inner, ops...)
+}
+
+func (f *readFault) through(ctx context.Context, inner apply.Exec, ops ...executor.Operation) (executor.Outcome, error) {
+	if what, _ := f.what.Load().(string); what != "" {
+		for _, op := range ops {
+			r, ok := op.(*executor.Read)
+			if !ok || r.What != what || (what == executor.ReadLinks && r.Dev != "") {
+				continue
+			}
+			if f.hang.Load() {
+				<-ctx.Done()
+				return executor.Outcome{}, ctx.Err()
+			}
+			return executor.Outcome{}, errors.New(what + " does not answer")
+		}
+	}
+	return inner.Do(ctx, ops...)
+}
+
+// readFaultOf is the readFault in front of the executor the API reads with (the links), which has its own executor.
+type readFaultOf struct {
+	*readFault
+	inner apply.Exec
+}
+
+func (r *readFaultOf) Do(ctx context.Context, ops ...executor.Operation) (executor.Outcome, error) {
+	return r.through(ctx, r.inner, ops...)
+}
+
+// metricsGatewayWithReadFault is metricsGateway with a readFault in front of the executor, a queue that counts packets and an interface
+// that has statistics.
+func metricsGatewayWithReadFault(t *testing.T, timeout time.Duration) (*gw, *readFault) {
+	t.Helper()
+	rf := &readFault{}
+	g := metricsGateway(t, func(o *options) {
+		o.metricsTimeout = timeout
+		o.execWrap = func(e apply.Exec) apply.Exec { rf.inner = e; return rf }
+		o.apiExecWrap = func(e apply.Exec) apply.Exec { return &readFaultOf{rf, e} }
+	})
+	snap := g.e.Snapshot()
+	if len(snap.TCDevs) == 0 || len(snap.Faults) == 0 {
+		t.Fatalf("no queue to read: %+v", snap.TCDevs)
+	}
+	g.k.SetTCStats(snap.TCDevs[0], strings.TrimPrefix(compiler.ClassIDOf(snap.Faults[0].ID, compiler.Upload), "1:")+":", linux.NormStats{Bytes: 1000, Packets: 10})
+	st := linux.LinkStats{}
+	st.RX.Bytes = 1000
+	g.k.SetLinkStats("br-iot", st)
+	return g, rf
+}
+
+// hasPrefix reports whether the scrape has a series whose name starts with prefix.
+func (sc *scrape) hasPrefix(prefix string) bool {
+	for _, s := range sc.samples {
+		if strings.HasPrefix(s.name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// A read of the queues or of the links that fails leaves only that source out (P6-AUDIT-59): the collector of the source says 0, none of
+// its series is reported as 0, and the other sources are still read.
+func TestMetricsLeaveOutTheQueuesOrTheInterfacesThatCannotBeRead(t *testing.T) {
+	g, rf := metricsGatewayWithReadFault(t, 0)
+	m := g.scrape()
+	for _, src := range []string{"counters", "queues", "interfaces"} {
+		if m.val("chaosgw_collector_up", "source", src) != 1 {
+			t.Fatalf("collector %s is down before any failure", src)
+		}
+	}
+	if !m.hasPrefix("chaosgw_queue_") || !m.hasPrefix("chaosgw_interface_") {
+		t.Fatal("the queue and interface series are there before any failure")
+	}
+
+	rf.set(executor.ReadTC, false)
+	m = g.scrape()
+	if q, c, i := m.val("chaosgw_collector_up", "source", "queues"), m.val("chaosgw_collector_up", "source", "counters"), m.val("chaosgw_collector_up", "source", "interfaces"); q != 0 || c != 1 || i != 1 {
+		t.Errorf("a failed queue read: collectors queues=%v counters=%v interfaces=%v", q, c, i)
+	}
+	if m.hasPrefix("chaosgw_queue_") {
+		t.Error("queue series are reported although the queues could not be read")
+	}
+	if !m.hasPrefix("chaosgw_fault_") || !m.hasPrefix("chaosgw_interface_") {
+		t.Error("the counters and the interfaces are still reported")
+	}
+
+	rf.set(executor.ReadLinks, false)
+	m = g.scrape()
+	if q, c, i := m.val("chaosgw_collector_up", "source", "queues"), m.val("chaosgw_collector_up", "source", "counters"), m.val("chaosgw_collector_up", "source", "interfaces"); q != 1 || c != 1 || i != 0 {
+		t.Errorf("a failed links read: collectors queues=%v counters=%v interfaces=%v", q, c, i)
+	}
+	if m.hasPrefix("chaosgw_interface_") {
+		t.Error("interface series are reported although the links could not be read")
+	}
+	if !m.hasPrefix("chaosgw_queue_") || !m.hasPrefix("chaosgw_fault_") {
+		t.Error("the queues and the counters are still reported")
+	}
+}
+
+// A read that hangs leaves its source out and does not fail the scrape (P6-AUDIT-51): the answer is a 200 within the deadline of the
+// source, the rest of the metrics is in it and the collector of the source says 0.
+func TestMetricsLeaveOutASourceWhoseReadHangsAndStillAnswer(t *testing.T) {
+	const bound = 300 * time.Millisecond
+	for _, tc := range []struct {
+		what    string
+		sources map[string]float64
+		gone    []string
+	}{
+		{executor.ReadNft, map[string]float64{"counters": 0, "interfaces": 1}, []string{"chaosgw_fault_", "chaosgw_queue_"}},
+		{executor.ReadTC, map[string]float64{"counters": 1, "queues": 0, "interfaces": 1}, []string{"chaosgw_queue_"}},
+		{executor.ReadLinks, map[string]float64{"counters": 1, "queues": 1, "interfaces": 0}, []string{"chaosgw_interface_"}},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			g, rf := metricsGatewayWithReadFault(t, bound)
+			rf.set(tc.what, true)
+			start := time.Now()
+			m := g.scrape() // fails the test on anything but a 200
+			if took := time.Since(start); took > 10*bound {
+				t.Errorf("the scrape took %v with a deadline of %v per source", took, bound)
+			}
+			if _, ok := m.find("chaosgw_build_info"); !ok {
+				t.Error("the rest of the metrics is not in the answer")
+			}
+			if !m.hasPrefix("chaosgw_system_") || !m.hasPrefix("chaosgw_devices") {
+				t.Error("the devices and the system are still reported")
+			}
+			for src, want := range tc.sources {
+				if got := m.val("chaosgw_collector_up", "source", src); got != want {
+					t.Errorf("collector %s is %v, want %v", src, got, want)
+				}
+			}
+			for _, p := range tc.gone {
+				if m.hasPrefix(p) {
+					t.Errorf("%s series are reported although the read hung", p)
+				}
+			}
+		})
+	}
+}
+
+// A re-apply keeps the counters and their epochs (plan §2.13, "monotonic across re-applies"), and a queue made anew starts a new epoch of its
+// own while the others keep theirs (P6-AUDIT-59).
+func TestMetricsCountersAndEpochsSurviveAReApply(t *testing.T) {
+	g := metricsGateway(t)
+	var cfgFault *compiler.Fault
+	snap := g.e.Snapshot()
+	for i := range snap.Faults {
+		if snap.Faults[i].Source == metricsFault {
+			cfgFault = &snap.Faults[i]
+		}
+	}
+	if cfgFault == nil || len(snap.TCDevs) == 0 {
+		t.Fatalf("faults %+v", snap.Faults)
+	}
+	g.k.BumpCounter(cfgFault.CounterUp, 4)
+	g.k.BumpCounter(compiler.ForwardCounterName(fwdRange), 3)
+	leaf := strings.TrimPrefix(compiler.ClassIDOf(cfgFault.ID, compiler.Upload), "1:") + ":"
+	g.k.SetTCStats(snap.TCDevs[0], leaf, linux.NormStats{Bytes: 500, Packets: 5})
+	ql := []string{"fault_id", strconv.Itoa(cfgFault.ID), "interface", snap.TCDevs[0], "direction", "upload"}
+	before := g.scrape()
+	pkts, qEpoch, cEpoch := before.val("chaosgw_fault_packets_total", "id", metricsFault), before.val("chaosgw_queue_epoch", ql...), before.val("chaosgw_counter_epoch")
+	if pkts != 4 || qEpoch == 0 || cEpoch == 0 {
+		t.Fatalf("packets %v, queue epoch %v, counter epoch %v", pkts, qEpoch, cEpoch)
+	}
+
+	// an unrelated change makes a full apply of the same queue: nothing starts over
+	if r := g.apply(g.mustPatch(map[string]any{"networks": map[string]any{iotID: map[string]any{"dhcp": map[string]any{"lease_time": "20m"}}}})); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	after := g.scrape()
+	if got := after.val("chaosgw_fault_packets_total", "id", metricsFault); got != pkts {
+		t.Errorf("the packets of the fault after a re-apply: %v, were %v", got, pkts)
+	}
+	if got := after.val("chaosgw_forward_connections_total", "id", fwdRange); got != 3 {
+		t.Errorf("the connections of the forward after a re-apply: %v", got)
+	}
+	if got := after.val("chaosgw_queue_epoch", ql...); got != qEpoch {
+		t.Errorf("the queue epoch after a re-apply: %v, was %v", got, qEpoch)
+	}
+	if got := after.val("chaosgw_counter_epoch"); got != cEpoch {
+		t.Errorf("the counter epoch after a re-apply: %v, was %v", got, cEpoch)
+	}
+
+	// an overlay makes a queue of its own: the new queue has a newer epoch, the one that was there and the counters stay
+	ov := g.mustCreateOverlay(`{"target":{"network":"IoT"},"fault":{"latency":"100ms","destination":{"cidr":"198.51.100.0/24"}}}`)["id"].(string)
+	last := g.scrape()
+	if got := last.val("chaosgw_queue_epoch", ql...); got != qEpoch {
+		t.Errorf("the queue epoch of the first queue after an overlay: %v, was %v", got, qEpoch)
+	}
+	if got := last.val("chaosgw_fault_packets_total", "id", metricsFault); got != pkts {
+		t.Errorf("the packets of the fault after an overlay: %v, were %v", got, pkts)
+	}
+	if got := last.val("chaosgw_counter_epoch"); got != cEpoch {
+		t.Errorf("the counter epoch after an overlay: %v, was %v", got, cEpoch)
+	}
+	var found int
+	for _, s := range last.samples {
+		if s.name == "chaosgw_queue_epoch" && s.labels["source"] == ov {
+			found++
+			if s.value <= qEpoch {
+				t.Errorf("the queue of the overlay has the epoch %v, not newer than %v", s.value, qEpoch)
+			}
+		}
+	}
+	if found == 0 {
+		t.Error("the queue of the overlay has no epoch series")
+	}
+}
+
+// A label value with a quote, a backslash or a line feed is escaped in the answer of the endpoint, not only in the unit test of the
+// package (P6-AUDIT-59), and the answer stays valid. The names of the configuration cannot hold those characters; the build can.
+func TestMetricsEscapeLabelValuesInTheAnswer(t *testing.T) {
+	g := metricsGateway(t, func(o *options) { o.version = "1.0 \"rc\" C:\\net\nx" })
+	body := string(g.do("GET", "/metrics", nil, nil, nil).Body)
+	want := `version="1.0 \"rc\" C:\\net\nx"`
+	if !strings.Contains(body, want) {
+		t.Fatalf("the answer has no %s:\n%s", want, body[:strings.Index(body, "chaosgw_build_info")+200])
+	}
+	if m := parseScrape(t, body); m.val("chaosgw_build_info") != 1 {
+		t.Error("build info")
+	}
+}
+
+// A connection between two devices is one connection in the total, whereas it is a flow of each device (P6-AUDIT-52).
+func TestMetricsCountAConnectionBetweenTwoDevicesOnceInTheTotal(t *testing.T) {
+	g := metricsGateway(t)
+	const other = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
+	if r := g.apply(g.mustPatch(map[string]any{"devices": map[string]any{other: map[string]any{"name": "esp32-43", "network": iotID, "identifiers": map[string]any{"macs": []any{"02:00:00:00:00:32"}}}}})); r.Status != 200 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	g.k.SetNeighbors([]linux.Neighbor{nb("10.10.0.31", "02:00:00:00:00:31"), nb("10.10.0.32", "02:00:00:00:00:32")})
+	g.observe()
+	line := func(src, dst string, sport int) string {
+		p := strconv.Itoa(sport)
+		return "tcp      6 431999 ESTABLISHED src=" + src + " dst=" + dst + " sport=" + p + " dport=8883 packets=6 bytes=412 src=" + dst + " dst=" + src + " sport=8883 dport=" + p + " packets=4 bytes=500 [ASSURED] mark=0 use=1\n"
+	}
+	g.k.SetConntrack(line("10.10.0.31", "10.10.0.32", 40000))
+	g.observe()
+	g.observe()
+	m := g.scrape()
+	if a, b := m.val("chaosgw_device_flows_active", "device", espID), m.val("chaosgw_device_flows_active", "device", other); a != 1 || b != 1 {
+		t.Errorf("the devices' own counts: %v and %v, want 1 each", a, b)
+	}
+	if got := m.val("chaosgw_flows_active"); got != 1 {
+		t.Errorf("chaosgw_flows_active is %v for one connection between two devices", got)
+	}
+	// a second one, from a device to the uplink, makes two
+	g.k.SetConntrack(line("10.10.0.31", "10.10.0.32", 40000) + line("10.10.0.31", "203.0.113.10", 40001))
+	g.observe()
+	if got := g.scrape().val("chaosgw_flows_active"); got != 2 {
+		t.Errorf("chaosgw_flows_active is %v for two connections", got)
+	}
+}
+
+// Explain resolves every family for any destination: a DHCP action acts on the device whatever it talks to, and a DNS fault without names
+// matches whatever name is asked. The path view of the web app therefore puts only the families that act on a connection on its badge
+// (P6-AUDIT-50).
+func TestExplainNamesDHCPAndDNSFaultsForAnAddressDestination(t *testing.T) {
+	g := metricsGateway(t)
+	g.mustCreateOverlay(`{"target":{"device":"esp32-42"},"dhcp":{"action":"short_lease","lease_time":"30s"}}`)
+	g.mustCreateOverlay(`{"target":{"device":"esp32-42"},"dns":{"action":"timeout"}}`)
+	ex := g.do("GET", "/explain?device=esp32-42&dst=203.0.113.10&protocol=tcp&port=8883", nil, nil, nil).json(t)
+	got := map[string]bool{}
+	for _, f := range ex["faults"].([]any) {
+		if f.(map[string]any)["winner"] != nil {
+			got[f.(map[string]any)["family"].(string)] = true
+		}
+	}
+	if !got["dhcp"] || !got["dns"] {
+		t.Errorf("the families with a winner: %v (explain: %v)", got, ex["faults"])
+	}
+}
+
+// The pages of one listing of GET /flows come from one conntrack read, and a listing that starts anew reads again (P6-AUDIT-55).
+func TestFlowPagesShareOneConntrackRead(t *testing.T) {
+	var reads atomic.Int64
+	g := metricsGateway(t, func(o *options) {
+		o.execWrap = func(e apply.Exec) apply.Exec { return countingReads{inner: e, what: executor.ReadConntrack, n: &reads} }
+	})
+	g.k.SetNeighbors([]linux.Neighbor{nb("10.10.0.31", "02:00:00:00:00:31")})
+	g.observe()
+	var lines string
+	for p := 40000; p < 40005; p++ {
+		lines += "tcp      6 431999 ESTABLISHED src=10.10.0.31 dst=203.0.113.10 sport=" + strconv.Itoa(p) + " dport=8883 packets=6 bytes=412 src=203.0.113.10 dst=203.0.113.1 sport=8883 dport=" + strconv.Itoa(p) + " packets=4 bytes=500 [ASSURED] mark=0 use=1\n"
+	}
+	g.k.SetConntrack(lines)
+	list := func() (n int) {
+		path := "/flows?limit=2"
+		for path != "" {
+			body := g.do("GET", path, nil, nil, nil).json(t)
+			n += len(body["items"].([]any))
+			path = ""
+			if next, ok := body["next_cursor"].(string); ok && next != "" {
+				path = "/flows?limit=2&cursor=" + next
+			}
+		}
+		return n
+	}
+	before := reads.Load()
+	if n := list(); n != 5 {
+		t.Fatalf("the listing has %d flows, want 5", n)
+	}
+	if got := reads.Load() - before; got != 1 {
+		t.Errorf("a listing of three pages read the conntrack table %d times, want once", got)
+	}
+	before = reads.Load()
+	list()
+	if got := reads.Load() - before; got != 1 {
+		t.Errorf("the next listing read the table %d times, want once", got)
+	}
+}
+
+// countingReads counts the executor reads of one kind.
+type countingReads struct {
+	inner apply.Exec
+	what  string
+	n     *atomic.Int64
+}
+
+func (c countingReads) Do(ctx context.Context, ops ...executor.Operation) (executor.Outcome, error) {
+	for _, op := range ops {
+		if r, ok := op.(*executor.Read); ok && r.What == c.what {
+			c.n.Add(1)
+		}
+	}
+	return c.inner.Do(ctx, ops...)
 }

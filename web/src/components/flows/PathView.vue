@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // The path view of the device detail (plan §2.17 "Device detail": "path view MQTT → broker with fault badge"; M26, P3-AUDIT-37): the
 // device, the gateway, the uplink and one destination of the device's connections, with the fault badge of the faults that win for
-// that path (`GET /explain` for the device and the destination: one fault per family) on the way out of the device, where the gateway
-// impairs it. The line is blue as configured, orange while a fault impairs the path and red while an access rule stops it; the
-// sentence under it says the same in words, so the state is never in the colour alone. The destination is chosen among those of the
-// device's connections, the one that moved the most first.
+// that path (`GET /explain` for the device, the address of its connections and the destination: one fault per family) on the way out of
+// the device, where the gateway impairs it. Only the faults that act on a connection (impairment, MTU, TLS, tunnel) are on the badge; a
+// DNS or DHCP fault of the device is listed apart (P6-AUDIT-50). The line is blue as configured, orange while a fault impairs the path
+// and red while an access rule stops it; the sentence under it says the same in words, so the state is never in the colour alone. The
+// destination is chosen among those of the device's connections, the one that moved the most first.
 import { useQuery } from '@tanstack/vue-query';
 import { computed, ref, useId } from 'vue';
 import { explain } from '../../api/generated/hooks/observability/observability';
@@ -22,12 +23,19 @@ const targets = computed(() => pathTargets(flows.data.value ?? []));
 const chosen = ref('');
 /** The destination chosen, else the first; a choice that went away with its connections falls back to the first. */
 const target = computed(() => targets.value.find((t) => t.key === chosen.value) ?? targets.value[0]);
+/** What the select shows: the destination that is drawn, also while nothing is chosen or the choice went away. */
+const shown = computed({
+  get: () => target.value?.key ?? '',
+  set: (key: string) => {
+    chosen.value = key;
+  },
+});
 
 const explained = useQuery({
   queryKey: computed(() => ['explain', 'path', props.device.id, target.value?.key]),
   queryFn: ({ signal }) => {
     const t = target.value!;
-    return explain({ device: props.device.id, dst: t.dst, protocol: t.protocol, ...(t.port ? { port: t.port } : {}) }, { signal });
+    return explain({ device: props.device.id, src: t.src, dst: t.dst, protocol: t.protocol, ...(t.port ? { port: t.port } : {}) }, { signal });
   },
   enabled: computed(() => !!target.value),
   // a fault applied or expired changes it; the events read it at once
@@ -58,7 +66,7 @@ const families: Record<string, string> = { impairment: 'Impairment', mtu: 'MTU',
   <SectionCard title="Path">
     <template v-if="targets.length > 1" #actions>
       <label class="text-text-2" :for="`${uid}-to`">To</label>
-      <select :id="`${uid}-to`" v-model="chosen" class="input !h-8 max-w-[320px]" data-testid="path-target">
+      <select :id="`${uid}-to`" v-model="shown" class="input !h-8 max-w-[320px]" data-testid="path-target">
         <option v-for="t in targets" :key="t.key" :value="t.key">{{ t.label }}</option>
       </select>
     </template>
@@ -90,12 +98,22 @@ const families: Record<string, string> = { impairment: 'Impairment', mtu: 'MTU',
       <LoadError v-else-if="explained.error.value && !explained.data.value" :error="explained.error.value" what="What acts on the path is not read" :retry="explained.refetch" />
       <template v-else>
         <p class="m-0 text-[13px]" :class="tone === 'block' ? 'text-block-text' : tone === 'fault' ? 'text-fault-text' : 'text-text-2'" role="status" data-testid="path-sentence">{{ sentence }}</p>
+        <p v-if="state.blocked && state.faults.length" class="m-0 text-[13px] text-text-2" data-testid="path-faults-note">
+          These faults take effect only if a rule allows the traffic.
+        </p>
         <ul v-if="state.faults.length" class="m-0 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-[13px]" data-testid="path-faults">
           <li v-for="f in state.faults" :key="f.family" class="flex items-center gap-2" data-testid="path-fault">
             <span class="text-text-2">{{ families[f.family] ?? f.family }}</span
             ><FaultChip :text="f.text" />
           </li>
         </ul>
+        <div v-if="state.elsewhere.length" class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px]" data-testid="path-elsewhere">
+          <span class="text-text-2">In force for {{ device.name }}, not on the way:</span>
+          <span v-for="f in state.elsewhere" :key="f.family" class="flex items-center gap-2" data-testid="path-other">
+            <span class="text-text-2">{{ families[f.family] ?? f.family }}</span
+            ><FaultChip :text="f.text" />
+          </span>
+        </div>
       </template>
     </template>
   </SectionCard>

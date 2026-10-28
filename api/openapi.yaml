@@ -1115,6 +1115,10 @@ paths:
       tags: [devices]
       operationId: listFlows
       summary: Current connections from conntrack
+      description: |
+        A request without a `cursor` reads the conntrack table. The pages after it (a request with the `cursor` of
+        the page before) are taken from that read for up to 5 seconds, so a client that follows the cursors lists
+        one state of the table, and a listing of many pages costs one read.
       x-milestone: M6a
       x-required-scope: read
       parameters:
@@ -2368,15 +2372,19 @@ paths:
           `chaosgw_interface_{receive,transmit}_{bytes,packets,errors,dropped}_total`.
         - Devices (`device`, `name`, `network`, `origin`): `chaosgw_device_online`,
           `chaosgw_device_upload_bytes_per_second`, `chaosgw_device_download_bytes_per_second` and
-          `chaosgw_device_flows_active` (the last three while the traffic is known), and the totals
-          `chaosgw_devices`, `chaosgw_devices_online`, `chaosgw_flows_active`, `chaosgw_overlays_active`,
-          `chaosgw_leases`, `chaosgw_runs_active` and `chaosgw_runs_queued`.
+          `chaosgw_device_flows_active` (the last three while the traffic is known; a connection between two
+          devices is a flow of each), and the totals `chaosgw_devices`, `chaosgw_devices_online`,
+          `chaosgw_flows_active` (the tracked connections that have a device as a party, each counted once; left out
+          while unknown), `chaosgw_overlays_active`, `chaosgw_leases`, `chaosgw_runs_active` and
+          `chaosgw_runs_queued`.
         - System: `chaosgw_health_ok`, `chaosgw_component_status{component,status}` (1 for the status a component has),
           `chaosgw_system_cpus`, `chaosgw_system_load{1,5,15}`, `chaosgw_system_memory_{total,available}_bytes`,
           `chaosgw_disk_{free,total}_bytes{volume}` (`state`, `captures`), `chaosgw_build_info`,
           `chaosgw_start_time_seconds`, `chaosgw_uptime_seconds`, `chaosgw_revision` and `chaosgw_apply_ok`.
         - `chaosgw_collector_up{source}` is 0 for a source that could not be read at this scrape (`counters`,
-          `queues`, `interfaces`); the series that come from it are left out then, they are not reported as 0.
+          `queues`, `interfaces`); the series that come from it are left out then, they are not reported as 0. Each
+          source is read within 3 seconds: a read that hangs leaves its source out like one that fails, and the
+          answer is still a 200.
       x-milestone: M26
       x-required-scope: read
       responses:
@@ -5565,7 +5573,11 @@ components:
             the black hole of an MTU fault (`mode: blackhole`) drops its too-long packets before the access
             rules run, so a too-long packet that a `reject` or `reset` rule would refuse is dropped silently
             and counted by the MTU fault, not by the rule (a `drop` rule drops it either way). Decided by the
-            maintainer on 2026-10-11.
+            maintainer on 2026-10-11. The families `dns` and `dhcp` are resolved for every destination: a DHCP
+            action overlay whose scope covers the device and a DNS fault without names are winners for any
+            address asked, although they act on the device's name resolution and lease, not on a connection to
+            that address; a client that draws what acts on a connection takes `impairment`, `mtu`, `tls` and
+            `tunnel`.
           items:
             type: object
             required: [family]

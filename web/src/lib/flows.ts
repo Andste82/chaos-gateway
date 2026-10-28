@@ -159,6 +159,8 @@ export function explainFromQuery(q: Record<string, unknown>): { source: 'device'
 export interface PathTarget {
   /** Identifies the destination in the choice: the address, the protocol and the port. */
   key: string;
+  /** The address the connections to it came from: the question to the gateway is asked for this source, not for whichever address the device sorts first. */
+  src: string;
   dst: string;
   hostname?: string;
   protocol: 'tcp' | 'udp' | 'icmp';
@@ -188,7 +190,7 @@ export function pathTargets(flows: Flow[]): PathTarget[] {
       have.hostname ??= f.dst_hostname;
       continue;
     }
-    by.set(key, { key, dst: f.dst, hostname: f.dst_hostname, protocol: f.protocol, port, label: '', bytes: flowBytes(f), connections: 1 });
+    by.set(key, { key, src: f.src, dst: f.dst, hostname: f.dst_hostname, protocol: f.protocol, port, label: '', bytes: flowBytes(f), connections: 1 });
   }
   const out = [...by.values()];
   for (const t of out) t.label = `${serviceLabel({ protocol: t.protocol, dport: t.port })} ${destinationText({ dst: t.dst, dst_hostname: t.hostname, dport: t.port })}`;
@@ -212,19 +214,31 @@ export function faultBadgeText(r: FaultRef): string {
 export interface PathState {
   /** The access verdict stops the traffic: the path is red. */
   blocked?: string;
-  /** The faults that win for the path, one per family. */
+  /** The faults that win for the path and act on the connection, one per family. */
   faults: { family: string; text: string }[];
+  /** The faults of the device that win but do not act on the path: its name resolution and its DHCP. */
+  elsewhere: { family: string; text: string }[];
 }
 
 /**
- * What the badge of the path says (plan §2.17: "path view MQTT → broker with fault badge"): the faults that win for the
- * connection, one per family, and an access verdict that drops or rejects it. A path without either is as configured.
+ * The families whose faults act on the connection the path draws. A DNS fault changes the answer of a name query and a DHCP fault
+ * the lease: neither touches the packets of a connection to an address (`GET /explain` resolves them for every destination, a
+ * DHCP overlay or a DNS fault without names matches all of them), so they are listed apart and never turn the line orange.
+ */
+const onThePath = new Set(['impairment', 'mtu', 'tls', 'tunnel']);
+
+const accessVerdicts: Record<string, string> = { reject: 'Rejected', reset: 'Reset', drop: 'Dropped' };
+
+/**
+ * What the badge of the path says (plan §2.17: "path view MQTT → broker with fault badge"): the faults that act on the
+ * connection and win for it, one per family, and an access verdict that stops it (drop, reject or a reset). A path without
+ * either is as configured.
  */
 export function pathState(e: Explanation | undefined): PathState {
-  const out: PathState = { faults: [] };
+  const out: PathState = { faults: [], elsewhere: [] };
   if (!e) return out;
-  if (e.access.verdict !== 'allow') out.blocked = `${e.access.verdict === 'reject' ? 'Rejected' : 'Dropped'} by ${accessLayers[e.access.layer] ?? e.access.layer}`;
-  for (const f of e.faults) if (f.winner) out.faults.push({ family: f.family, text: faultBadgeText(f.winner) });
+  if (e.access.verdict !== 'allow') out.blocked = `${accessVerdicts[e.access.verdict] ?? 'Stopped'} by ${accessLayers[e.access.layer] ?? e.access.layer}`;
+  for (const f of e.faults) if (f.winner) (onThePath.has(f.family) ? out.faults : out.elsewhere).push({ family: f.family, text: faultBadgeText(f.winner) });
   return out;
 }
 

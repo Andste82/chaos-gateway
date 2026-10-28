@@ -285,7 +285,7 @@ scrape_configs:
     static_configs: [{targets: ['gateway.example:8443']}]
 ```
 
-A source the gateway could not read at a scrape is left out of the answer, and `chaosgw_collector_up{source="counters"}` (also `queues`, `interfaces`) is 0 then:
+A source the gateway could not read at a scrape is left out of the answer, and `chaosgw_collector_up{source="counters"}` (also `queues`, `interfaces`) is 0 then, also when the read hangs (each source is read within 3 seconds):
 alert on that, not on a counter that stopped. The Flows screen of the web app lists the connections the gateway tracks, and a device's page shows its connections,
 its recent DNS queries and the path to a destination with the faults that act on it.
 

@@ -84,6 +84,8 @@ type Config struct {
 	TLSCADir string
 	// ProcDir is where the metrics endpoint reads the load and the memory of the machine (M26); empty takes /proc.
 	ProcDir string
+	// MetricsReadTimeout bounds each source the metrics endpoint reads (the counters, the links, the health); zero takes 3 s.
+	MetricsReadTimeout time.Duration
 	// Diagnostics sets up the diagnostics of M24; the zero value is the production setup (tests name their own servers).
 	Diagnostics DiagnosticsConfig
 }
@@ -121,6 +123,8 @@ type Server struct {
 	runsTemp string
 	// captures is the manager of the packet captures (M17), nil without a capture volume
 	captures *capturemgr.Manager
+	// flowRead is the conntrack read the pages of one GET /flows listing share (P6-AUDIT-55)
+	flowRead flowReadCache
 	// diagnostics runs POST /diagnostics (M24)
 	diagnostics *diagnostics
 	// calibrating holds the probes whose calibration runs (M25)

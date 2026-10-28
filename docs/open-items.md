@@ -48,6 +48,9 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   [the remaining points](#phase-5-audit-result-of-the-round-and-remaining-points). The one item that needed the
   maintainer, P5-AUDIT-10 (what a test network without a `dhcp` block means), was decided on 2026-10-27 (option (b)) and is
   fixed on the same branch, see [Phase 5 audit items for the maintainer](#phase-5-audit-items-for-the-maintainer). The nine open items P5-M20-01 to P5-M23-01 were decided by the maintainer on 2026-10-25, see [Phase 5 open items](#phase-5-open-items) at the end of the file: eight closed (the forms and the interception UI became the milestones M23b and M23c; P5-M21-02 and P5-M22-03, the per-case field `upstream`, are implemented on the branch `phase-5b` and ran green in CI run 40258339299 on `aebbae8`, so M21 and M22 are done) and one waiting for H1 (P5-M22-02).
+- **Phase 6** (M24 to M26a: diagnostics, probes and calibration, observability, probe management; on the branch `worktree-phase-6`, PR #125, not merged yet): the open items are
+  under [Phase 6 open items](#phase-6-open-items) at the end of the file. P6-M24-01 (the destinations of a diagnostic) and P6-M25-01 (probe management in the web UI and with
+  `chaosctl`, which is M26a) were decided by the maintainer on 2026-10-28 (option (a) each) and are closed; P6-M26a-01 (whether M26a belongs to V1) is open.
 
 ## Phase 1 audit result
 
@@ -1458,7 +1461,7 @@ plan:
   (the `inet chaosgw` nftables table, its policy rules and routing tables 100 to 109 (the policy table 100, the table 101
   of the replies of a management-side port forward, the service table 102 and the PMTU mirror tables 103 to 109; the own
   range is 100 to 110), the test bridges with their
-  addresses, the service veth pair `svc0`/`svc1` and the name `cgsvc` under `/run/netns`; the namespace itself belongs to the
+  addresses, the service veth pair `svc0`/`svc1`, the probes' namespaces `cgp-<8 hex digits>` and the gateway ends `pv<8 hex digits>` of their veth pairs (M25) and the name `cgsvc` under `/run/netns`; the namespace itself belongs to the
   `svcns` holder container and ends with it). Recorded as D35 in plan §7.1. The volumes stay, so `compose up` rebuilds
   the kernel state from the last confirmed revision (plan "Restart"). The plan's Stop lines (§3.11 and the Restart
   paragraph) now say the same.
@@ -2943,7 +2946,7 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is under 
 - Reason: needs-decision. The plan's Scope for M25 names the probes themselves (virtual clients, DHCP address, targeting, diagnostics, the self-test) and not a form for them. A probe is an object of the configuration (`probes`: name, network, `trusts_test_ca`, labels), like a custom profile or a port forward: it is made with a revision over the API (a merge patch, or the YAML import), and the web UI lists the probes, runs a diagnostic from one and measures a profile with one, but has no dialog that adds one to the draft, edits its network or removes it, and `chaosctl` has no `probe` command. The draft of the web app (`web/src/stores/draft.ts`) keeps one set of functions per kind of object (the changes, the patch, the rebase and the overlap check), so a form for probes is a piece of work of its own, not a dialog over an existing kind.
 - Evidence: `docs/development.md` "Probes and calibration (M25)", decision 9; `web/src/components/diagnostics/ProbesCard.vue` (the empty state names `probes` of the configuration); `api/openapi.yaml` (`probes` of `Configuration`; no `POST /probes`).
 - Task: decide whether a probe can be made in the UI and with `chaosctl` in V1, and in which milestone.
-- Options: (a) a probe dialog over the draft (name, network, trusts the test CA) with Remove and the preview of the changes, plus `chaosctl probe add|remove|list` (an M26 follow-up or a milestone of its own); (b) only the dialog, `chaosctl` keeps `config patch`; (c) as built: probes are configuration, made over the API and the YAML import, until a user asks.
+- Options: (a) a probe dialog over the draft (name, network, trusts the test CA) with Remove and the preview of the changes, plus `chaosctl probe add|remove|list` (an M26 follow-up or a milestone of its own); (b) only the dialog, `chaosctl` has no command for it and a probe is also made with the API (a merge patch); (c) as built: probes are configuration, made over the API and the YAML import, until a user asks.
 - Recommendation: (a) after Phase 6: a tester who wants to try a scenario "before the hardware is connected" (plan §2.12) should be able to add the probe where they work, and the draft machinery for it is the same as for the port forwards (M35a).
 - Acceptance: for (a) and (b), a Playwright test adds a probe through the dialog and the drawer, sees it in the list with its address, and removes it; for (a) a `chaosctl` test lists, adds and removes one; for (c) the plan says that probes are made over the API.
 - Needs maintainer: yes
@@ -2953,7 +2956,7 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is under 
 
 - Status: new
 - Severity: minor
-- Reason: needs-decision. The V1 scope summary of `docs/plan.md` names M24 and M25 and does not name M26a, which the maintainer added on 2026-10-28 (P6-M25-01, option (a)) as the part of M25 that lets a user add, change and remove a probe in the web UI and with `chaosctl`. M25 itself is in V1. Without M26a a probe is made only by editing the configuration (`config patch`, the YAML import), so the probes of V1 (testing "before the hardware is connected", plan §2.12) would be reachable from the web UI for diagnostics and measurements but not creatable there. Whether the feature ships with V1 is a scope decision; the plan's rule is that nothing is in V1 unless the maintainer put it there (D27).
+- Reason: needs-decision. The V1 scope summary of `docs/plan.md` names M24 and M25 and does not name M26a, which the maintainer added on 2026-10-28 (P6-M25-01, option (a)) as the part of M25 that lets a user add, change and remove a probe in the web UI and with `chaosctl`. M25 itself is in V1. Without M26a a probe is made only by editing the configuration (a revision made with the API, a merge patch, or the YAML import), so the probes of V1 (testing "before the hardware is connected", plan §2.12) would be reachable from the web UI for diagnostics and measurements but not creatable there. Whether the feature ships with V1 is a scope decision; the plan's rule is that nothing is in V1 unless the maintainer put it there (the "V1 Scope Summary" of `docs/plan.md` lists what is).
 - Evidence: `docs/plan.md` ("V1 Scope Summary", M26a, §2.17 "Probes"), `docs/development.md` "Probe management (M26a)", `docs/open-items.md` P6-M25-01.
 - Task: decide whether M26a is part of V1, optional for V1, or ships after V1.
 - Options: (a) part of V1, like M25 (the summary lists M26a; nothing else changes because the code exists and passes its level 0 tests); (b) optional for V1, like M26 (it ships if it is merged and green at the release, and the release notes say that probes are made over the API otherwise); (c) after V1, like M23c (the code stays on the branch, hidden or merged behind no flag; the UI would then have to lose *Add probe* before the release).

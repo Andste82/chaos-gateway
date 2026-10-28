@@ -466,6 +466,50 @@ func TestAProfileIsMeasuredOnTheProbeAndTheOverlayIsRemoved(t *testing.T) {
 	}
 }
 
+// A measurement puts an overlay of the caller on the probe and removes it afterwards: one the caller has there with the same
+// key (a profile activation, a fault without a traffic match) would be replaced and then deleted with it (P6-AUDIT-29).
+func TestACalibrationDoesNotReplaceAnOverlayOfTheCallerOnTheProbe(t *testing.T) {
+	const profileUUID = "6b0f8a1e-2c3d-4e5f-8a9b-0c1d2e3f4a5b"
+	b := newProbeBed(t, func(p map[string]any) {
+		p["profiles"] = map[string]any{profileUUID: map[string]any{"name": "lte-ish", "parts": map[string]any{"impairment": map[string]any{"latency": "50ms"}}}}
+	})
+	b.address("10.10.0.77/24")
+	b.net.delay = time.Millisecond
+	port := echoPair(t, 0)
+	target := map[string]any{"device": probeID}
+	for _, tc := range []struct {
+		name    string
+		overlay map[string]any
+		calibr  map[string]any
+	}{
+		{"profile", map[string]any{"target": target, "profile": profileUUID, "ttl": "1h"}, map[string]any{"profile": "lte-ish"}},
+		{"fault", map[string]any{"target": target, "fault": map[string]any{"latency": "5ms"}, "ttl": "1h"}, map[string]any{"fault": map[string]any{"rate": "2Mbit"}}},
+	} {
+		put := b.do("POST", "/overlays", tc.overlay, nil, nil)
+		if put.Status != 200 && put.Status != 201 {
+			t.Fatalf("%s: the activation: %d %s", tc.name, put.Status, put.Body)
+		}
+		id := put.json(t)["id"]
+		tc.calibr["host"], tc.calibr["port"], tc.calibr["duration"] = loopback, port, "5s"
+		r := b.calibrate(tc.calibr)
+		if r.Status != 409 || r.json(t)["code"] != "target_busy" || !strings.Contains(string(r.Body), id.(string)) {
+			t.Errorf("%s: %d %s", tc.name, r.Status, r.Body)
+		}
+		// the caller's overlay is still there, untouched
+		items := b.do("GET", "/overlays", nil, nil, nil).json(t)["items"].([]any)
+		if len(items) != 1 || items[0].(map[string]any)["id"] != id {
+			t.Errorf("%s: the overlay of the caller is gone or replaced: %v", tc.name, items)
+		}
+		if del := b.do("DELETE", "/overlays/"+id.(string), nil, nil, nil); del.Status != 204 {
+			t.Fatalf("%s: %d %s", tc.name, del.Status, del.Body)
+		}
+	}
+	// without it the same call measures
+	if r := b.calibrate(map[string]any{"profile": "lte-ish", "host": loopback, "port": port, "duration": "5s"}); r.Status != 200 {
+		t.Errorf("%d %s", r.Status, r.Body)
+	}
+}
+
 func TestAProfileThatDoesNotProduceWhatItSaysFailsTheSelfTest(t *testing.T) {
 	b := newProbeBed(t, func(p map[string]any) {
 		p["profiles"] = map[string]any{"6b0f8a1e-2c3d-4e5f-8a9b-0c1d2e3f4a5b": map[string]any{"name": "slow", "parts": map[string]any{"impairment": map[string]any{"latency": "100ms"}}}}

@@ -255,6 +255,21 @@ func (s *Server) CalibrateProbe(c *gin.Context, probeID model.Ref) {
 	host, port := req.Host, domain.CalibrationPort(req)
 	ns := executor.Target{NS: s.cfg.Namespace}
 
+	// the overlay of the measurement, and a check that it takes nobody's place: an overlay of the caller with the same key
+	// would be replaced by it and removed with it
+	var ow model.OverlayRequest
+	if profile != nil || req.Fault != nil {
+		var perr *problem
+		if ow, perr = calibrationRequest(p, profileID, req, duration); perr != nil {
+			s.write(c, perr)
+			return
+		}
+		if perr := s.calibrationClash(c, &ow); perr != nil {
+			s.write(c, perr)
+			return
+		}
+	}
+
 	// the unimpaired reference: the gateway's own traffic to the same server meets no fault of a device
 	ref, err := s.echo(ctx, &executor.ProbeRun{Target: ns, Kind: executor.ProbeEcho, Host: host, Port: port, Count: calibrationBaseline,
 		IntervalUs: int(calibrationInterval / time.Microsecond), SettleMs: 1000})
@@ -283,7 +298,7 @@ func (s *Server) CalibrateProbe(c *gin.Context, probeID model.Ref) {
 		return
 	}
 	if profile != nil || req.Fault != nil {
-		id, perr := s.calibrationOverlay(c, p, profileID, req, duration)
+		id, perr := s.calibrationOverlay(c, ow)
 		if perr != nil {
 			s.write(c, perr)
 			return
@@ -402,9 +417,9 @@ func readRun(ctx context.Context, ex interface {
 	return out, json.Unmarshal(out.Data[0], v)
 }
 
-// calibrationOverlay activates the profile or the fault on the probe for the measurement. The overlay carries a TTL, so that
-// one that outlives this process is removed anyway.
-func (s *Server) calibrationOverlay(c *gin.Context, p activeProbe, profileID string, req *model.CalibrationRequest, duration time.Duration) (uuid.UUID, *problem) {
+// calibrationRequest is the overlay that puts the profile or the fault on the probe for the measurement. It carries a TTL,
+// so that one that outlives this process is removed anyway.
+func calibrationRequest(p activeProbe, profileID string, req *model.CalibrationRequest, duration time.Duration) (model.OverlayRequest, *problem) {
 	ow := model.OverlayRequest{Target: &model.Scope{Device: &p.id}}
 	ttl := (duration + calibrationSlack + time.Minute).Round(time.Second).String()
 	ow.Ttl = &ttl
@@ -414,10 +429,37 @@ func (s *Server) calibrationOverlay(c *gin.Context, p activeProbe, profileID str
 		var fb model.FaultBody
 		b, _ := json.Marshal(req.Fault)
 		if err := json.Unmarshal(b, &fb); err != nil {
-			return uuid.Nil, newProblem(model.ErrorCodeValidationFailed, "the fault parameters cannot be activated: %v", err)
+			return ow, newProblem(model.ErrorCodeValidationFailed, "the fault parameters cannot be activated: %v", err)
 		}
 		ow.Fault = &fb
 	}
+	return ow, nil
+}
+
+// calibrationClash refuses a measurement whose overlay has the key of an overlay that the caller has on the probe already
+// (the same owner, kind, target and selector: a profile activation, a fault without a traffic match): the store would
+// replace that overlay, and the end of the measurement would remove it (P6-AUDIT-29).
+func (s *Server) calibrationClash(c *gin.Context, ow *model.OverlayRequest) *problem {
+	key, err := domain.OverlayKey(ownerOf(principalOf(c)), ow)
+	if err != nil {
+		return newProblem(model.ErrorCodeValidationFailed, "the overlay of the measurement is invalid: %v", err)
+	}
+	what := "fault of that kind"
+	if ow.Profile != nil {
+		what = "profile activation"
+	}
+	for _, have := range s.cfg.Engine.Snapshot().Overlays {
+		req := domain.RequestOf(&have)
+		if k, err := domain.OverlayKey(have.Owner, &req); err == nil && k == key {
+			return newProblem(model.ErrorCodeTargetBusy, "the caller has a %s on this probe already (overlay %s): the measurement would replace it and remove it afterwards. "+
+				"Remove it first, or measure the probe's current faults (a request without a profile and a fault)", what, have.Id)
+		}
+	}
+	return nil
+}
+
+// calibrationOverlay activates the overlay of the measurement.
+func (s *Server) calibrationOverlay(c *gin.Context, ow model.OverlayRequest) (uuid.UUID, *problem) {
 	pr := principalOf(c)
 	res, err := s.cfg.Engine.PutOverlay(context.WithoutCancel(contextOf(c)), engine.OverlayWrite{Owner: ownerOf(pr), Request: ow, Actor: actorOf(pr)})
 	if err != nil {

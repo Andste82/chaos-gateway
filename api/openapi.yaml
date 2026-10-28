@@ -53,7 +53,7 @@ info:
     | Scope | Allows |
     |---|---|
     | `read` | all `GET` operations except secret downloads |
-    | `overlays` | `read` plus overlays, runs, captures, diagnostics, probe calibration, own `reset` |
+    | `overlays` | `read` plus overlays, runs, captures, diagnostics (which may reach every destination of the gateway, audited as `diagnostic.run`), probe calibration, own `reset` |
     | `full` | everything: revisions, `reset?owner=all`, tokens, secret downloads (WireGuard exports, revision exports with secrets, capture key logs), test CA regeneration, HTTPS certificate |
     | `service` | only `/internal` paths; tokens are generated at start for the service containers, never by users |
 
@@ -1438,7 +1438,10 @@ paths:
         measurement with the expected values within the tolerances of plan §4.3: the median of the added delay ±2 ms + 5 %, the
         loss within the 99.9 % binomial interval of the configured rate, a throughput within ±10 % of the limit. With a `profile`
         or a `fault` the call activates it on the probe for the measurement (an overlay owned by the caller, removed afterwards,
-        also when the measurement fails); without, it measures what the probe's faults produce now.
+        also when the measurement fails); without, it measures what the probe's faults produce now. The caller must not have
+        an overlay of the same key on the probe already (a profile activation, or a fault without a traffic match): the
+        measurement would replace it and remove it afterwards, so the call is refused with `409 target_busy` and leaves it
+        alone.
 
         The probe sends numbered UDP datagrams to an echo server (RFC 862: it returns each datagram unchanged) at `host:port` and
         times the answers; the unimpaired round trip is measured from the gateway itself to the same server, which the faults of a
@@ -1447,7 +1450,8 @@ paths:
 
         `404 not_found` for a probe or a profile that does not exist, `422 validation_failed` for a request that cannot be
         measured (both a profile and a fault, a profile without an impairment part, a host that is no IPv4 address), `409
-        target_busy` while a calibration of the probe runs, `503 unavailable` for a probe that is not built yet or has no address.
+        target_busy` while a calibration of the probe runs or the caller has such an overlay on the probe, `503 unavailable`
+        for a probe that is not built yet or has no address.
       x-milestone: M25
       x-required-scope: overlays
       parameters:
@@ -1944,7 +1948,10 @@ paths:
         is a `200` with `ok: false`; a request that cannot be run is a `422`: `validation_failed`, `capacity_exceeded` when eight
         diagnostics run already; `404 not_found` for a probe that does not exist and `503 unavailable` for one that is not built
         yet or has no address. A principal may start five diagnostics a second, twenty at once; more is a `429 rate_limited`
-        with `Retry-After`. Every run is recorded in the audit log (`diagnostic.run`) with the target that was contacted.
+        with `Retry-After`. A token with the scope `overlays` may aim a diagnostic at any address the gateway (or the probe)
+        reaches: the loopback, the management network, the Docker networks and everything behind the uplink (decision
+        P6-M24-01). Every run is recorded in the audit log (`diagnostic.run`) with the type, the target that was contacted
+        (for `http` with a `url` that URL, without its query) and, when it ran from a probe, the probe.
         The request must fit the 60 s: for `ping`, `count` echoes 200 ms apart plus `timeout` must not exceed it.
         Host names are resolved IPv4 only, by the gateway's DNS proxy, and by the uplink's resolvers when the proxy is
         not reachable at all.

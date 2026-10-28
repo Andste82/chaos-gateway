@@ -176,6 +176,9 @@ func (e *Engine) Explain(ctx context.Context, q ExplainQuery) (*Explanation, err
 	switch {
 	case q.Src.IsValid():
 		sub.IP = q.Src
+	case sub.Device != "" && len(snap.Identity.Current[sub.Device]) > 0:
+		// the most current claim, not the lowest address: an address the device had before stays mapped while it carries connections
+		sub.IP = snap.Identity.Current[sub.Device][0]
 	case state != nil && len(state.Addresses) > 0:
 		sub.IP = state.Addresses[0]
 	case sub.Device != "":

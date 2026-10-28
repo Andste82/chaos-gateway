@@ -937,6 +937,7 @@ func (o *owner) observed(obs observation) {
 	changed := o.identity == nil || !sameIdentity(*o.identity, id, cfg)
 	o.identity = &id
 	o.snap.Identity, o.snap.Devices, o.snap.Leases = id, states, obs.Leases
+	o.snap.FlowsActive, o.snap.FlowsKnown = o.tracker.flowsActive, o.tracker.flowsKnown
 	o.snap.ObserveError = obs.ObserveError
 
 	// the desired state is built before the events are emitted, so device_identity_changed can name

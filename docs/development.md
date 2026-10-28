@@ -6707,24 +6707,31 @@ P31-M35a-08 (the explain card's source).
     management, network for a bridge, wireguard): one executor read `links` (`ip -j -s -s link`) in the gateway's namespace, whose `stats64` the package `internal/linux` now parses (`linux.LinkStats`; the
     API container does not necessarily share the namespace of the interfaces, so it is not `/sys/class/net`).
   - **Devices and totals.** `chaosgw_device_online`, `chaosgw_device_{upload,download}_bytes_per_second` and `chaosgw_device_flows_active` (the last three while the traffic is known, as in `DeviceView`) with
-    `device`, `name`, `network`, `origin`; `chaosgw_devices`, `chaosgw_devices_online`, `chaosgw_flows_active`, `chaosgw_overlays_active`, `chaosgw_leases`, `chaosgw_runs_active`, `chaosgw_runs_queued`.
+    `device`, `name`, `network`, `origin`; `chaosgw_devices`, `chaosgw_devices_online`, `chaosgw_flows_active` (the tracked connections that have a device as a party, each counted once: the tracker counts
+    them in `countFlows` and the snapshot carries `FlowsActive` and `FlowsKnown`, because the sum of the per-device counts counts a connection between two devices twice: P6-AUDIT-52; left out while unknown), `chaosgw_overlays_active`, `chaosgw_leases`, `chaosgw_runs_active`, `chaosgw_runs_queued`.
   - **System.** `chaosgw_health_ok` and `chaosgw_component_status{component,status}` from the same check as `GET /system/health` (`healthReport`, split out of the handler), `chaosgw_system_cpus`,
     `chaosgw_system_load{1,5,15}` and `chaosgw_system_memory_{total,available}_bytes` (from `/proc`, `Config.ProcDir` for tests), `chaosgw_disk_{free,total}_bytes{volume}` for the state volume and the capture
     volume (statfs, or the capture manager's own reading), `chaosgw_build_info`, `chaosgw_start_time_seconds`, `chaosgw_uptime_seconds`, `chaosgw_revision`, `chaosgw_apply_ok`.
   - **`chaosgw_collector_up{source}`** is 0 for a source that could not be read at this scrape (`counters`, `queues`, `interfaces`); the series that come from it are left out then and are never reported as 0,
-    so an alert on a rate does not see a drop to zero that was a failed read. The feature `metrics` is in `GET /capabilities`.
+    so an alert on a rate does not see a drop to zero that was a failed read. Each source is read within `Config.MetricsReadTimeout` (3 s; `Server.bounded`): a read that hangs (a long `nft list`, a `tc` read
+    while an apply holds the host) leaves its source out like one that fails, so the scrape still answers within about 9 s at worst, below Prometheus' default `scrape_timeout`, with `build_info`, the
+    devices and `collector_up` in it (P6-AUDIT-51). The feature `metrics` is in `GET /capabilities`.
 - **Flows.** `GET /flows` lists the connections of the test networks (M6a). Since M26 a connection that came in through a port forward (M35a) is listed as well, as a flow of the forward's target device with
   `forwarded: true`: its `src` is the peer behind the entry side, its `dst` the entry side's address and its `dport` the external port, which is what `GET /explain` needs to explain it
-  (`engine.Flows` takes the reply's source as the target, as the rate computation does). A connection to the gateway's own ports that no forward translated is still no flow.
+  (`engine.Flows` takes the reply's source as the target, as the rate computation does). A connection to the gateway's own ports that no forward translated is still no flow. A listing is paged by cursor and
+  a client that wants all of it asks for every page: the first page (no cursor) reads the conntrack table, the pages that carry a cursor take that read for up to 5 s (`flowReadCache`), so a listing of ten
+  pages is one read and a connection cannot appear or vanish between two of its pages (P6-AUDIT-55).
 - **The Flows screen** (`views/FlowsView.vue`, `components/flows/ConnectionTable.vue`, `lib/flows.ts`). The table is read every 3 s (`useFlows`; Pause holds what is shown) and sorted newest first by the start
   conntrack noted. The device and the network filter on the gateway's side, the text (addresses, host name, ports, service), the protocol and "only forwarded connections" here; all five are in the address, so
   the link *All flows* of the device detail lands on the device's connections. A row shows the service (the well-known port's name, `MQTT/TLS`, `NTP`, else the protocol), the device (a link), the source, the
   destination (the name the DNS proxy returned for it, else the address, with the port), the state, the bytes in both directions, the age and *Explain*. Up to 200 rows are drawn, 200 more with *Show more*.
 - **The device detail.** *Path*: the device, the gateway, the uplink and one destination of the device's connections (`pathTargets`: the one that moved the most first, a forwarded connection and a protocol that
-  cannot be explained left out; a choice when there are several), and `GET /explain` for the device and that destination, address, protocol and port (key `['explain', ...]`, read every 5 s and on the events that
-  change faults or the revision). The fault that wins in each family stands as a badge on the line out of the device ("2 faults", or the single fault's summary); the line is blue when nothing acts, orange while
-  a fault does, red while the access verdict drops or rejects the connection, and a sentence under it says the same in words ("No fault acts on the way: …", "A fault acts on the way from … to …", "Dropped by a
-  configured rule: … cannot reach …"). *Flows*: the eight newest connections of the device, a forwarded one marked *FORWARDED* with its peer, and the link to all of them. *Recent DNS queries*: the ten newest the
+  cannot be explained left out; a choice when there are several), and `GET /explain` for the device, the source address of the connections and that destination, address, protocol and port (key `['explain', ...]`, read every 5 s and on the events that
+  change faults or the revision; the source is sent because the device sorts its lowest address first, which after a re-address may be an old one: P6-AUDIT-58). The fault that wins in each family that acts on a
+  connection (impairment, MTU, TLS, tunnel) stands as a badge on the line out of the device ("2 faults", or the single fault's summary); a DNS or DHCP fault is listed under the line as in force for the device
+  but not on the way, because `GET /explain` resolves them for every destination (a DHCP action overlay and a DNS fault without names match all of them) and neither touches a connection to an address (P6-AUDIT-50). The line is blue when nothing acts, orange while
+  a fault does, red while the access verdict drops, rejects or resets the connection, and a sentence under it says the same in words ("No fault acts on the way: …", "A fault acts on the way from … to …", "Dropped by a
+  configured rule: … cannot reach …", "Reset by …"). On a red line the faults that win are still listed, with "These faults take effect only if a rule allows the traffic" (P6-AUDIT-53). The *To* choice shows the destination that is drawn also before anything is chosen (P6-AUDIT-54). *Flows*: the eight newest connections of the device, a forwarded one marked *FORWARDED* with its peer, and the link to all of them. *Recent DNS queries*: the ten newest the
   DNS proxy logged of the device (`GET /dns/queries?device=&limit=10`), with the type, the answer, the time it took, an answer a DNS fault changed in orange with "changed by a DNS fault", and one that is no
   answer (NXDOMAIN, SERVFAIL, a timeout) in red with its code.
 - **The explain card.** *Source*: a device, an address behind the uplink, an address behind the management network (offered only when a host interface is assigned the role management: in the two-port topology
@@ -6749,15 +6756,20 @@ Taken by best practice where the plan leaves room; none needs the maintainer.
 9. **The path view asks about an address, not a host name:** a flow has the address; a hostname fault acts on the addresses the DNS proxy resolved (the DNS-derived sets), which the explanation covers.
 10. **The badge sits on the way out of the device,** where the gateway impairs the traffic (the prototype's place), and shows the winner per family; "2 faults" when several, the list under the line.
 11. **The Flows screen is polled (3 s) like the Interception screen,** not driven by events: connections come and go without one.
+12. **The families of the path badge are chosen by the client** (P6-AUDIT-50): the API keeps resolving `dns` and `dhcp` for every destination (the spec says so), and the path view takes `impairment`, `mtu`, `tls` and `tunnel`. Marking the traffic families in the API would be the alternative; it needs a spec change for one screen.
+13. **Every source of a scrape has its own deadline** (P6-AUDIT-51), not one for the request: a source that hangs costs 3 s and the others are still read; the alternative, one budget for the scrape, lets the
+    first slow source starve the rest.
+14. **A page of the flow list after the first reuses the first page's read** (P6-AUDIT-55); the first page always reads, so a client that polls sees the table as it is. A snapshot token in the cursor would
+    make the pages exact for longer, at the price of a cursor that expires.
 
 ### Tests
 
 Level 0, run here. Go: `internal/metrics` (the format: sorting, escapes, whole numbers, what is refused), `internal/linux` (`TestParseLinkInterfaceCounters`), `internal/api/metrics_test.go`
 (the counters of a configured fault, an overlay, an access rule, the anti-lockout rule, a forward, the queues and the interfaces against the values the simulated kernel is given and against the REST API's
-views; the rise after more traffic; the device, the totals, the health, the system numbers from a fake `/proc`; the overlay kinds; the token; the sources that fail; a forwarded connection as a flow and
-its explanation), the list of operations in `misc_test.go` (`/metrics` belongs to M26 in the build), `tools/ciconfig` (the list `M26_LEVEL1` in every testbed job). Web unit tests (`make test-web`):
+views; the rise after more traffic; the device, the totals, the health, the system numbers from a fake `/proc`; the overlay kinds; the token; the sources that fail or hang, the re-apply that keeps counters and epochs, the escapes in the answer, the total of the connections between two devices, the pages of the flow list that share one read, what explain
+names for DHCP and DNS faults; a forwarded connection as a flow and its explanation), `internal/engine/explain_test.go` (explain asks as the most current address of a device), the list of operations in `misc_test.go` (`/metrics` belongs to M26 in the build), `tools/ciconfig` (the list `M26_LEVEL1` in every testbed job). Web unit tests (`make test-web`):
 `src/lib/flows.test.ts` (names, filters, the explain request and its address, the destinations of the path, the badge, the DNS rows) and the route in `router.test.ts`. Playwright against the mocked API
-(`e2e/flows.spec.ts`, 19 tests): the Flows screen (the rows, the filters and the address, Pause, the empty and the failed state), the device detail (its flows, a forwarded one included, the more-link, its DNS
+(`e2e/flows.spec.ts`, 23 tests): the Flows screen (the rows, the filters and the address, Pause, the empty and the failed state), the device detail (its flows, a forwarded one included, the more-link, its DNS
 queries with an answer a fault changed and one that failed, the empty and failed states), the path view with and without a fault on it (blue, orange with the badge, red when a rule drops, another destination,
 a fault that appears), and the explain card (an address behind the uplink and the management network, the validation, no management source in the two-port topology, a connection picked in the flow view
 explained at once, for a device and for a forwarded one).

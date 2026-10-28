@@ -352,7 +352,7 @@ test('the path view draws the device, the gateway, the uplink and the destinatio
   await expect(page.getByTestId('path-fault')).toHaveCount(0);
   // the question asked of the gateway is the path's: the device, the destination, the protocol and the port
   const asked = gw.requestsTo('GET', '/explain');
-  expect(asked[0]!.query).toEqual({ device: ESP, dst: '203.0.113.10', protocol: 'tcp', port: '8883' });
+  expect(asked[0]!.query).toEqual({ device: ESP, src: '10.10.0.42', dst: '203.0.113.10', protocol: 'tcp', port: '8883' });
 });
 
 test('the path view carries the fault badge of the faults that win for the path', async ({ page }) => {
@@ -361,7 +361,7 @@ test('the path view carries the fault badge of the faults that win for the path'
     ...plain,
     faults: [
       { family: 'impairment', winner: { family: 'impairment', layer: 'overlay', id: 'f0000000-0000-4000-8000-000000000001', level: 2, summary: 'upload 200 ms ± 50 ms, download 200 ms ± 50 ms' } },
-      { family: 'dns', winner: { family: 'dns', layer: 'overlay', id: DNS_FAULT, name: 'slow-dns' } },
+      { family: 'mtu', winner: { family: 'mtu', layer: 'overlay', id: 'f0000000-0000-4000-8000-000000000002', summary: 'mtu 1280' } },
     ],
   });
   await gw.install(page);
@@ -373,8 +373,45 @@ test('the path view carries the fault badge of the faults that win for the path'
   await expect(faults).toHaveCount(2);
   await expect(faults.nth(0)).toContainText('Impairment');
   await expect(faults.nth(0)).toContainText('upload 200 ms ± 50 ms, download 200 ms ± 50 ms');
-  await expect(faults.nth(1)).toContainText('DNS');
-  await expect(faults.nth(1)).toContainText('slow-dns');
+  await expect(faults.nth(1)).toContainText('MTU');
+  await expect(faults.nth(1)).toContainText('mtu 1280');
+});
+
+test('a DNS or DHCP fault is listed apart and does not turn the path orange (P6-AUDIT-50)', async ({ page }) => {
+  const gw = lab();
+  gw.explainWith = () => ({
+    ...plain,
+    faults: [
+      { family: 'dns', winner: { family: 'dns', layer: 'overlay', id: DNS_FAULT, name: 'slow-dns' } },
+      { family: 'dhcp', winner: { family: 'dhcp', layer: 'overlay', id: 'f0000000-0000-4000-8000-000000000003', summary: 'dhcp short_lease 30s' } },
+    ],
+  });
+  await gw.install(page);
+  await page.goto(`/devices/${ESP}`);
+  await expect(page.getByTestId('path-line')).toHaveAttribute('data-tone', 'normal');
+  await expect(page.getByTestId('path-badge')).toHaveCount(0);
+  await expect(page.getByTestId('path-sentence')).toContainText('No fault acts on the way');
+  await expect(page.getByTestId('path-fault')).toHaveCount(0);
+  const other = page.getByTestId('path-other');
+  await expect(other).toHaveCount(2);
+  await expect(other.nth(0)).toContainText('slow-dns');
+  await expect(other.nth(1)).toContainText('dhcp short_lease 30s');
+});
+
+test('a blocked path says that the faults on it take effect only if a rule allows the traffic, and a reset is not a drop (P6-AUDIT-53)', async ({ page }) => {
+  const gw = lab();
+  gw.explainWith = () => ({
+    ...plain,
+    access: { verdict: 'reset', layer: 'config_rule', rule: 'a0000000-0000-4000-8000-000000000001' },
+    faults: [{ family: 'impairment', winner: { family: 'impairment', layer: 'overlay', id: 'f0000000-0000-4000-8000-000000000001', summary: 'latency 200 ms' } }],
+  });
+  await gw.install(page);
+  await page.goto(`/devices/${ESP}`);
+  await expect(page.getByTestId('path-line')).toHaveAttribute('data-tone', 'block');
+  await expect(page.getByTestId('path-badge')).toHaveText('Reset by a configured rule');
+  await expect(page.getByTestId('path-sentence')).toContainText('Reset by a configured rule: ESP32-42 cannot reach');
+  await expect(page.getByTestId('path-faults-note')).toHaveText('These faults take effect only if a rule allows the traffic.');
+  await expect(page.getByTestId('path-fault')).toHaveCount(1);
 });
 
 test('the badge of the path names a single fault, and an access rule that stops the path turns it red', async ({ page }) => {
@@ -387,6 +424,8 @@ test('the badge of the path names a single fault, and an access rule that stops 
   await page.goto(`/devices/${ESP}`);
   await expect(page.getByTestId('path-badge')).toHaveText('download rate 64kbit');
   await expect(page.getByTestId('path-sentence')).toContainText('A fault acts on the way');
+  // the choice shows the destination that is drawn before anything is chosen (P6-AUDIT-54)
+  await expect(page.getByTestId('path-target').locator('option:checked')).toHaveText('MQTT/TLS broker.example.com:8883');
   // another destination of the device's connections is another question
   await page.getByTestId('path-target').selectOption({ label: 'HTTPS 192.0.2.5:443' });
   await expect(page.getByTestId('path-line')).toHaveAttribute('data-tone', 'block');
@@ -394,11 +433,11 @@ test('the badge of the path names a single fault, and an access rule that stops 
   await expect(page.getByTestId('path-sentence')).toHaveText('Dropped by a configured rule: ESP32-42 cannot reach HTTPS 192.0.2.5:443.');
   await expect(page.getByTestId('path-destination')).toHaveText('HTTPS 192.0.2.5:443');
   const last = gw.requestsTo('GET', '/explain').at(-1)!;
-  expect(last.query).toEqual({ device: ESP, dst: '192.0.2.5', protocol: 'tcp', port: '443' });
+  expect(last.query).toEqual({ device: ESP, src: '10.10.0.42', dst: '192.0.2.5', protocol: 'tcp', port: '443' });
   // a datagram flow is asked for with its protocol and port
   await page.getByTestId('path-target').selectOption({ label: 'NTP 192.0.2.123:123' });
   await expect(page.getByTestId('path-line')).toHaveAttribute('data-tone', 'fault');
-  expect(gw.requestsTo('GET', '/explain').at(-1)!.query).toEqual({ device: ESP, dst: '192.0.2.123', protocol: 'udp', port: '123' });
+  expect(gw.requestsTo('GET', '/explain').at(-1)!.query).toEqual({ device: ESP, src: '10.10.0.42', dst: '192.0.2.123', protocol: 'udp', port: '123' });
 });
 
 test('the path view follows a fault that is applied or expires, and does not offer a forwarded connection as a destination', async ({ page }) => {

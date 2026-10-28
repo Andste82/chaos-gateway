@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/netip"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -325,6 +327,41 @@ func trafficOf(t engine.Traffic) *traffic {
 	return &traffic{Bytes: t.Bytes, Packets: t.Packets}
 }
 
+// flowPageTTL is how long the pages after the first of a GET /flows listing may use the read that made the first page.
+const flowPageTTL = 5 * time.Second
+
+// flowReadCache holds the last conntrack read of GET /flows. A listing is paged by cursor and a client that wants all of it asks
+// for every page in turn (the web app does, every few seconds, for each open screen): the first page reads the conntrack table,
+// the pages after it, which carry a cursor, take that read for a few seconds, so that the whole listing is one read and a
+// connection cannot show up or vanish between two of its pages. A request without a cursor always reads.
+type flowReadCache struct {
+	mu    sync.Mutex
+	at    time.Time
+	flows []engine.Flow
+}
+
+func (fc *flowReadCache) get(ctx context.Context, now time.Time, continued bool, read func(context.Context) ([]engine.Flow, error)) ([]engine.Flow, error) {
+	if continued {
+		fc.mu.Lock()
+		flows, at := fc.flows, fc.at
+		fc.mu.Unlock()
+		if flows != nil && now.Sub(at) >= 0 && now.Sub(at) < flowPageTTL {
+			return flows, nil
+		}
+	}
+	flows, err := read(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if flows == nil {
+		flows = []engine.Flow{}
+	}
+	fc.mu.Lock()
+	fc.at, fc.flows = now, flows
+	fc.mu.Unlock()
+	return flows, nil
+}
+
 // ListFlows implements GET /flows: the tracked connections of the test networks, with their devices.
 func (s *Server) ListFlows(c *gin.Context, params model.ListFlowsParams) {
 	_, cfg, ok := s.configAt(c, nil)
@@ -348,7 +385,7 @@ func (s *Server) ListFlows(c *gin.Context, params model.ListFlowsParams) {
 		}
 		wantNet = id
 	}
-	flows, err := s.cfg.Engine.Flows(contextOf(c))
+	flows, err := s.flowRead.get(contextOf(c), s.clk.Now(), params.Cursor != nil && *params.Cursor != "", s.cfg.Engine.Flows)
 	if err != nil {
 		s.write(c, newProblem(model.ErrorCodeUnavailable, "cannot read the connections: %v", firstLine(err.Error())))
 		return

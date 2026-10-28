@@ -104,6 +104,10 @@ type Snapshot struct {
 	Routing map[string]bird.ProtocolStatus
 	// Devices are the configured and the discovered devices with their addresses and state (plan §2.3).
 	Devices []DeviceState
+	// FlowsActive is the number of tracked connections that have a device as a party, as of the last conntrack read, each
+	// counted once (the devices' own counts add a connection between two of them twice); FlowsKnown is false while it is unknown.
+	FlowsActive int
+	FlowsKnown  bool
 	// Identity is which addresses belong to which device now.
 	Identity domain.Identity
 	// Leases are the DHCP leases of the last observation.

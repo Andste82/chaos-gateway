@@ -4324,7 +4324,11 @@ type Explanation struct {
 	// the black hole of an MTU fault (`mode: blackhole`) drops its too-long packets before the access
 	// rules run, so a too-long packet that a `reject` or `reset` rule would refuse is dropped silently
 	// and counted by the MTU fault, not by the rule (a `drop` rule drops it either way). Decided by the
-	// maintainer on 2026-10-11.
+	// maintainer on 2026-10-11. The families `dns` and `dhcp` are resolved for every destination: a DHCP
+	// action overlay whose scope covers the device and a DNS fault without names are winners for any
+	// address asked, although they act on the device's name resolution and lease, not on a connection to
+	// that address; a client that draws what acts on a connection takes `impairment`, `mtu`, `tls` and
+	// `tunnel`.
 	Faults []struct {
 		Family     FaultFamily `json:"family"`
 		Overridden *[]FaultRef `json:"overridden,omitempty"`

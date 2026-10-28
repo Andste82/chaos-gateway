@@ -1,6 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Configuration, Probe, RevisionWithConfiguration } from '../api/generated/model';
+import { deviceReferences } from '../lib/devices';
 import { useDraftStore } from './draft';
 
 // The probes in the configuration draft (M26a): their changes in words, their merge patch, the gateway's messages about them,
@@ -126,6 +127,28 @@ describe('removing a probe together with the objects that name it (M26a)', () =>
       groups: { [GROUP]: { members: ['a1b2c3d4-0000-4000-8000-000000000042'] } },
     });
     expect(d.summary()).toBe('5 changes in 1 rule, 1 fault, 1 group, 1 port forward and 1 probe');
+  });
+
+  it('a scenario that targets the probe, or a step of it, blocks the removal and is not changed by it', () => {
+    const SCN = '5c000000-0000-4000-8000-000000000001';
+    const STEPS = '5c000000-0000-4000-8000-000000000002';
+    const d = useDraftStore();
+    d.track(
+      revision(42, {
+        ...config(),
+        scenarios: {
+          [SCN]: { name: 'probe-outage', target: { device: A }, steps: [{ id: 'cut', at: '0s', fault: { latency: '100ms' } }] },
+          [STEPS]: { name: 'probe-step', target: { network: IOT }, steps: [{ id: 'cut', at: '0s', target: { device: 'probe-a' }, fault: { latency: '100ms' } }] },
+        },
+      }),
+    );
+    // the dialog asks for the references with the scenarios of the draft; the ones that block keep the removal waiting
+    const refs = deviceReferences({ id: A, name: 'probe-a' }, { scenarios: d.effectiveScenarios });
+    expect(refs.map((r) => `${r.kind} ${r.name} ${r.effect}`)).toEqual(['scenario probe-outage blocks', 'scenario probe-step blocks']);
+    expect(refs.map((r) => r.to)).toEqual([`/scenarios/${SCN}`, `/scenarios/${STEPS}`]);
+    // a scenario is a file of its own: the store neither deletes nor changes it
+    d.removeProbe({ id: A, name: 'probe-a' });
+    expect(d.patch()).toEqual({ probes: { [A]: null } });
   });
 
   it('Undo brings back the probe and everything that went with it, and the draft is clean', () => {

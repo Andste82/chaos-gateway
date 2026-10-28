@@ -4,6 +4,7 @@ package api_test
 
 import (
 	"fmt"
+	"math"
 	"os/exec"
 	"strings"
 	"testing"
@@ -240,11 +241,16 @@ func TestTheMeasurementOfAProfileMatchesItsParametersOnTheRealKernel(t *testing.
 			}
 			res = nil
 			l := sub(r, "measured")["loss_percent"].(float64) / 100
+			// the interval is the normal approximation of the binomial one (3.29 deviations are 99.9 %), computed here and
+			// not taken from the verdict of the code under test
+			n := sub(r, "samples")["sent"].(float64)
+			dev := 3.29 * math.Sqrt(n*0.145*(1-0.145)) / n
+			lo, hi := 0.145-dev, 0.145+dev
 			var err error
-			if !checksOf(r)["loss"]["ok"].(bool) {
-				err = fmt.Errorf("the loss %.2f %% is outside the 99.9 %% interval of 14.5 %%: %v", l*100, r["detail"])
+			if !checksOf(r)["loss"]["ok"].(bool) || l < lo || l > hi {
+				err = fmt.Errorf("the loss %.2f %% is outside the 99.9 %% interval of 14.5 %% (%.2f to %.2f %%): %v", l*100, lo*100, hi*100, r["detail"])
 			}
-			return testbed.Measure(t, "calibrate loss").Record("", testbed.Measurement{Quantity: "round trip loss", Unit: "fraction", N: int(sub(r, "samples")["sent"].(float64)), Configured: 0.145, Value: l}, err)
+			return testbed.Measure(t, "calibrate loss").Record("", testbed.Measurement{Quantity: "round trip loss", Unit: "fraction", N: int(n), Configured: 0.145, Value: l, Low: &lo, High: &hi}, err)
 		})
 	}
 
@@ -265,7 +271,7 @@ func TestTheMeasurementOfAProfileMatchesItsParametersOnTheRealKernel(t *testing.
 			v := sub(r, "measured")["rate_bps"].(float64)
 			lo, hi := 1_800_000.0, 2_200_000.0
 			var err error
-			if !checksOf(r)["rate"]["ok"].(bool) {
+			if !checksOf(r)["rate"]["ok"].(bool) || v < lo || v > hi {
 				err = fmt.Errorf("the throughput %.0f bit/s is outside 1.8 to 2.2 Mbit/s: %v", v, r["detail"])
 			}
 			return testbed.Measure(t, "calibrate rate").Record("", testbed.Measurement{Quantity: "rate", Unit: "bit/s", N: 1, Configured: 2_000_000, Value: v, Low: &lo, High: &hi}, err)

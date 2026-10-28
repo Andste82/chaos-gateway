@@ -10,10 +10,13 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/apply"
+	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/executor"
+	"github.com/Andste82/chaos-gateway/internal/kea"
 	"github.com/Andste82/chaos-gateway/internal/linux"
 )
 
@@ -369,6 +372,78 @@ func TestMetricsCountOverlaysByKind(t *testing.T) {
 	}
 	if m.val("chaosgw_overlays_active") != 2 {
 		t.Error("two overlays")
+	}
+}
+
+// The series an operator alerts on: the leases, the runs that are running and those that wait, and the clock of the process
+// (P6-AUDIT-28). The values are the ones the test put in, not the ones another view reports.
+func TestMetricsReportTheLeasesTheRunsAndTheClockOfTheProcess(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC))
+	started := clk.Now().Add(-90 * time.Second)
+	g := metricsGateway(t, func(o *options) { o.apiClock, o.started = clk, started })
+	m := g.scrape()
+	for name, want := range map[string]float64{
+		"chaosgw_start_time_seconds": float64(started.Unix()),
+		"chaosgw_uptime_seconds":     90,
+		"chaosgw_leases":             0,
+		"chaosgw_runs_active":        0,
+		"chaosgw_runs_queued":        0,
+	} {
+		if got := m.val(name); got != want {
+			t.Errorf("%s is %v, want %v", name, got, want)
+		}
+	}
+	if m.types["chaosgw_start_time_seconds"] != "gauge" || m.types["chaosgw_leases"] != "gauge" || m.types["chaosgw_runs_active"] != "gauge" {
+		t.Errorf("types %v", m.types)
+	}
+
+	// the uptime follows the clock of the server
+	clk.Advance(30 * time.Second)
+	if got := g.scrape().val("chaosgw_uptime_seconds"); got != 120 {
+		t.Errorf("uptime after 30 s more: %v", got)
+	}
+
+	// two leases of the last observation
+	sid := 0
+	for id := range g.e.Snapshot().KeaNetworks {
+		sid = id
+	}
+	if sid == 0 {
+		t.Fatal("no Kea subnet")
+	}
+	g.dhcp.set(
+		kea.Lease{IP: "10.10.0.151", MAC: "02:00:00:00:00:aa", SubnetID: sid, ValidLft: 600, CLTT: time.Now().Unix()},
+		kea.Lease{IP: "10.10.0.150", MAC: "02:00:00:00:00:31", SubnetID: sid, ValidLft: 600, CLTT: time.Now().Unix(), Hostname: "esp32-42"},
+	)
+	g.observe()
+	if got := g.scrape().val("chaosgw_leases"); got != 2 {
+		t.Errorf("leases %v", got)
+	}
+
+	// one run holds the target, a second one waits for it
+	hold := func(name string) string {
+		r := g.postRun(inlineRun(name, iotTarget, step("a", "0s", "fault", map[string]any{"latency": "10ms"}), step("b", "1h", "restore", true)), "")
+		if r.Status != 201 {
+			t.Fatalf("%d %s", r.Status, r.Body)
+		}
+		return r.json(t)["id"].(string)
+	}
+	first := hold("first")
+	g.waitStep(first, "a", "applied")
+	second := hold("second")
+	m = g.scrape()
+	if m.val("chaosgw_runs_active") != 1 || m.val("chaosgw_runs_queued") != 1 {
+		t.Errorf("runs: %v active, %v queued", m.val("chaosgw_runs_active"), m.val("chaosgw_runs_queued"))
+	}
+	// aborting the first starts the second; aborting that leaves none
+	g.do("POST", "/runs/"+first+"/abort", nil, nil, nil)
+	g.waitStep(second, "a", "applied")
+	if m = g.scrape(); m.val("chaosgw_runs_active") != 1 || m.val("chaosgw_runs_queued") != 0 {
+		t.Errorf("runs after the first ended: %v active, %v queued", m.val("chaosgw_runs_active"), m.val("chaosgw_runs_queued"))
+	}
+	g.do("POST", "/runs/"+second+"/abort", nil, nil, nil)
+	if m = g.scrape(); m.val("chaosgw_runs_active") != 0 || m.val("chaosgw_runs_queued") != 0 {
+		t.Errorf("runs after both ended: %v active, %v queued", m.val("chaosgw_runs_active"), m.val("chaosgw_runs_queued"))
 	}
 }
 

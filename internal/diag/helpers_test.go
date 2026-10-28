@@ -108,6 +108,37 @@ func newPKI(t *testing.T, name string) *pki {
 	return &pki{ca: ca, key: key, roots: pool}
 }
 
+// intermediate issues a CA below p that trusts the same roots as p: the certificates it signs verify only with the
+// intermediate in the chain the server presents (see chained).
+func (p *pki) intermediate(t *testing.T, name string) *pki {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialMu.Lock()
+	serial++
+	n := serial
+	serialMu.Unlock()
+	tpl := &x509.Certificate{
+		SerialNumber: big.NewInt(n), Subject: pkix.Name{CommonName: name, Organization: []string{"Chaos Gateway test"}},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, p.ca, &key.PublicKey, p.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, _ := x509.ParseCertificate(der)
+	return &pki{ca: ca, key: key, roots: p.roots}
+}
+
+// chained is the certificate with the CA of p behind it, as a server presents a chain.
+func (p *pki) chained(c tls.Certificate) tls.Certificate {
+	c.Certificate = append(append([][]byte(nil), c.Certificate...), p.ca.Raw)
+	return c
+}
+
 var serial int64 = 100
 var serialMu sync.Mutex
 

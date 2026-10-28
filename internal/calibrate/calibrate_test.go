@@ -301,3 +301,71 @@ func TestWithoutAReferenceNothingCanBeJudged(t *testing.T) {
 		t.Errorf("%+v", r)
 	}
 }
+
+// flat is n round trips of the same length, so that the median is exactly the value.
+func flat(n int, us int64) []int64 {
+	out := make([]int64, n)
+	for i := range out {
+		out[i] = us
+	}
+	return out
+}
+
+// The tolerances of plan §4.3 are pinned at their edges, so that a wider one is a failing test (P6-AUDIT-25).
+func TestTheToleranceOfTheDelayEndsWhereThePlanSaysIt(t *testing.T) {
+	exp, _ := Expect(params(func(p *model.ImpairmentParams) { p.Latency = s("50ms") })) // 100 ms added: 93 to 107 ms
+	base := flat(100, 1000)
+	for _, c := range []struct {
+		addedMs float64
+		ok      bool
+	}{{92.9, false}, {93.1, true}, {106.9, true}, {107.1, false}} {
+		us := 1000 + int64(c.addedMs*1000)
+		r := Evaluate(exp, Measurement{BaselineUs: base, Sent: 300, Received: 300, RTTUs: flat(300, us)})
+		if got := checkOf(r, "latency"); got == nil || got.Ok != c.ok || r.WithinTolerance != c.ok {
+			t.Errorf("%.1f ms added for 100 ms: ok %v, want %v: %v", c.addedMs, r.WithinTolerance, c.ok, *r.Detail)
+		}
+	}
+	// the relative part follows the delay: 400 ms added are 378 to 422 ms
+	exp, _ = Expect(params(func(p *model.ImpairmentParams) { p.Latency = s("200ms") }))
+	for _, c := range []struct {
+		addedMs float64
+		ok      bool
+	}{{377.9, false}, {378.1, true}, {421.9, true}, {422.1, false}} {
+		us := 1000 + int64(c.addedMs*1000)
+		if r := Evaluate(exp, Measurement{BaselineUs: base, Sent: 300, Received: 300, RTTUs: flat(300, us)}); r.WithinTolerance != c.ok {
+			t.Errorf("%.1f ms added for 400 ms: ok %v, want %v: %v", c.addedMs, r.WithinTolerance, c.ok, *r.Detail)
+		}
+	}
+}
+
+func TestTheToleranceOfTheRateEndsAtTenPercent(t *testing.T) {
+	exp, _ := Expect(params(func(p *model.ImpairmentParams) { p.Rate = s("2Mbit") })) // 1.8 to 2.2 Mbit/s
+	for _, c := range []struct {
+		bps int64
+		ok  bool
+	}{{1_790_000, false}, {1_810_000, true}, {2_190_000, true}, {2_210_000, false}} {
+		m := Measurement{BaselineUs: flat(100, 1000), Sent: 2000, Received: 2000, RTTUs: flat(2000, 1000), RateMeasured: true, RateBps: c.bps}
+		if r := Evaluate(exp, m); r.WithinTolerance != c.ok || checkOf(r, "rate").Ok != c.ok {
+			t.Errorf("%d bit/s for 2 Mbit/s: ok %v, want %v: %v", c.bps, r.WithinTolerance, c.ok, *r.Detail)
+		}
+	}
+}
+
+func TestTheLossIntervalEndsOneDatagramBeyondItsBounds(t *testing.T) {
+	exp, _ := Expect(params(func(p *model.ImpairmentParams) { p.Upload = &model.NetemParams{Loss: s("5%")} }))
+	// the 99.9 % interval of 2000 datagrams at 5 % is about 100 ± 3.29 · 9.75 (the counts 68 to 132): the bounds of the
+	// exact distribution are fixed here, and each count at and beside them is judged
+	lo, hi := BinomialInterval(2000, 0.05, 0.999)
+	if lo < 66 || lo > 70 || hi < 130 || hi > 134 {
+		t.Fatalf("the bounds of the interval are [%d, %d]", lo, hi)
+	}
+	for _, c := range []struct {
+		lost int
+		ok   bool
+	}{{lo - 1, false}, {lo, true}, {hi, true}, {hi + 1, false}} {
+		m := Measurement{BaselineUs: flat(100, 1000), Sent: 2000, Received: 2000 - c.lost, RTTUs: flat(2000-c.lost, 1000)}
+		if r := Evaluate(exp, m); r.WithinTolerance != c.ok || checkOf(r, "loss").Ok != c.ok {
+			t.Errorf("%d of 2000 lost for 5 %%: ok %v, want %v: %v", c.lost, r.WithinTolerance, c.ok, *r.Detail)
+		}
+	}
+}

@@ -540,11 +540,30 @@ func TestAProbeRunDoesNotWaitForTheWriter(t *testing.T) {
 	if _, err := e.Do(context.Background(), mustDecode(t, assignWan)); err != nil {
 		t.Fatal(err)
 	}
-	fr.delay = 300 * time.Millisecond
+	// The writer's tc command stays in the runner until the test lets it go, so a run that waited for the writer would
+	// never end: no bound on the time of the run has to tell the two apart.
+	inTC, gate := make(chan struct{}, 1), make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	defer release()
+	respond := fr.respond
+	fr.respond = func(c Command) (Result, error) {
+		if c.Tool == ToolTC {
+			select {
+			case inTC <- struct{}{}:
+			default:
+			}
+			<-gate
+		}
+		return respond(c)
+	}
 	slow := make(chan error, 1)
 	go func() { _, err := e.Do(context.Background(), mustDecode(t, tcWan)); slow <- err }()
-	time.Sleep(50 * time.Millisecond)
-	start := time.Now()
+	select {
+	case <-inTC:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the writer does not reach tc")
+	}
 	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -561,12 +580,25 @@ func TestAProbeRunDoesNotWaitForTheWriter(t *testing.T) {
 		}
 	}()
 	port := pc.LocalAddr().(*net.UDPAddr).Port
-	if _, err := e.Do(context.Background(), mustDecode(t, fmt.Sprintf(`{"type":"probe_run","kind":"echo","host":"127.0.0.1","port":%d,"count":5,"interval_us":1000,"settle_ms":300}`, port))); err != nil {
-		t.Fatal(err)
+	ran := make(chan error, 1)
+	go func() {
+		_, err := e.Do(context.Background(), mustDecode(t, fmt.Sprintf(`{"type":"probe_run","kind":"echo","host":"127.0.0.1","port":%d,"count":5,"interval_us":1000,"settle_ms":300}`, port)))
+		ran <- err
+	}()
+	select {
+	case err := <-ran:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the run waits for the writer")
 	}
-	if time.Since(start) > 250*time.Millisecond {
-		t.Errorf("the run waited %v for the writer", time.Since(start))
+	select {
+	case err := <-slow:
+		t.Fatalf("the writer ended before it was released: %v", err)
+	default:
 	}
+	release()
 	if err := <-slow; err != nil {
 		t.Fatal(err)
 	}

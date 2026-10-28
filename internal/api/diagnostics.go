@@ -221,7 +221,7 @@ func diagnosticDetail(req *model.DiagnosticRequest, res model.DiagnosticResult) 
 	case req.Type == model.DiagnosticRequestTypeHttp:
 		what = "http " + httpTarget(req)
 	case req.Type == model.DiagnosticRequestTypeDns && req.DnsName != nil:
-		what = "dns " + quoted(string(*req.DnsName)) + " @" + hostPort(req)
+		what = "dns " + quoted(*req.DnsName) + " @" + hostPort(req)
 	default:
 		what = string(req.Type) + " " + hostPort(req)
 	}
@@ -235,7 +235,7 @@ func diagnosticDetail(req *model.DiagnosticRequest, res model.DiagnosticResult) 
 		what += " (" + *res.Address + ")"
 	}
 	if req.From != nil && req.From.Probe != nil {
-		what += " from probe " + quoted(string(*req.From.Probe))
+		what += " from probe " + quoted(*req.From.Probe)
 	}
 	if res.Ok {
 		return what + " ok"

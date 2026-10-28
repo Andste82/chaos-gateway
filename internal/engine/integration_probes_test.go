@@ -172,7 +172,8 @@ func TestAProbeSurvivesApplysAndIsRemovedWithItsConfiguration(t *testing.T) {
 	if now := b.waitDevice(compiler.ProbeMAC(probeAID), 10*time.Second, func(d *engine.DeviceState) bool { return len(d.Addresses) > 0 }); now.Addresses[0] != d.Addresses[0] {
 		t.Errorf("the probe's address changed: %v then %v", d.Addresses, now.Addresses)
 	}
-	// the executor lost its clients (a restart of it): the next apply starts the probe's again
+	// removed with its configuration: the namespace, the pair and the client go (the restart of the executor, which leaves the
+	// namespace and no client, is TestAProbeWithoutAClientAfterAnExecutorRestartGetsOneAgain, on the simulated kernel)
 	b.apply(func(c *model.Configuration) { c.Probes = nil })
 	if ps := b.readProbes(); len(ps) != 0 {
 		t.Errorf("%+v", ps)

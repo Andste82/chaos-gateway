@@ -50,6 +50,13 @@ func addressTheProbe(t *testing.T) {
 func probeGW(t *testing.T, patch func(p map[string]any)) (*gw, *testbed.Topology) {
 	t.Helper()
 	g, top := newBedGW(t)
+	addProbe(t, g, top, patch)
+	return g, top
+}
+
+// addProbe adds the probe to the gateway, applies it and waits until it has its address and the observation shows it.
+func addProbe(t *testing.T, g *gw, top *testbed.Topology, patch func(p map[string]any)) {
+	t.Helper()
 	testbed.StartPlainEcho(t, top.Server, testbed.ServerAddr, echoPort)
 	p := map[string]any{"probes": map[string]any{probeCfgID: map[string]any{"name": "probe-a", "network": "IoT"}}}
 	if patch != nil {
@@ -86,7 +93,6 @@ func probeGW(t *testing.T, patch func(p map[string]any)) (*gw, *testbed.Topology
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	return g, top
 }
 
 // M25 test: a probe reaches the gateway address, the server and a device through the gateway, and every diagnostic runs from it.

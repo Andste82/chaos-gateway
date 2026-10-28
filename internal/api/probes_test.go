@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	mrand "math/rand/v2"
@@ -459,7 +460,7 @@ func TestAProfileIsMeasuredOnTheProbeAndTheOverlayIsRemoved(t *testing.T) {
 	items, _, _ := b.log.List(auditFilter(), "", 100)
 	found := false
 	for _, e := range items {
-		found = found || (e.Action == "probe.calibrate" && strings.Contains(e.Detail, "profile lte-ish") && strings.Contains(e.Detail, "within tolerance"))
+		found = found || (e.Action == "probe.calibrate" && strings.Contains(e.Detail, fmt.Sprintf("profile lte-ish against 127.0.0.1:%d, within tolerance", port)))
 	}
 	if !found {
 		t.Error("no probe.calibrate in the audit log")

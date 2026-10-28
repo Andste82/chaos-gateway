@@ -50,6 +50,30 @@ func findProbe(probes []model.ProbeView, ref string) (model.ProbeView, bool) {
 	return model.ProbeView{}, false
 }
 
+// dhcpOff says whether the local network (a name or an id) serves no DHCP: it has no `dhcp` block, or one that is switched off.
+// A network that cannot be read or found is not reported.
+func dhcpOff(ctx context.Context, cl *client, ref string) (name string, off bool) {
+	nets, err := listAll[struct {
+		Id     string `json:"id"`
+		Config struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+			Dhcp *struct {
+				Enabled *bool `json:"enabled"`
+			} `json:"dhcp"`
+		} `json:"config"`
+	}](ctx, cl, "/networks", nil)
+	if err != nil {
+		return "", false
+	}
+	for _, n := range nets {
+		if n.Config.Type == "lan" && (strings.EqualFold(n.Config.Name, ref) || strings.EqualFold(n.Id, ref)) {
+			return n.Config.Name, n.Config.Dhcp == nil || (n.Config.Dhcp.Enabled != nil && !*n.Config.Dhcp.Enabled)
+		}
+	}
+	return "", false
+}
+
 // applyConfig makes a revision from the merge patch against the active one and applies it (the preview of the web UI is the
 // patch itself here). A candidate that cannot be applied is discarded again, so none is left behind. force removes the overlays
 // and aborts the runs that refer to what the revision deletes.
@@ -153,7 +177,8 @@ network is a local test network, by name or UUID. --trusts-test-ca makes a diagn
 the gateway's test CA signed.
 
 The change goes into a new revision that is applied at once, as the web UI does after its preview. It needs a token with the scope
-full. The probe has no address until its DHCP client got a lease: wait for it with 'chaosctl wait device <name> --online'.`,
+full. The probe has no address until its DHCP client got a lease: wait for it with 'chaosctl wait device <name> --online'.
+A network that serves no DHCP gives the probe no address ever: add still adds it and warns on standard error.`,
 		Example: `  chaosctl probe add ci-probe --network IoT
   chaosctl probe add tls-probe --network IoT --trusts-test-ca`,
 		Args: cobra.ExactArgs(1),
@@ -173,6 +198,10 @@ full. The probe has no address until its DHCP client got a lease: wait for it wi
 			res, err := a.applyConfig(cmd.Context(), cl, map[string]any{"probes": map[string]any{id: p}}, "chaosctl: add probe "+args[0], false)
 			if err != nil {
 				return err
+			}
+			// a network that serves no DHCP gives the probe no address, and nothing else says so before a diagnostic from it fails
+			if name, off := dhcpOff(cmd.Context(), cl, network); off {
+				fmt.Fprintf(a.env.Stderr, "warning: DHCP is off in the network %s: the probe will get no address, and a diagnostic or a measurement from it will fail\n", printable(name))
 			}
 			if a.asJSON {
 				a.printJSON(map[string]any{"id": id, "name": args[0], "revision": res.Revision})

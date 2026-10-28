@@ -11,7 +11,7 @@ import type { LanNetwork } from '../../api/generated/model';
 import { useDevices, useGatewayState } from '../../composables/gateway';
 import { newId } from '../../lib/ids';
 import { emptyProbeForm, formFromProbe, probeFieldOf, probeFormErrors, probeFromForm, type ProbeField, type ProbeForm } from '../../lib/probes';
-import { subnetText } from '../../lib/networks';
+import { dhcpServed, subnetText } from '../../lib/networks';
 import { useApiPanelStore } from '../../stores/apiPanel';
 import { useDraftStore, type EditOrigin } from '../../stores/draft';
 import ModalDialog from '../ui/ModalDialog.vue';
@@ -39,8 +39,13 @@ const before = computed(() => (props.probe ? draft.effectiveProbes[props.probe] 
 const lans = computed(() =>
   Object.entries(draft.effectiveNetworks)
     .filter(([, n]) => n.type === 'lan')
-    .map(([id, n]) => ({ id, name: n.name, address: (n as LanNetwork).address })),
+    .map(([id, n]) => ({ id, name: n.name, address: (n as LanNetwork).address, dhcp: dhcpServed(n as LanNetwork) })),
 );
+/** The chosen network serves no DHCP: the probe would never get an address (the gateway says so only when a diagnostic runs from it). */
+const dhcpOff = computed(() => {
+  const lan = lans.value.find((n) => n.id === form.value.network);
+  return !!lan && !lan.dhcp;
+});
 /** The names a probe cannot take: devices, WireGuard clients and probes share one namespace. */
 const taken = computed(() => {
   const names = new Set<string>();
@@ -150,6 +155,9 @@ async function submit() {
         <p v-if="shown('network')" id="probe-network-error" class="field-error">{{ shown('network') }}</p>
         <p v-else id="probe-network-hint" class="m-0 mt-1 text-xs text-text-3">
           The probe is a port of this network's bridge and gets its address from the network's DHCP, so the network needs DHCP.
+        </p>
+        <p v-if="dhcpOff" class="m-0 mt-1 text-xs text-fault-text" data-testid="probe-dhcp-off">
+          DHCP is off in this network: the probe would get no address, and a diagnostic or a measurement from it would fail. Switch DHCP on in the network first.
         </p>
       </div>
       <div>

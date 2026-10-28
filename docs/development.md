@@ -6522,6 +6522,8 @@ Taken by best practice where the plan leaves room; none needed the maintainer (d
 6. **`from.probe` was `unsupported_feature` until M25** (superseded: M25 implements it, see "Probes and calibration (M25)"); M24 left the field in the schema without claiming it in the capabilities.
 7. **Every run is audited.** A diagnostic opens connections from the gateway to any address its caller names, so a run shows up in the audit log with its target; the scope
    `overlays` that the spec gives it is for automation tokens as well. Whether that scope may reach every destination (the loopback, the management network, the Docker networks) was the question P6-M24-01, decided on 2026-10-28 (option (a): it may, and the audit entry is the compensating control).
+   The entry names what was contacted, not what the request says in the fields the type ignores: for `http` the URL without its query, for `dns` the name and the server, for `tls` and `path` the SNI, and the probe when the run came from one
+   (P6-AUDIT-14, -60); the audit entry of a calibration names the echo server `host:port` the same way. The spec says all this (P6-AUDIT-61).
 8. **The sysctl is written by the host setup** and not set by the container: the API shares the host's network namespace, where a container cannot set a sysctl. The value
    is the Docker and Ubuntu default (every group), not a narrower one, because the API's group is a numeric one that the host setup does not know.
 
@@ -6540,6 +6542,8 @@ Level 1, **not run here** (no `/dev/kvm`, no namespaces in this container; CI ru
 responder's expired and mismatched certificates and one signed by the test CA — against which every type runs from the gateway's namespace, with a host nobody answers for, a closed port, a name
 that does not exist, a 503 and the path of the plan's example) and `TestDiagnosticsFromTheGatewayDoNotPassThroughTheFaultsOfDevices` (a fault that drops everything of the test network stops a device's
 ping and does not touch the gateway's).
+`TestNamesAreResolvedThroughTheDNSProxyOfTheServiceNamespace` (P6-AUDIT-62) runs with the default `DiagnosticsConfig`, the real proxy in the service namespace and a probe: `dns` and `path` by name from the gateway (the server
+is the peer address of `svc0`, and `GET /dns/queries` shows the client `169.254.100.1`) and from the probe (the bridge address, redirected to the same proxy like a device's query). Not run here.
 
 ### Acceptance map (plan M24 "Scope" and "Tests")
 
@@ -6586,12 +6590,15 @@ runs from it, and the self-test "measure this profile" compares what it measures
   `eth0` inside the namespace (`ListenDHCP`, `SO_BINDTODEVICE`, `SO_BROADCAST`), made on a thread that entered the namespace. The executor runs one client per probe in its own process
   (`probeClients`) and configures the interface with the lease: `ip addr replace` (the old address is deleted), the default route via the lease's router. A client that is gone (the executor
   restarted) is started again by the next apply (the read `probes` says `dhcp: false`), and the engine asks for that apply itself: an observation that finds a configured probe without a client
-  resyncs, at most every 30 s (P6-AUDIT-12). A client is bound to what it was started for, the bridge, the MAC and the namespace (its inode): an `ensure` for another one (a probe edited into another
+  resyncs, at most every 30 s (P6-AUDIT-12). An identity update (a device seen) that follows the resync at once is applied as element updates only when nothing newer than the identity is waiting, so it cannot swallow
+  the resync: the apply loop applies a state with a newer change in full (P6-AUDIT-63; `TestAProbeWithoutAClientAfterAnExecutorRestartGetsOneAgain` failed in about one run of five before), and `TestAProbeWhoseExecutorLostItsClientGetsANewDHCPClient` covers the plan's `has no DHCP client` case. A client is bound to what it was started for, the bridge, the MAC and the namespace (its inode): an `ensure` for another one (a probe edited into another
   network, a namespace removed and made again) stops it, takes the address of the old network off the interface and starts a new one that asks from scratch (P6-AUDIT-01). The client takes only a
   reply RFC 2131 allows: an OFFER with a server identifier and an address that can be a client's (not 0.0.0.0, the broadcast, a multicast or a loopback address), an ACK from the server of the offer
   with a lease time (0xffffffff is infinite; under 4 s is refused), a subnet mask without holes (P6-AUDIT-06). It paces itself: T1 is at least 1 s and T2 at least 1 s after T1, a NAK or a reply it
   cannot use is followed by a pause that doubles from 2 s to 16 s before the next DISCOVER, and the repetitions of one renewal keep their transaction id (P6-AUDIT-07). Why not `udhcpc` as the testbed's clients do: the production image has no busybox, and a client
   in Go is a unit of logic that level 0 tests with a scripted server and a fake clock.
+  The stop cleanup of M27 (D35, `chaosgw teardown`) removes what M25 made: the namespaces `cgp-<8 hex digits>`, the gateway ends `pv<8 hex digits>` (ports of the test bridges, which stay
+  when a bridge is deleted) and the clients, which it stops first (P6-AUDIT-64). The plan's Stop line, D35 and M27's Scope and Tests say so.
 - **Observation and identity.** `ReadProbes` (a read of the executor) lists the gateway ends with their namespaces, the MAC, the addresses and the lease; the engine feeds `Observed.Probes`
   (the MAC and the IPs by probe id) to the identity resolution that M6a prepared, so the probe's address is a claim of the device (and its MAC keeps the lease from becoming a "discovered"
   device); the device state has the probe's MAC, the lease of Kea and the sources `probe`, `dhcp`. `GET /probes` is the devices of the origin `probe` joined with their configuration.
@@ -6845,6 +6852,8 @@ Taken by best practice where the plan leaves room; none needs the maintainer.
    text is not announced). A field under *Advanced* that is not valid is named below its button while the section is collapsed, and Run points to it (P6-AUDIT-46).
 12. **A list that is read again and again says when it cannot be read** (P6-AUDIT-47): the probes card shows the error beside the rows it has, the Flows screen turns *Live* into *Not updating* and keeps the
    last rows. *Show more* on the last page puts the focus on the count line (P6-AUDIT-48).
+13. **A probe in a network without DHCP is added, with a note** (P6-AUDIT-67): the dialog says under the network field that the probe would get no address, `chaosctl probe add` prints the same on standard error, and neither refuses it: the DHCP
+   of the network may be switched on in the same revision or the next one, and the gateway's validation of a probe checks only that the network is local.
 
 ### Tests
 

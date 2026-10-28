@@ -1450,7 +1450,9 @@ paths:
         The probe sends numbered UDP datagrams to an echo server (RFC 862: it returns each datagram unchanged) at `host:port` and
         times the answers; the unimpaired round trip is measured from the gateway itself to the same server, which the faults of a
         device do not touch. When the impairment has a rate limit, a TCP echo at the same port is loaded for a third of the
-        duration to measure the throughput. `host` is an IPv4 address.
+        duration to measure the throughput. `host` is an IPv4 address, and like the target of a diagnostic it may be any address
+        the gateway reaches (decision P6-M24-01); the audit entry `probe.calibrate` names the probe, what was measured and
+        the echo server `host:port`.
 
         `404 not_found` for a probe or a profile that does not exist, `422 validation_failed` for a request that cannot be
         measured (both a profile and a fault, a profile without an impairment part, a host that is no IPv4 address), `409

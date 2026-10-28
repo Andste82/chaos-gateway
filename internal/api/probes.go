@@ -360,7 +360,7 @@ func (s *Server) CalibrateProbe(c *gin.Context, probeID model.Ref) {
 		d = strings.TrimSpace(d + " " + note)
 		res.Detail = &d
 	}
-	s.record(c, "probe.calibrate", &audit.Object{Kind: "probe", ID: p.id}, 0, fmt.Sprintf("%s: %s, %s", p.name, calibrationWhat(profile, req), map[bool]string{true: "within tolerance", false: "out of tolerance"}[res.WithinTolerance]))
+	s.record(c, "probe.calibrate", &audit.Object{Kind: "probe", ID: p.id}, 0, fmt.Sprintf("%s: %s against %s:%d, %s", p.name, calibrationWhat(profile, req), host, port, map[bool]string{true: "within tolerance", false: "out of tolerance"}[res.WithinTolerance]))
 	c.JSON(200, res)
 }
 
@@ -374,9 +374,10 @@ func calibrationWhat(profile *model.Profile, req *model.CalibrationRequest) stri
 	return "current faults"
 }
 
-// recordAborted writes the audit entry of a calibration that ended without a verdict.
+// recordAborted writes the audit entry of a calibration that ended without a verdict. Like a verdict, it names the echo
+// server: the calibration aims the gateway and the probe at any address the caller names (P6-AUDIT-60).
 func (s *Server) recordAborted(c *gin.Context, p activeProbe, profile *model.Profile, req *model.CalibrationRequest, why error) {
-	s.record(c, "probe.calibrate", &audit.Object{Kind: "probe", ID: p.id}, 0, fmt.Sprintf("%s: %s, no verdict: %v", p.name, calibrationWhat(profile, req), why))
+	s.record(c, "probe.calibrate", &audit.Object{Kind: "probe", ID: p.id}, 0, fmt.Sprintf("%s: %s against %s:%d, no verdict: %v", p.name, calibrationWhat(profile, req), req.Host, domain.CalibrationPort(req), why))
 }
 
 // completed says whether an echo run is whole: a run that the caller's cancellation or a failing socket cut short (the

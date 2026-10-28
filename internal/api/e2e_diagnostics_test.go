@@ -277,3 +277,49 @@ func TestDiagnosticsFromTheGatewayDoNotPassThroughTheFaultsOfDevices(t *testing.
 		t.Errorf("tcp from the gateway: %v", d)
 	}
 }
+
+// A name is resolved the way it is in production (P6-AUDIT-62): the gateway's diagnostic asks the DNS proxy in the service
+// namespace at the peer address of svc0 (no stand-in server), and a probe asks the address of its network's gateway, which the
+// gateway redirects to the same proxy like the query of a device. The proxy sees the gateway as the client 169.254.100.1
+// and the probe by its address, and its upstream is the resolver of the server namespace.
+func TestNamesAreResolvedThroughTheDNSProxyOfTheServiceNamespace(t *testing.T) {
+	b := newFaultBed(t)
+	g, top := b.g, b.top
+	addProbe(t, g, top, nil)
+	g.mintToken("overlays")
+	srv := testbed.ServerAddr
+
+	r := g.diagnoseOK(map[string]any{"type": "dns", "host": brokerHost})
+	if d := sub(r, "dns"); r["ok"] != true || fmt.Sprint(d["answers"]) != "["+srv+"]" || d["server"] != "169.254.100.2:53" {
+		t.Errorf("dns by the gateway: %v", r)
+	}
+	r = g.diagnoseOK(map[string]any{"type": "path", "host": brokerHost, "port": echoPort, "tls": false})
+	if r["ok"] != true || r["address"] != srv {
+		t.Errorf("path by the gateway: %v", r)
+	}
+	r = g.diagnoseOK(map[string]any{"type": "dns", "host": "nothing.test"})
+	if r["ok"] != false || sub(r, "dns")["rcode"] != "NXDOMAIN" {
+		t.Errorf("a name the upstream does not know: %v", r)
+	}
+
+	from := map[string]any{"probe": "probe-a"}
+	r = g.diagnoseOK(map[string]any{"type": "dns", "host": otherHost, "from": from})
+	if d := sub(r, "dns"); r["ok"] != true || fmt.Sprint(d["answers"]) != "["+testbed.ServerAddr2+"]" || d["server"] != "10.10.0.1:53" {
+		t.Errorf("dns by the probe: %v", r)
+	}
+	r = g.diagnoseOK(map[string]any{"type": "path", "host": brokerHost, "port": echoPort, "tls": false, "from": from})
+	if r["ok"] != true || r["address"] != srv {
+		t.Errorf("path by the probe: %v", r)
+	}
+
+	// the log of the proxy tells who asked
+	waitFor(t, 20*time.Second, "the queries of the gateway and of the probe in the log", func() bool {
+		clients := map[string]bool{}
+		for _, name := range []string{brokerHost, otherHost} {
+			for _, it := range g.do("GET", "/dns/queries?name="+name, nil, nil, nil).json(t)["items"].([]any) {
+				clients[it.(map[string]any)["client"].(string)] = true
+			}
+		}
+		return clients["169.254.100.1"] && clients["10.10.0.150"]
+	})
+}

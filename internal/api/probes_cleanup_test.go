@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -222,6 +223,10 @@ func TestAnEchoRunThatTheSocketCutShortIsNoVerdict(t *testing.T) {
 	verdicts, ended := b.calibrationEntries()
 	if len(verdicts) != 0 || len(ended) != 1 || !strings.Contains(ended[0], "cut short") {
 		t.Errorf("%v %v", verdicts, ended)
+	}
+	// the entry names the echo server the gateway and the probe were aimed at (P6-AUDIT-60)
+	if len(ended) == 1 && !strings.Contains(ended[0], fmt.Sprintf("against 127.0.0.1:%d, no verdict", port)) {
+		t.Errorf("the entry does not name the echo server: %s", ended[0])
 	}
 }
 

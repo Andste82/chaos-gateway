@@ -1,17 +1,17 @@
-# Container hardening profile of the executor (plan §2.16, §3.8). The compose file of M-final
-# (the full set of containers) includes this service unchanged; internal/executor/hardening_test.go
-# pins the settings that matter.
+# Container hardening profile of the executor (plan §2.16, §3.8). compose.yaml (the full set of containers, made from the files of
+# this directory by tools/composegen) holds this service unchanged; internal/executor/hardening_test.go pins the settings that matter.
 #
 # The executor is the only privileged container: it writes nftables, tc, routes and sysctls on the
 # host's network stack, and per-interface sysctls of new bridges need a writable /proc/sys, which
 # only a privileged container has (spike S7). Everything else about it is closed down:
-#   - read-only root file system; the only writable places are the three volumes and a tmpfs
+#   - read-only root file system; the only writable places are the socket and BIRD volumes, two directories of the host (the interfaces
+#     it keeps and the captures) and a tmpfs
 #   - no-new-privileges, and `chaosgw exec` sets PR_SET_NO_NEW_PRIVS itself
 #   - it runs no shell: operations are typed, commands are argument arrays with fixed binary paths
 #   - the socket is reachable only for root and the API container's user (SO_PEERCRED check)
 services:
   exec:
-    image: chaos-gateway:${CHAOSGW_VERSION:-latest}
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
     command: ["exec", "--socket", "/run/chaosgw/exec.sock", "--state", "/var/lib/chaosgw/exec/state.json", "--secrets-dir", "/var/lib/chaosgw/secrets", "--bird-dir", "/run/chaosgw-bird", "--allow-uid", "65532", "--socket-owner", "65532", "--host-root", "/host", "--captures-dir", "/var/lib/chaosgw/captures"]
     user: "0:0"
     privileged: true
@@ -32,15 +32,25 @@ services:
       # BIRD's configuration file and control socket, shared with the BIRD container (compose.bird.yaml)
       - chaosgw-bird:/run/chaosgw-bird
       # the interfaces assigned to Chaos Gateway; nothing else is stored
-      - chaosgw-exec-state:/var/lib/chaosgw/exec
+      - type: bind
+        source: /var/lib/chaosgw/exec
+        target: /var/lib/chaosgw/exec
+        bind:
+          create_host_path: false
       # the packet captures (M17): the executor holds the privilege for the raw sockets and writes the files into the
       # directories the API container makes; the API container reads, serves and deletes them
-      - chaosgw-captures:/var/lib/chaosgw/captures
+      - type: bind
+        source: /var/lib/chaosgw/captures
+        target: /var/lib/chaosgw/captures
+        bind:
+          create_host_path: false
       # the WireGuard keys: the executor only reads them (the API container writes)
-      - type: volume
-        source: chaosgw-secrets
+      - type: bind
+        source: /var/lib/chaosgw/secrets
         target: /var/lib/chaosgw/secrets
         read_only: true
+        bind:
+          create_host_path: false
       # named network namespaces are shared with the host (probes, the service namespace)
       - type: bind
         source: /run/netns
@@ -88,7 +98,4 @@ services:
 
 volumes:
   chaosgw-run:
-  chaosgw-exec-state:
-  chaosgw-secrets:
   chaosgw-bird:
-  chaosgw-captures:

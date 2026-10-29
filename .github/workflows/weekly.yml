@@ -109,3 +109,51 @@ jobs:
           fi
           echo "::warning title=Known emulated failures::$list"
           echo "known emulated failures only (docs/development.md): $list" >> "$GITHUB_STEP_SUMMARY"
+
+  # The arm64 image on an emulated ARM64 machine (M28, plan §4.4, M1-02): the functional smoke test of level 2, in a QEMU virt machine
+  # from the Ubuntu arm64 cloud image under software emulation: the host setup, Docker, the arm64 image, the executor and BIRD
+  # containers, the configuration applied and traffic through the gateway, the three-port topology on Ubuntu 24.04 (a second release and
+  # the two-port topology run on x86-64 every night). It takes hours, hence weekly. Performance and the accuracy of the faults need
+  # hardware (H1); this is the proof that the image and the deployment work on the architecture, not of its speed.
+  appliance-arm64:
+    name: appliance (level 2, arm64 emulated, Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 345
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Install QEMU and the tools of the harness
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-arm qemu-efi-aarch64 qemu-utils cloud-image-utils python3 curl iproute2 iptables
+      - name: Build the arm64 image
+        run: |
+          docker buildx build --platform linux/arm64 -f deploy/Dockerfile -t chaos-gateway:appliance \
+            --output type=docker,dest="$RUNNER_TEMP/image.tar" .
+          gzip -f "$RUNNER_TEMP/image.tar"
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/chaosgw-appliance
+          key: appliance-images-arm64-${{ github.run_id }}
+          restore-keys: appliance-images-arm64-
+      - name: Run the smoke test on the emulated ARM64 machine
+        env:
+          CHAOSGW_APPLIANCE_IMAGE_TAR: ${{ runner.temp }}/image.tar.gz
+          CHAOSGW_APPLIANCE_ARCH: arm64
+          CHAOSGW_APPLIANCE_ALLOW_TCG: '1'
+          CHAOSGW_APPLIANCE_RELEASES: '24.04'
+          CHAOSGW_APPLIANCE_TOPOLOGIES: three
+          CHAOSGW_APPLIANCE_ARTIFACTS: ${{ runner.temp }}/appliance-logs
+        run: |
+          export CHAOSGW_APPLIANCE_CACHE="$HOME/.cache/chaosgw-appliance"
+          go test -tags appliance -count=1 -timeout 320m -v -run 'TestSmokeOnCleanUbuntuHosts' ./internal/appliance
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: appliance-logs-arm64
+          path: ${{ runner.temp }}/appliance-logs
+          if-no-files-found: ignore

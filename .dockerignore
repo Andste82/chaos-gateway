@@ -1,4 +1,4 @@
-# the image build needs the Go sources, the web app's sources, the host-setup script and the interception proxy's addon
+# the image build needs the Go sources, the web app's sources, the files of the deployment (host-setup.sh, update.sh, compose.yaml, env.example) and the interception proxy's addon
 *
 !go.mod
 !go.sum
@@ -13,6 +13,9 @@ web/src/api/generated/
 web/test-results/
 web/playwright-report/
 !deploy/host-setup.sh
+!deploy/update.sh
+!deploy/compose.yaml
+!deploy/env.example
 !deploy/chaosgw-kea-hook
 !deploy/kea-start.sh
 !sidecars/tls-proxy/entry.py

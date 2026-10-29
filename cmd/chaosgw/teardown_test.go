@@ -232,6 +232,28 @@ func TestPurgeEmptiesTheVolumesThatAreMountedAndNamesTheOthers(t *testing.T) {
 	if !strings.Contains(out.String(), "Removed "+state) || !strings.Contains(out.String(), "Not mounted in this container, so not removed: "+filepath.Join(root, "api")) {
 		t.Errorf("output:\n%s", out.String())
 	}
+	// the data directories are the host's (bind mounts), which `down -v` leaves alone: the message must not send the administrator
+	// there for secrets that stay
+	if !strings.Contains(out.String(), "rm -rf on the host") || strings.Contains(out.String(), "removes the volume") {
+		t.Errorf("the message about a directory that stays points to the wrong command:\n%s", out.String())
+	}
+}
+
+func TestPurgeNamesAReadOnlyDirectoryAsOneToRemoveOnTheHost(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write a directory whose mode forbids it")
+	}
+	dir := filepath.Join(t.TempDir(), "secrets")
+	if err := os.Mkdir(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := purgeVolumes([]struct{ path, what string }{{dir, "the secrets"}}, &out, &errb); code != 1 {
+		t.Fatalf("code %d", code)
+	}
+	if !strings.Contains(errb.String(), "rm -rf on the host") || strings.Contains(errb.String(), "removes the volume") {
+		t.Errorf("message:\n%s", errb.String())
+	}
 }
 
 // orderSocket is the DHCP socket of a probe in a test: nobody answers, and closing it (the client ended) says when.
@@ -303,9 +325,9 @@ func TestTheStopCleanupStopsTheDHCPClientsOfTheProbesBeforeItRunsAnyCommand(t *t
 }
 
 // `docker compose run teardown --purge` can only remove what the container mounts: the teardown service of the shipped deployment
-// mounts every directory --purge empties, writable, from a volume that the other compose files declare (the executor's own
-// container mounts the secrets read-only and has no revisions, audit log, service token or TLS CAs).
-func TestTheTeardownServiceMountsEveryVolumePurgeEmptiesWritable(t *testing.T) {
+// mounts every directory --purge empties, writable, from the directory of the host (plan §3.6) that the containers which write
+// it mount (the executor's own container mounts the secrets read-only and has no revisions, audit log, service token or TLS CAs).
+func TestTheTeardownServiceMountsEveryDirectoryPurgeEmptiesWritable(t *testing.T) {
 	type composeFile struct {
 		Services map[string]struct {
 			Entrypoint []string    `yaml:"entrypoint"`
@@ -353,15 +375,11 @@ func TestTheTeardownServiceMountsEveryVolumePurgeEmptiesWritable(t *testing.T) {
 		}
 		return m.Source, m.Target, m.ReadOnly
 	}
-	// declared are the volumes of the other compose files, mounted holds the places they mount them at ("volume target"): the
-	// teardown service must mount a volume where the container that writes to it does, or it empties another directory
-	declared := map[string]bool{}
+	// mountedBy holds the places the other compose files mount a source at ("source target"): the teardown service must mount a
+	// directory where the container that writes to it does, or it empties another directory
 	mountedBy := map[string]bool{}
 	for _, f := range []string{"compose.executor.yaml", "compose.api.yaml", "compose.bird.yaml", "compose.kea.yaml"} {
 		other := read(f)
-		for v := range other.Volumes {
-			declared[v] = true
-		}
 		for _, svc := range other.Services {
 			for _, v := range svc.Volumes {
 				source, target, _ := mount(v)
@@ -383,14 +401,11 @@ func TestTheTeardownServiceMountsEveryVolumePurgeEmptiesWritable(t *testing.T) {
 			t.Errorf("%s (%s) is not mounted in the teardown service", d.path, d.what)
 			continue
 		}
-		if !declared[src] {
-			t.Errorf("%s: the volume %q is not declared by the other compose files of the deployment", d.path, src)
+		if !strings.HasPrefix(src, "/var/lib/chaosgw/") {
+			t.Errorf("%s: mounted from %q, which is no directory of the layout of plan §3.6", d.path, src)
 		}
 		if !mountedBy[src+" "+d.path] {
-			t.Errorf("%s: no other compose file mounts the volume %q at that path", d.path, src)
-		}
-		if _, ok := td.Volumes[src]; !ok {
-			t.Errorf("%s: the teardown file does not declare the volume %q", d.path, src)
+			t.Errorf("%s: no other compose file mounts %q at that path", d.path, src)
 		}
 	}
 	// the executor's socket and the directory shared with BIRD are the executor's places too

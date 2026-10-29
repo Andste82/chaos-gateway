@@ -454,15 +454,15 @@ func TestTLSContainerHardeningProfile(t *testing.T) {
 		}
 		mounted[m.Source+":"+m.Target] = true
 	}
-	if len(tls.Volumes) != 2 || !mounted["chaosgw-service:/var/lib/chaosgw/service"] || !mounted["chaosgw-tlsca:/var/lib/chaosgw/tlsca"] {
+	if len(tls.Volumes) != 2 || !mounted["/var/lib/chaosgw/service:/var/lib/chaosgw/service"] || !mounted["/var/lib/chaosgw/tlsca:/var/lib/chaosgw/tlsca"] {
 		t.Errorf("volumes: %v", mounted)
 	}
-	// the responder reads the directory the API writes: the same volume, at the path both flags name
+	// the responder reads the directory the API writes: the same directory of the host, at the path both flags name
 	api, err := os.ReadFile("../../deploy/compose.api.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(api), "chaosgw-tlsca:/var/lib/chaosgw/tlsca") || !strings.Contains(string(api), `"--tls-ca-dir", "/var/lib/chaosgw/tlsca"`) {
+	if !strings.Contains(string(api), "source: /var/lib/chaosgw/tlsca") || !strings.Contains(string(api), `"--tls-ca-dir", "/var/lib/chaosgw/tlsca"`) {
 		t.Error("the API does not make the CAs where the responder reads them")
 	}
 }
@@ -539,7 +539,7 @@ func TestTLSProxyContainerHardeningProfile(t *testing.T) {
 		}
 		mounted[m.Source+":"+m.Target] = true
 	}
-	if len(p.Volumes) != 2 || !mounted["chaosgw-service:/var/lib/chaosgw/service"] || !mounted["chaosgw-tlsca:/var/lib/chaosgw/tlsca"] {
+	if len(p.Volumes) != 2 || !mounted["/var/lib/chaosgw/service:/var/lib/chaosgw/service"] || !mounted["/var/lib/chaosgw/tlsca:/var/lib/chaosgw/tlsca"] {
 		t.Errorf("volumes: %v", mounted)
 	}
 	// the root file system is read-only, so what mitmproxy writes has a tmpfs, which is the configuration directory
@@ -583,7 +583,7 @@ func TestTLSProxyContainerHardeningProfile(t *testing.T) {
 
 // Issue #57: the API container runs as 65532, and a named volume that is still empty takes its owner and
 // mode from the image's directory. Every named volume the API mounts writable must therefore exist in the
-// image with that owner, or the API cannot write to it on a fresh host and does not start. The two
+// image with that owner, or the API cannot write to it on a fresh host and does not start (the host directories of M28 are made by the host setup with the same owners). The two
 // volumes another container prepares at its start are the exception: the executor's socket directory and
 // Kea's control socket directory (deploy/kea-start.sh gives it to the API's group).
 func TestTheImageGivesTheApiContainerItsWritableVolumes(t *testing.T) {
@@ -598,7 +598,7 @@ func TestTheImageGivesTheApiContainerItsWritableVolumes(t *testing.T) {
 		t.Fatal(err)
 	}
 	preparedByOthers := map[string]bool{"/run/chaosgw": true, "/run/kea": true}
-	var writable []string
+	var writable, writableBinds []string
 	for _, v := range doc.Services["api"].Volumes {
 		typ, target, readOnly := "volume", "", false
 		switch v.Kind {
@@ -625,10 +625,19 @@ func TestTheImageGivesTheApiContainerItsWritableVolumes(t *testing.T) {
 		if typ == "volume" && !readOnly && !preparedByOthers[target] {
 			writable = append(writable, target)
 		}
+		if typ == "bind" && !readOnly && strings.HasPrefix(target, "/var/lib/chaosgw/") {
+			writableBinds = append(writableBinds, target)
+		}
 	}
-	if len(writable) != 7 {
-		t.Errorf("the API's writable volumes %v: the revisions, the secrets, the audit log, the captures, the CAs of the TLS responder, the service token and the Kea events socket", writable)
+	// since M28 the persistent data is in bind mounts of directories of the host, which the host setup makes with the owner of the
+	// image's directory (tools/ciconfig keeps the two equal); what is left of the named volumes is the directory of the Kea events socket
+	if len(writable) != 1 || writable[0] != filepath.Dir(keaEventsSocket) {
+		t.Errorf("the API's writable named volumes %v: only the Kea events socket's directory", writable)
 	}
+	if len(writableBinds) != 6 {
+		t.Errorf("the API's writable host directories %v: the revisions, the secrets, the audit log, the captures, the CAs of the TLS responder and the service token", writableBinds)
+	}
+	writable = append(writable, writableBinds...)
 
 	dockerfile, err := os.ReadFile("../../deploy/Dockerfile")
 	if err != nil {

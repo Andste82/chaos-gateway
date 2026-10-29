@@ -35,16 +35,36 @@ type Release struct {
 	BaseURL string
 	// File is the name of the image in that directory.
 	File string
+	// Arch is the architecture of the image, "amd64" or "arm64" (M28, plan §4.4).
+	Arch string
 }
 
 // Releases are the releases of plan §1.5: Ubuntu 24.04 and 26.04, amd64.
 var Releases = map[string]Release{
-	"24.04": release("24.04"),
-	"26.04": release("26.04"),
+	"24.04": release("24.04", "amd64"),
+	"26.04": release("26.04", "amd64"),
 }
 
-func release(name string) Release {
-	return Release{Name: name, BaseURL: "https://cloud-images.ubuntu.com/releases/" + name + "/release/", File: "ubuntu-" + name + "-server-cloudimg-amd64.img"}
+// ReleasesARM64 are the same releases for ARM64 (plan §4.4: the arm64 image functionally in an emulated machine; the cloud images of
+// arm64 need a UEFI firmware, which QEMUArgs gives the machine).
+var ReleasesARM64 = map[string]Release{
+	"24.04": release("24.04", "arm64"),
+	"26.04": release("26.04", "arm64"),
+}
+
+// ReleasesFor returns the releases for an architecture, "amd64" (or empty) and "arm64".
+func ReleasesFor(arch string) (map[string]Release, error) {
+	switch arch {
+	case "", "amd64":
+		return Releases, nil
+	case "arm64":
+		return ReleasesARM64, nil
+	}
+	return nil, fmt.Errorf("appliance: unknown architecture %q (amd64 or arm64)", arch)
+}
+
+func release(name, arch string) Release {
+	return Release{Name: name, BaseURL: "https://cloud-images.ubuntu.com/releases/" + name + "/release/", File: "ubuntu-" + name + "-server-cloudimg-" + arch + ".img", Arch: arch}
 }
 
 // ParseSums reads a SHA256SUMS file ("<hex> *<file>" or "<hex>  <file>") into a map from file name

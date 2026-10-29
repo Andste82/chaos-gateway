@@ -23,6 +23,7 @@ const (
 	ToolBird      Tool = "bird"
 	ToolBirdc     Tool = "birdc"
 	ToolConntrack Tool = "conntrack"
+	ToolModprobe  Tool = "modprobe"
 )
 
 // Command is one invocation: a tool, an argument array (never a shell string), optional standard

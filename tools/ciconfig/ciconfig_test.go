@@ -248,3 +248,35 @@ func TestTheInterceptionProxyContainerIsStartedByASmokeJob(t *testing.T) {
 		t.Errorf("deploy/smoke-tlsproxy.sh is not executable: %v", err)
 	}
 }
+
+// The examples of the documentation run in CI (M30): a job `docs` runs `make test-docs`, which runs the Go test that runs the
+// `sh run` blocks of the documents, and the documents exist.
+func TestTheCIRunsTheExamplesOfTheDocumentation(t *testing.T) {
+	ci := read(t, ".github", "workflows", "ci.yml")
+	i := strings.Index(ci, "\n  docs:\n")
+	if i < 0 {
+		t.Fatal("ci.yml has no job `docs`")
+	}
+	job := ci[i+1:]
+	if j := strings.Index(job[1:], "\n  # "); j >= 0 {
+		job = job[:j+1]
+	}
+	if !strings.Contains(job, "make test-docs") {
+		t.Error("the job docs does not run `make test-docs`")
+	}
+	if mk := read(t, "Makefile"); !strings.Contains(mk, "test-docs:") || !strings.Contains(mk, "TestTheDocumentationExamplesRunAgainstTheGateway") {
+		t.Error("the Makefile target test-docs does not run TestTheDocumentationExamplesRunAgainstTheGateway")
+	}
+	if src := read(t, "internal", "api", "docs_test.go"); !strings.Contains(src, "func TestTheDocumentationExamplesRunAgainstTheGateway(") {
+		t.Error("internal/api/docs_test.go has no TestTheDocumentationExamplesRunAgainstTheGateway")
+	}
+	for _, doc := range []string{"user-guide.md", "api-guide.md", "cookbook.md", "troubleshooting.md", "recovery.md", "release-notes/v1.0.0.md"} {
+		if _, err := os.Stat(filepath.Join("..", "..", "docs", filepath.FromSlash(doc))); err != nil {
+			t.Errorf("docs/%s: %v", doc, err)
+		}
+	}
+	// the release workflow publishes the release notes of the tag instead of generated ones
+	if img := read(t, ".github", "workflows", "image.yml"); !strings.Contains(img, "docs/release-notes/") {
+		t.Error("image.yml does not use docs/release-notes/<tag>.md as the notes of the release")
+	}
+}

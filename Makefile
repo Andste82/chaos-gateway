@@ -96,17 +96,20 @@ lint: $(WEBDEPS) ## golangci-lint and the TypeScript type check
 test: test-web ## level 0: Go unit tests (no root) and the web unit tests
 	$(GO) test $(RACE) -count=1 -timeout 40m ./...
 
-# Fuzz targets, one `go test -fuzz` run each (Go runs one target per invocation). FUZZTIME is per
-# target: the default 100s makes the three targets of the executor decoder and connection handling
-# 5 minutes in CI; the nightly workflow uses a longer time.
-FUZZTIME ?= 100s
-FUZZ_TARGETS := FuzzDecode FuzzFrame FuzzConn
+# Fuzz targets, one `go test -fuzz` run each (Go runs one target per invocation), as package:target. The executor's interface is
+# the boundary between the unprivileged API and the privileged container (docs/development.md, "Security hardening (M29)"): the
+# decoder, the request handling, the connection with its handshake, the capture request and the capture filter. FUZZTIME is per target:
+# the default 60s makes the six targets 6 minutes in CI; the nightly workflow uses a longer time. Every target runs even when one
+# fails (a crasher in the first must not hide the others); the exit status is 1 if any failed.
+FUZZTIME ?= 60s
+FUZZ_TARGETS := ./internal/executor:FuzzDecode ./internal/executor:FuzzFrame ./internal/executor:FuzzConn ./internal/executor:FuzzCaptureOpen ./internal/executor:FuzzCaptureOpenFiles ./internal/capture:FuzzFilter
 
-fuzz: ## fuzz the executor's operation decoder and request handling (FUZZTIME per target)
-	@for t in $(FUZZ_TARGETS); do \
-	  echo "== $$t ($(FUZZTIME))"; \
-	  $(GO) test -run '^$$' -fuzz "^$$t$$" -fuzztime $(FUZZTIME) ./internal/executor || exit 1; \
-	done
+fuzz: ## fuzz the executor's interface: operation decoder, request handling, connection, capture request and filter (FUZZTIME per target)
+	@rc=0; for t in $(FUZZ_TARGETS); do \
+	  pkg=$${t%%:*}; name=$${t##*:}; \
+	  echo "== $$pkg $$name ($(FUZZTIME))"; \
+	  $(GO) test -run '^$$' -fuzz "^$$name$$" -fuzztime $(FUZZTIME) $$pkg || rc=1; \
+	done; exit $$rc
 
 test-web: $(WEBDEPS)
 	cd web && npm test

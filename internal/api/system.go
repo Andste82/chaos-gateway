@@ -276,8 +276,8 @@ func (s *Server) GetCapabilities(c *gin.Context) {
 }
 
 // Features are the feature flags of this build (plan §2.15 capabilities): what the milestones up to
-// M14, M35a (port forwarding), M15 (runs), M20 (DNS faults and hostname selectors), M21 (the TLS responder: certificate cases) M23 (DHCP test actions), M24 (diagnostics), M25 (probes) and M26 (metrics) provide.
-var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "dns.faults", "dns.hostname_selectors", "tls.responder", "tls.cases", "tls.intercept", "dhcp.actions", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards", "runs", "checks", "diagnostics", "probes", "metrics"}
+// M14, M35a (port forwarding), M15 (runs), M20 (DNS faults and hostname selectors), M21 (the TLS responder: certificate cases) M23 (DHCP test actions), M24 (diagnostics), M25 (probes), M26 (metrics) and M29 (the replaceable HTTPS certificate) provide.
+var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "dns.faults", "dns.hostname_selectors", "tls.responder", "tls.cases", "tls.intercept", "dhcp.actions", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards", "runs", "checks", "diagnostics", "probes", "metrics", "https.certificate"}
 
 // GetSystemInfo implements GET /system/info.
 func (s *Server) GetSystemInfo(c *gin.Context) {

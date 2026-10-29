@@ -37,6 +37,16 @@ var fuzzSeeds = []string{
 	`{"type":"bird","action":"apply","instance":"chaosgw","config":"router id 10.10.0.1;\nprotocol device { }\n","import_tables":[10]}`,
 	`{"type":"bird","action":"check","instance":"chaosgw","config":"include \"/etc/shadow\";"}`,
 	`{"type":"read","what":"bird","instance":"chaosgw"}`,
+	// the operations the seeds above did not start from (M29, TestEveryOperationTypeHasAFuzzSeedThatTheDecoderAccepts): the elements of
+	// the maps, the deletion of connections, the service namespace and its pair
+	`{"type":"nft_add_map_elements","namespace":"ns1","map":"ident4_ab12cd","elements":[{"key":"10.10.0.5","value":"3"},{"key":"10.10.0.31 . 203.0.113.10 . 6 . 443","value":"mark_7"},{"key":"10.0.0.5-10.0.0.9 . 198.51.100.0-198.51.100.77 . tcp . 80-443","value":"mark_0"}]}`,
+	`{"type":"nft_del_map_elements","map":"ident4","keys":["10.10.0.31","10.10.0.31 . 203.0.113.10 . 6 . 443"]}`,
+	`{"type":"nft_add_map_elements","map":"ident4; flush ruleset","elements":[{"key":"10.10.0.5","value":"3"}]}`,
+	`{"type":"conntrack_delete","namespace":"ns1","flows":[{"proto":"tcp","src":"10.10.0.31","dst":"203.0.113.10","sport":45566,"dport":8883},{"proto":"icmp","src":"10.10.0.31","dst":"203.0.113.10","icmp_type":8,"icmp_code":0,"icmp_id":4711}]}`,
+	`{"type":"conntrack_delete","flows":[{"proto":"udp","src":"0.0.0.0","dst":"203.0.113.10 -d 1.1.1.1","sport":1,"dport":2}]}`,
+	`{"type":"service_ns","action":"ensure","namespace":"gw","name":"cgsvc","host_if":"svc0","peer_if":"svc1","host_cidr":"169.254.100.1/30","peer_cidr":"169.254.100.2/30","holder_pid":4242}`,
+	`{"type":"service_ns","action":"delete","name":"cgsvc","host_if":"svc0","peer_if":"svc1","host_cidr":"169.254.100.1/30","peer_cidr":"169.254.100.2/30"}`,
+	`{"type":"service_ns","action":"ensure","name":"cgsvc","host_if":"eth0","peer_if":"svc1","host_cidr":"10.0.0.1/30","peer_cidr":"10.0.0.2/30"}`,
 	// M25: the probes and the measurements from them
 	`{"type":"probe_ns","action":"ensure","name":"cgp-3a1f7c52","host_if":"pv3a1f7c52","bridge":"br-iot","mac":"02:28:b4:ce:f6:08","hostname":"probe-a"}`,
 	`{"type":"probe_ns","action":"delete","name":"cgp-3a1f7c52","host_if":"pv3a1f7c52"}`,

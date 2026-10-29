@@ -297,6 +297,9 @@ type ServerInterface interface {
 	// GetBusy Whether runs are active or queued (for update scripts)
 	// (GET /system/busy)
 	GetBusy(c *gin.Context)
+	// ResetCertificate Go back to the gateway's own self-signed certificate
+	// (DELETE /system/certificate)
+	ResetCertificate(c *gin.Context)
 	// GetCertificate The UI/API HTTPS certificate
 	// (GET /system/certificate)
 	GetCertificate(c *gin.Context)
@@ -3317,6 +3320,19 @@ func (siw *ServerInterfaceWrapper) GetBusy(c *gin.Context) {
 	siw.Handler.GetBusy(c)
 }
 
+// ResetCertificate operation middleware
+func (siw *ServerInterfaceWrapper) ResetCertificate(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ResetCertificate(c)
+}
+
 // GetCertificate operation middleware
 func (siw *ServerInterfaceWrapper) GetCertificate(c *gin.Context) {
 
@@ -3612,6 +3628,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/tls/ca/regenerate", wrapper.RegenerateTestCa)
 	router.GET(options.BaseURL+"/dns/queries", wrapper.ListDnsQueries)
 	router.GET(options.BaseURL+"/intercept/flows", wrapper.ListInterceptFlows)
+	router.DELETE(options.BaseURL+"/system/certificate", wrapper.ResetCertificate)
 	router.GET(options.BaseURL+"/system/certificate", wrapper.GetCertificate)
 	router.PUT(options.BaseURL+"/system/certificate", wrapper.ReplaceCertificate)
 	router.POST(options.BaseURL+"/internal/dhcp/lease-events", wrapper.PostLeaseEvent)
@@ -7593,6 +7610,44 @@ func (response GetBusydefaultApplicationProblemPlusJSONResponse) VisitGetBusyRes
 	return err
 }
 
+type ResetCertificateRequestObject struct {
+}
+
+type ResetCertificateResponseObject interface {
+	VisitResetCertificateResponse(w http.ResponseWriter) error
+}
+
+type ResetCertificate200JSONResponse CertificateInfo
+
+func (response ResetCertificate200JSONResponse) VisitResetCertificateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResetCertificatedefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ResetCertificatedefaultApplicationProblemPlusJSONResponse) VisitResetCertificateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetCertificateRequestObject struct {
 }
 
@@ -8282,6 +8337,9 @@ type StrictServerInterface interface {
 	// GetBusy Whether runs are active or queued (for update scripts)
 	// (GET /system/busy)
 	GetBusy(ctx context.Context, request GetBusyRequestObject) (GetBusyResponseObject, error)
+	// ResetCertificate Go back to the gateway's own self-signed certificate
+	// (DELETE /system/certificate)
+	ResetCertificate(ctx context.Context, request ResetCertificateRequestObject) (ResetCertificateResponseObject, error)
 	// GetCertificate The UI/API HTTPS certificate
 	// (GET /system/certificate)
 	GetCertificate(ctx context.Context, request GetCertificateRequestObject) (GetCertificateResponseObject, error)
@@ -10875,6 +10933,30 @@ func (sh *strictHandler) GetBusy(ctx *gin.Context) {
 		sh.options.HandlerErrorFunc(ctx, err)
 	} else if validResponse, ok := response.(GetBusyResponseObject); ok {
 		if err := validResponse.VisitGetBusyResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResetCertificate operation middleware
+func (sh *strictHandler) ResetCertificate(ctx *gin.Context) {
+	var request ResetCertificateRequestObject
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ResetCertificate(ctx, request.(ResetCertificateRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResetCertificate")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(ResetCertificateResponseObject); ok {
+		if err := validResponse.VisitResetCertificateResponse(ctx.Writer); err != nil {
 			sh.options.ResponseErrorHandlerFunc(ctx, err)
 		}
 	} else if response != nil {

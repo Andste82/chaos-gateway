@@ -86,6 +86,9 @@ type Config struct {
 	ProcDir string
 	// MetricsReadTimeout bounds each source the metrics endpoint reads (the counters, the links, the health); zero takes 3 s.
 	MetricsReadTimeout time.Duration
+	// Certificates holds the certificates of the HTTPS listeners (M29); nil for a deployment that has none (the operations of
+	// /system/certificate answer `unavailable`).
+	Certificates *Certificates
 	// Diagnostics sets up the diagnostics of M24; the zero value is the production setup (tests name their own servers).
 	Diagnostics DiagnosticsConfig
 }

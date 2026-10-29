@@ -220,12 +220,25 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 		log.Warn("this binary has no web app (built without the tag webui) and none was given with --web-dir: only the API is served")
 	}
 
+	// the certificates of the HTTPS listeners (plan §2.16, M29): the gateway's own, which the service containers verify and
+	// which is published to them, and the one the administrator installed, which the other addresses present
+	names, ips := certNames(eng)
+	certs, err := api.OpenCertificates(filepath.Join(o.secretsDir, "tls"), names, ips, time.Now, log)
+	if err != nil {
+		return err
+	}
+	if o.serviceCert != "" {
+		if err := api.PublishCertificate(filepath.Join(o.secretsDir, "tls"), o.serviceCert); err != nil {
+			return fmt.Errorf("the service certificate: %w", err)
+		}
+	}
+
 	var report atomic.Pointer[api.PreflightReport]
 	go func() { report.Store(buildPreflight()) }()
 	srv, err := api.New(api.Config{Engine: eng, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: ex, Namespace: o.namespace, Log: log,
 		StateDir: o.dataDir, BootID: uuid.NewString(), Started: time.Now(), Version: version.Version, Commit: version.Commit, BuildDate: version.Date,
 		Preflight: report.Load, ConfirmTimeout: o.confirm, UI: ui, TrafficInterval: o.trafficInterval, TrafficPeriod: o.trafficPeriod, RunRetention: o.runRetention,
-		CapturesDir: o.capturesDir, CaptureQuota: o.captureQuota, CaptureMinFree: o.captureMinFree, TLSCADir: o.tlsCADir})
+		CapturesDir: o.capturesDir, CaptureQuota: o.captureQuota, CaptureMinFree: o.captureMinFree, TLSCADir: o.tlsCADir, Certificates: certs})
 	if err != nil {
 		return err
 	}
@@ -241,16 +254,6 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 	}
 	_, _ = lg.Append(audit.Entry{Actor: audit.Actor{Type: "system", ID: "system"}, Via: "system", Action: "service.start", Detail: version.Version})
 
-	names, ips := certNames(eng)
-	cert, err := api.LoadOrCreateCertificate(filepath.Join(o.secretsDir, "tls"), names, ips, time.Now())
-	if err != nil {
-		return err
-	}
-	if o.serviceCert != "" {
-		if err := api.PublishCertificate(filepath.Join(o.secretsDir, "tls"), o.serviceCert); err != nil {
-			return fmt.Errorf("the service certificate: %w", err)
-		}
-	}
 	if o.keaEventsSocket != "" {
 		go func() {
 			if err := srv.ListenKeaEvents(ctx, o.keaEventsSocket); err != nil {
@@ -262,7 +265,7 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 		Addrs:   func() []netip.Addr { return listenAddrs(eng.Snapshot(), au.SetupCompleted(), o.listen) },
 		Port:    func() int { return uiPort(eng, o.port, o.listen) },
 		Handler: srv.Handler(),
-		TLS:     &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
+		TLS:     certs.TLSConfig(),
 		Log:     log,
 	}
 	done := make(chan struct{})

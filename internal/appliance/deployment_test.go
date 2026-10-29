@@ -683,13 +683,13 @@ func holderPIDFileReusedByAnotherProcess(t *testing.T, ctx context.Context, vm *
 	if service == "" || strings.Contains(service, "No such") {
 		t.Fatalf("there is no service namespace to start from: %s", service)
 	}
-	pidFile := strings.Fields(must("sudo docker run --rm --entrypoint cat -v chaosgw_chaosgw-svcns:/p:ro " + tag + " /p/pid"))
+	pidFile := strings.Fields(must("sudo docker run --rm --user 0:0 --entrypoint cat -v chaosgw_chaosgw-svcns:/p:ro " + tag + " /p/pid"))
 	if len(pidFile) != 2 {
 		t.Fatalf("the PID file of the holder is %v, want \"<pid> <inode>\"", pidFile)
 	}
 	must(compose + " stop svcns")
 	// another real container process in the host's PID namespace, in a network namespace of its own
-	must("sudo docker rm -f chaosgw-pidreuse >/dev/null 2>&1; sudo docker run -d --name chaosgw-pidreuse --pid host --network none --entrypoint sleep " + tag + " infinity")
+	must("sudo docker rm -f chaosgw-pidreuse >/dev/null 2>&1; sudo docker run -d --user 0:0 --name chaosgw-pidreuse --pid host --network none --entrypoint sleep " + tag + " infinity")
 	other := strings.TrimSpace(must("sudo docker inspect -f '{{.State.Pid}}' chaosgw-pidreuse"))
 	otherInode := nsInode("/proc/" + other + "/ns/net")
 	if otherInode == pidFile[1] || otherInode == service {
@@ -711,7 +711,7 @@ func holderPIDFileReusedByAnotherProcess(t *testing.T, ctx context.Context, vm *
 	}
 	waitRunning(t, ctx, vm, compose, "dns")
 	waitFor(t, 3*time.Minute, "the service namespace to be attached to the new holder", func() bool {
-		pid := strings.Fields(output("sudo docker run --rm --entrypoint cat -v chaosgw_chaosgw-svcns:/p:ro " + tag + " /p/pid"))
+		pid := strings.Fields(output("sudo docker run --rm --user 0:0 --entrypoint cat -v chaosgw_chaosgw-svcns:/p:ro " + tag + " /p/pid"))
 		return len(pid) == 2 && nsInode("/run/netns/cgsvc") == pid[1] && strings.Contains(output("sudo ip -o link show svc0"), "svc0")
 	})
 }

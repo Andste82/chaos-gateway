@@ -192,8 +192,8 @@ made by the first apply: the `dns` container logs once that it cannot fetch its 
 still passes, only `unhealthy` fails it). After the setup both are gone; if not, look at the logs of the `api` and
 `dns` containers.
 
-Open `https://<address of the host>:8443` in a browser. The certificate is the gateway's own until one is
-installed (M29), so the browser warns once (and once more after an upgrade that issues it again, below). The setup wizard asks for the token, the uplink, the management
+Open `https://<address of the host>:8443` in a browser. The certificate is the gateway's own until you install one
+([HTTPS certificate](#https-certificate)), so the browser warns once (and once more after an upgrade that issues it again, below). The setup wizard asks for the token, the uplink, the management
 interface, the test interfaces and the admin password, and shows the preflight's hints (for example a netplan
 entry to remove from a test interface).
 
@@ -208,6 +208,37 @@ the `docker` group is as good as root on the host anyway). So run the setup righ
 network you trust, and keep the host's port 8443 away from untrusted networks until it is done; do not share the
 container logs before. After the setup the UI and API listen on the management network only, and the token is of
 no use any more.
+
+## HTTPS certificate
+
+The web UI and the API are served over HTTPS with a self-signed certificate that the gateway makes at its first start (valid for ten years, for
+the host name, the addresses of the host, the loopback and the link to the service containers). Replace it with one your browsers and tools trust:
+
+```sh
+chaosctl certificate show                                           # the one in use, its names, validity and SHA-256 fingerprint
+chaosctl certificate install --cert fullchain.pem --key privkey.pem  # scope full
+chaosctl certificate reset                                          # back to the gateway's own
+```
+
+`fullchain.pem` is the certificate first, then the intermediates (PEM); the key is PEM without a password (PKCS#8, PKCS#1 RSA or SEC1 EC; an RSA key needs at
+least 2048 bits). The gateway refuses a certificate that has expired or is not valid yet (any certificate of the chain, an intermediate too), that names no DNS name and no IP address, that does not allow a
+server (`serverAuth`), whose chain is not in order or whose key does not belong to it, and says which. It takes effect for the next connection, without
+a restart; connections that are open keep the old one. The key is stored in the secrets directory (`/var/lib/chaosgw/secrets/tls/ui.pem`, mode 0600) and is
+never returned. The API behind the commands is `GET`, `PUT` and `DELETE /api/v1/system/certificate` (`PUT` and `DELETE` need the scope `full` and are audit-logged as `certificate.install` and
+`certificate.reset`).
+
+The certificate must name the address or the name you reach the gateway by (the management address, or a DNS name that points at it). It does not need to name
+`127.0.0.1` or `169.254.100.1`: on those two addresses the gateway always presents its own certificate, which the DNS proxy, the TLS responder and Kea's
+hook verify (they get a copy of it, never of the key), so replacing the certificate cannot cut them off. `chaosgw api --health` (the container's health check)
+talks to the loopback and is unaffected, too.
+
+If a certificate you installed is damaged on disk (a half-written file after a power cut), the gateway starts with its own and logs why; remove the file with
+`chaosctl certificate reset`, or delete `ui.pem`.
+
+`chaosctl certificate show` and `GET /api/v1/system/certificate` describe the certificate of the management addresses. On the loopback the gateway still
+presents its own, so a `chaosctl` that runs on the host with its default URL (`https://127.0.0.1:8443`) sees the self-signed certificate even after an
+install: pin that one there (`--insecure` is fine on the loopback of the host), or give `chaosctl` the management address or name of the installed certificate
+with `--url`. The statement above that a CA you trust makes `--fingerprint`, `--ca-cert` and `--insecure` unnecessary holds for those addresses only.
 
 ## Port forwarding
 
@@ -244,8 +275,9 @@ curl -sk -b jar -H "X-CSRF-Token: $(cat csrf)" -H 'Content-Type: application/jso
      -d '{"name":"ci","scope":"overlays"}' $GW/api/v1/auth/tokens | jq -r .token > token
 ```
 
-The token is shown once; keep it in the CI system's secrets. The gateway's certificate is self-signed until M29: give the
-client its SHA-256 fingerprint (`--fingerprint`, `CHAOSGW_FINGERPRINT`), the certificate (`--ca-cert`), or `--insecure`.
+The token is shown once; keep it in the CI system's secrets. The gateway's certificate is self-signed until you install one
+([HTTPS certificate](#https-certificate)): give the client its SHA-256 fingerprint (`--fingerprint`, `CHAOSGW_FINGERPRINT`; `chaosctl certificate show`
+prints it), the certificate (`--ca-cert`), or `--insecure`. With a certificate that a CA you trust has signed, none of the three is needed.
 These three are one setting: a flag on the command line replaces the `CHAOSGW_*` variables of the same setting as a group
 (a `CHAOSGW_INSECURE=1` in the shell does not weaken a `--fingerprint`), `--insecure` together with a fingerprint or a CA file
 is refused (exit 2), and `--insecure` prints a warning.
@@ -289,7 +321,7 @@ scrape_configs:
     scheme: https
     metrics_path: /api/v1/metrics
     authorization: {credentials_file: /etc/prometheus/chaosgw-token}
-    tls_config: {insecure_skip_verify: true}   # until the gateway has a certificate of its own (M29)
+    tls_config: {insecure_skip_verify: true}   # until the gateway has a certificate of its own (see "HTTPS certificate"); then ca_file: or the default roots
     static_configs: [{targets: ['gateway.example:8443']}]
 ```
 
@@ -405,10 +437,10 @@ gateway stopped (`docker compose down`, with the old compose files), make the di
 ```sh
 sudo sh /opt/chaosgw/host-setup.sh --data-only
 for v in state secrets api service captures tlsca; do
-  docker run --rm -v "${COMPOSE_PROJECT_NAME:-chaos-gateway}_chaosgw-$v:/from:ro" -v "/var/lib/chaosgw/$v:/to" --entrypoint cp "$IMAGE" -a /from/. /to/
+  docker run --rm --user 0:0 -v "${COMPOSE_PROJECT_NAME:-chaos-gateway}_chaosgw-$v:/from:ro" -v "/var/lib/chaosgw/$v:/to" --entrypoint cp "$IMAGE" -a /from/. /to/
 done
-docker run --rm -v "${COMPOSE_PROJECT_NAME:-chaos-gateway}_chaosgw-exec-state:/from:ro" -v /var/lib/chaosgw/exec:/to --entrypoint cp "$IMAGE" -a /from/. /to/
-docker run --rm -v "${COMPOSE_PROJECT_NAME:-chaos-gateway}_chaosgw-kea-state:/from:ro" -v /var/lib/chaosgw/kea:/to --entrypoint cp "$IMAGE" -a /from/. /to/
+docker run --rm --user 0:0 -v "${COMPOSE_PROJECT_NAME:-chaos-gateway}_chaosgw-exec-state:/from:ro" -v /var/lib/chaosgw/exec:/to --entrypoint cp "$IMAGE" -a /from/. /to/
+docker run --rm --user 0:0 -v "${COMPOSE_PROJECT_NAME:-chaos-gateway}_chaosgw-kea-state:/from:ro" -v /var/lib/chaosgw/kea:/to --entrypoint cp "$IMAGE" -a /from/. /to/
 sudo sh /opt/chaosgw/host-setup.sh --data-only      # the owner and mode of the directories themselves
 cd /opt/chaosgw && docker compose up -d
 ```
@@ -420,7 +452,8 @@ Then `docker volume rm` the old volumes. (A stack started from `deploy/` without
 The gateway's own self-signed certificate is now also valid for the service address 169.254.100.1, which the DNS proxy
 verifies it for. An older one lacks that address, so the API issues the certificate again at the first start of the new
 image, and the browser warns once more. A certificate you installed yourself is not changed; it has to include
-169.254.100.1 itself (installing one comes with M29).
+169.254.100.1 itself, or you install it with `PUT /api/v1/system/certificate` (see "HTTPS certificate"), which does not have to name that address: the
+service containers keep verifying the gateway's own certificate, which is presented on that address and on the loopback.
 
 ## Stop, restart and recovery
 

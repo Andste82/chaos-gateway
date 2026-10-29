@@ -70,12 +70,23 @@ func TestTheLoginIsRateLimited(t *testing.T) {
 	g := newGW(t)
 	g.finishSetup()
 	g.token = ""
-	var last resp
+	var fifth, last resp
 	for i := 0; i < 6; i++ {
 		last = g.do("POST", "/auth/login", map[string]any{"password": "wrong password!!"}, nil, nil)
+		if i == 4 {
+			fifth = last
+		}
 	}
-	if last.Status != 429 || last.code(t) != "rate_limited" || last.Header.Get("Retry-After") == "" {
+	if last.Status != 429 || last.code(t) != "rate_limited" {
 		t.Fatalf("%d %s %v", last.Status, last.Body, last.Header)
+	}
+	// Retry-After is the wait in whole seconds, rounded up: the fifth failure starts a wait of exactly 5 seconds and answers 6, the
+	// attempt after it (a few milliseconds later) the time that is left
+	if fifth.Status != 429 || fifth.Header.Get("Retry-After") != "6" {
+		t.Errorf("the fifth failure: %d, Retry-After %q, want 429 and 6", fifth.Status, fifth.Header.Get("Retry-After"))
+	}
+	if ra := last.Header.Get("Retry-After"); ra != "5" && ra != "6" {
+		t.Errorf("Retry-After %q after the fifth failure, want 5 or 6", ra)
 	}
 	// even the right password has to wait
 	if r := g.do("POST", "/auth/login", map[string]any{"password": adminPassword}, nil, nil); r.Status != 429 {

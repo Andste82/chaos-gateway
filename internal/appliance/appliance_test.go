@@ -245,7 +245,7 @@ func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
 	if err := vm.Put(ctx, "/opt/chaosgw/gateway.yaml", 0o644, strings.NewReader(appliance.GatewayConfig(two))); err != nil {
 		t.Fatal(err)
 	}
-	out := must("sudo docker run --rm --network host -v chaosgw_chaosgw-run:/run/chaosgw -v /opt/chaosgw/gateway.yaml:/gateway.yaml:ro " + tag +
+	out := must("sudo docker run --rm --user 0:0 --network host -v chaosgw_chaosgw-run:/run/chaosgw -v /opt/chaosgw/gateway.yaml:/gateway.yaml:ro " + tag +
 		" apply --file /gateway.yaml --socket /run/chaosgw/exec.sock 2>&1")
 	t.Logf("apply: %s", strings.TrimSpace(out))
 	// the compiler leaves a forward it would refuse out with a warning, and the apply goes on: not here
@@ -319,7 +319,7 @@ func portForwards(t *testing.T, ctx context.Context, h appliance.Host, vm *appli
 	if err := vm.PutFile(ctx, vmBin, "/opt/chaosgw/echo", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := vm.Must(ctx, fmt.Sprintf("sudo docker run -d --name chaosgw-published -p %d:%d -v /opt/chaosgw/echo:/echo:ro --entrypoint /echo %s -tag published -listen :%d",
+	if out, err := vm.Must(ctx, fmt.Sprintf("sudo docker run -d --user 0:0 --name chaosgw-published -p %d:%d -v /opt/chaosgw/echo:/echo:ro --entrypoint /echo %s -tag published -listen :%d",
 		appliance.PublishedPort, appliance.ContainerPort, tag, appliance.ContainerPort)); err != nil {
 		t.Fatalf("starting the container that publishes a port: %v\n%s", err, out)
 	}

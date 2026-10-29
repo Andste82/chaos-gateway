@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
+	"net"
 	"sort"
 	"time"
 )
@@ -72,3 +74,19 @@ func TLSHandshakeOutcomes(s *Server, client string) []string {
 	}
 	return out
 }
+
+// ServedFor returns the certificate that c presents for a handshake that came in on the local address local.
+func ServedFor(c *Certificates, local net.Addr) (*tls.Certificate, error) {
+	return c.serve(&tls.ClientHelloInfo{Conn: fakeConn{local: local}})
+}
+
+// BuiltinIPs are the addresses on which the gateway presents its own certificate.
+func BuiltinIPs() []net.IP { return builtinIPs() }
+
+// fakeConn is a connection that only knows its local address.
+type fakeConn struct {
+	net.Conn
+	local net.Addr
+}
+
+func (f fakeConn) LocalAddr() net.Addr { return f.local }

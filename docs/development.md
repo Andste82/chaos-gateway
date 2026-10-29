@@ -384,9 +384,9 @@ case in `Decode`, golden tests in `plan_test.go`, rejection tests in `decode_tes
 `fuzz_test.go`. The fuzz targets check that anything the decoder accepts yields inert commands that
 stay in scope.
 
-`make fuzz` runs both fuzz targets for `FUZZTIME` each (default 2m30s, 5 minutes in CI); the
-nightly workflow runs them for an hour each. A crashing input lands in
-`internal/executor/testdata/fuzz/`; commit it as a regression test with the fix.
+`make fuzz` runs the six fuzz targets of the executor's interface for `FUZZTIME` each (default 60s, 6 minutes in CI; the list is in "Security hardening (M29)"); the
+nightly workflow runs them for 45 minutes each. A crashing input lands in
+`testdata/fuzz/` of its package (`internal/executor` or `internal/capture`); commit it as a regression test with the fix.
 
 Captures (M17) are not operations of this queue: a capture lives as long as a connection of its own, like a watch,
 and changes nothing in the network configuration (see "Packet captures (M17)").
@@ -7087,6 +7087,178 @@ Not run on the development machine (an unprivileged container without Docker, KV
 | Tests: Kea starts from compose, the API configures it, a client gets a lease, the hook posts with the real token (M6a-10) | level 2 |
 | Open items: S7 coexistence | level 2 (`netplan apply`, `systemd-networkd`, NetworkManager) |
 
+## Security hardening (M29)
+
+M29 closes the security items of the plan (§2.16, §3.8): the HTTPS certificate can be replaced, the token scopes were reviewed, secrets stay where they are made,
+login is rate limited, the containers were reviewed one by one, and the executor's interface has a threat model, six fuzz targets that run every night and a
+package for the external review. Most of it is review and proof: the code that already enforced a rule got the test that holds it to the rule (the scopes of every
+operation, the secrets in every output, the mounts of every container), and the reviews found three things that were not as the plan or the tests wanted, which are fixed: the image ran as root by default, four types of operation had no fuzz seed, and the capture request and the capture filter had no fuzz target.
+
+### How it works
+
+**HTTPS certificate.** `api.Certificates` (`internal/api/certs.go`) holds two certificates. The gateway's own (`secrets/tls/cert.pem` and `key.pem`, self-signed, made at the
+first start, issued again by `LoadOrCreateCertificate` when it lacks a built-in address) is what the service containers verify: `PublishCertificate` copies it
+(never the key) to `service/api.pem`. The installed one (`secrets/tls/ui.pem`: the chain and the key in one file, mode 0600, written to a temporary file and renamed, so a reader sees
+the old file or the new one) is what `PUT /api/v1/system/certificate` stores after `parseUpload` has checked it (PEM blocks of the right kind, chain in order, valid now, a SAN, `serverAuth`
+if the certificate names a key usage, the key belongs to the certificate, no password on the key, RSA at least 2048 bits, and a key and certificate a TLS handshake can use at all: an ECDSA key on P-224 is refused, because installed it would lock the administrator out). `TLSConfig()` returns a `tls.Config` with `GetCertificate`:
+the installed certificate for every connection except those that came in on `127.0.0.1`, `::1` or `169.254.100.1` (`internalAddr`, the same list as `builtinIPs`), which get the
+gateway's own. A replacement therefore takes effect for the next handshake without a restart, and cannot cut off the DNS proxy, the TLS responder or Kea's hook (decision 1).
+`DELETE` removes `ui.pem`. A `ui.pem` that cannot be read at the start is logged and the gateway's own certificate is presented (decision 4). `GET` reports the certificate that
+the management listeners present (`source` `own` or `installed`, the names, the validity, `fingerprint_sha256`, the chain length); the audit entries `certificate.install` and
+`certificate.reset` name the certificate by its fingerprint and subject, never the key. `chaosctl certificate show|install|reset` (`internal/ctl/certificate.go`) reads the key from a file.
+There is no screen for it in the web UI: the plan has no design for Settings yet (§2.17, "Not yet designed"), and a certificate is installed once.
+
+**Token scopes.** The spec names the least scope of every operation (`x-required-scope`) and the guard (`internal/api/middleware.go`) enforces it before any handler runs; a session has `full`.
+The review (2026-10-29) went through all 103 operations and left every scope as it was; the result is pinned by `TestTheScopesOfTheOperationsAreTheResultOfTheReview`:
+
+| Scope | Operations | Why |
+|---|---|---|
+| `read` | all `GET` except the three below, `POST …/preview`, `POST /auth/logout` | they change nothing the gateway keeps. The reads that show a device's traffic (flows, DNS queries, the exchanges of the interception proxy: method, host, path, status and sizes, never headers or bodies, the path cut at 1024 characters) are `read` on purpose: a CI job that watches a test needs them; `captures/{id}/download` is `read` as well, but `part=keylog` and a capture marked `sensitive` are `full` inside the handler |
+| `overlays` | create, renew and delete overlays, runs and scenario runs, captures, diagnostics, probe calibration, `POST /reset` (own overlays only) | what a test does to the gateway for a while, with an owner and a lease; a diagnostic may aim at every address the gateway reaches (P6-M24-01, decided 2026-10-28, option (a)) and every run is audited as `diagnostic.run`; the review keeps it: the scope is for the automation of a lab, and the destination cannot be limited by address without also following what the DNS proxy resolves |
+| `full` | revisions (create, discard, clone, apply, confirm, rollback), tokens and the password, `reset?owner=all`, the test CA regeneration, the certificate, and the secret downloads: `GET /auth/tokens`, the two WireGuard exports, `DELETE …/private-key`, `GET /revisions/{id}/export?include_secrets=true` (inside the handler) | the configuration decides who can reach what; the downloads hand out keys |
+| `service` | the nine `/internal` operations | only the service token that the API makes at its start for the containers; `Scope.Allows` lets a user token never reach them and the service token never reach anything else |
+| none | `GET /setup`, `POST /setup` (setup token), `GET /system/health`, `POST /auth/login` | before there is an administrator, or a health check without data |
+
+**Secret storage.** The secrets directory (`/var/lib/chaosgw/secrets`, a bind mount, 0700, the API's) holds `auth/auth.json` (the argon2id hash of the password, the SHA-256 of every token and of the service token,
+the hash of the setup token), `wireguard/<uuid>.json` (the keys), `tls/key.pem` and `tls/ui.pem`. Every file is written 0600 through a temporary file and a rename. The executor mounts the directory read-only (it only
+reads keys by UUID, `key_ref`), the services do not mount it; the keys of the test CAs live in `tlsca` (the responder and the proxy mount it read-only, they sign with it). The one secret outside both directories is the service token (`service/token`, scope `service`, only `/internal`): the DNS proxy, the TLS responder
+and Kea's hook read it from a read-only mount, and they are not the API's user (Kea runs as 0:65532, the DNS proxy as 65532), so the file is 0640 and its directory 0750, owned by the API's group, and nothing for others.
+`TestEverySecretOnDiskIsPrivateToItsOwner`
+walks both directories after the operations that make secrets and fails on a file or directory that group or others can read, and checks the modes of the service token's file and directory;
+the secret-free search below includes the service token's value and skips only its own file.
+
+**Secret-free outputs.** Private keys, password hashes and token values do not appear in responses, events, logs or exports (the table of the spec): the exceptions are the value of a token in the answer that creates it and
+the downloads that are secret on purpose (the WireGuard exports and the revision export with `include_secrets=true`, scope `full`, audit-logged before the bytes leave; `export_once` deletes the key after the download).
+`TestNoSecretIsInAResponseAnEventAnAuditEntryOrALog` collects every secret the gateway holds, drives the operations that handle them, and searches 49 reads with the scopes `full` and `read`, the events of the
+whole test, the audit log and the log of the server for them; the same search finds the key in the three secret downloads, so a search that looks at nothing fails.
+
+**Login rate limiting.** Five wrong passwords from one client address (the address of the TCP connection; `X-Forwarded-For` is not read) start a wait of 5 s that doubles with every further failure up to 15 minutes; the answer is `429`
+with `Retry-After`, a blocked attempt does not reach the password check and is not written to the audit log again, and a success clears the record. The password change has its own limit. The limiter is concurrency safe (a burst of
+30 parallel guesses checks five). Tokens (256 bits) and the setup token (192 bits) are random values that cannot be guessed; they need no limit. The tests are the ones of M5 (`TestTheLoginIsRateLimited`, `TestAParallelBurstOfWrongPasswordsIsLimited`,
+`TestBlockedLoginsDoNotFloodTheAuditLog`, `TestPasswordGuessingThroughTheChangeIsLimitedToo`, `TestXForwardedForDoesNotChooseTheClient`, `TestLoginIsRateLimitedPerClient`); the review found nothing to change.
+
+### Container hardening review
+
+The review went through `deploy/compose.yaml`, container by container, for the privileges, the capabilities, the user, the file system, the namespaces and what is mounted from the host. The results:
+
+| Container | User | Privileges | File system | Mounts from the host | Accepted risk |
+|---|---|---|---|---|---|
+| `exec` | root | privileged, host network and PID, `no-new-privileges` | read-only; tmpfs `/tmp`, `/run` | its two data directories and the captures (rw), the secrets, `/lib/modules`, `/etc`, `/usr/lib/systemd/network` (ro), `/run/netns` (rw, `rshared`) | root on the host if the process is taken over: it is small, listens on a Unix socket only, runs no shell and nothing but typed operations (below) |
+| `api` | 65532 | `cap_drop: ALL`, `no-new-privileges`, host network | read-only; tmpfs `/tmp` | its data directories (rw), `/run/systemd/resolve` (ro) | in the host network namespace to listen on the management network; the port is above 1024 |
+| `kea` | 0:65532 | `NET_RAW`, `NET_BIND_SERVICE`, `CHOWN`, `FOWNER`, `DAC_OVERRIDE`; **no** `no-new-privileges` | read-only | its leases, the service directory (ro) | `no-new-privileges` is not set (the container is root and the capabilities are the ones it needs; the level 2 test `deployment_test.go` excepts it too); to be tried on a level 2 run, because Kea's package may use file capabilities |
+| `bird` | root | `NET_ADMIN`, `NET_RAW`, `NET_BIND_SERVICE`, `no-new-privileges`, host network | read-only | none | `NET_ADMIN` in the host's network namespace is wide; BIRD needs it to write routes. It runs a configuration that only the executor writes and checks (`bird -p`, `include` refused) |
+| `svcns` | 65532 | none, `network_mode: none`, host PID | read-only | none | sees the host's processes (no capability to signal them); it needs the host PID to tell the executor which namespace is its own |
+| `dns`, `tls` | 65532 | `cap_drop: ALL` (+ `NET_BIND_SERVICE` for `dns`), joined to `svcns` | read-only | the service directory (ro), for `tls` the CAs (ro) | the keys of the test CAs are readable by `tls` and `tls-proxy`: they sign with them |
+| `tls-proxy` | 65532 | `cap_drop: ALL`, profile `interception` | read-only; tmpfs 64 MiB for mitmproxy | as `tls` | a Python process that parses what devices send; confined to the service namespace and without a capability |
+| `teardown` | root | as `exec` | read-only | every data directory (rw) | on demand only (`run --rm`) |
+
+Findings, all fixed in M29:
+
+1. **The image ran as root by default** (the open item "M1: container image has no non-root user"). `deploy/Dockerfile` ends with `USER 65532:65532` now; every service of `compose.yaml` names its user all the same, and the review's list of the containers that are root
+   (`exec`, `bird`, `kea`, `teardown`) is pinned. The documentation and the level 2 tests that need root in a throw-away container (moving the old volumes, reading a PID file, the minimal `apply`) say `--user 0:0`.
+2. Nothing but the tests above pinned the *set*: `internal/executor/hardening_review_test.go` now holds `compose.yaml` to the review: the user of every service, an allow-list of the privileged flag, the exact capabilities added after `cap_drop: [ALL]` and the network of every service (a capability not in it fails, whichever it is), the table of what each container may mount from the host (a mount outside it, or of the Docker socket, `/`, `/proc`, `/sys` or `/dev`, fails),
+   no published ports, devices, IPC, user namespace, cgroup or sysctls, a host PID namespace only for `exec` and `svcns`, no unconfined profile, none of the capabilities that give the host away, a restart policy and a limit for the log of every container, and a read-only root file system everywhere.
+   `tools/composegen` keeps the privileges and capabilities of §3.8 (`TestOnlyTheExecutorIsPrivilegedAndTheCapabilitiesAreThoseOfThePlan`), and the container's own files have their tests in `hardening_test.go`.
+
+Considered and not done: memory and process limits (`mem_limit`, `pids_limit`) would be guesses without measurements of a loaded gateway (H1); a seccomp profile of our own for the unprivileged containers (Docker's default applies); user namespace remapping (the executor
+must be root in the host's namespaces).
+
+### The executor's interface: threat model
+
+**What it is.** The executor (`chaosgw exec`, the only privileged container) serves a Unix socket in the volume it shares with the API. Every connection starts with a protocol-version handshake; the peer is checked with `SO_PEERCRED` against root and `--allow-uid` (the API's 65532);
+the socket is 0660, owned by 65532. Over it the API sends *operations*: typed JSON documents (`internal/executor/op.go`) that `Decode` parses strictly (unknown type, unknown field, duplicate key, trailing data and more than 8 MiB are errors), `validate` checks, and `Plan` turns into commands
+(`plan.go`): an array of arguments for a fixed binary path, with a batch on standard input where the tool takes one. There is no shell and no command string anywhere. Captures (`capture.go`) and probe runs (`probe.go`) are the two requests with a connection of their own.
+
+**What it protects.** The host: its network configuration, files and processes, which the executor can change as root. The gateway's secrets (the WireGuard keys, which it reads). The traffic of the devices under test and the rest of the host's network, which no operation may touch.
+
+**Who sends what.** The attacker we plan for has *taken over the API container* (a flaw in the HTTP handling, in a parser of what devices send, or a stolen token of the scope `full`): they can send any operation the socket accepts, with any content. The devices under test are untrusted too, but they reach the executor only through
+the API (DHCP hostnames, DNS names and addresses, the strings of TLS and HTTP flows), which validates them into the typed fields before an operation exists. A local process on the host is trusted ("local processes on the host are trusted", §2.16), and one that is root can do anything anyway.
+
+**Threats and what stops them.**
+
+| Threat | Mitigation | Test |
+|---|---|---|
+| Run a command or inject arguments | no shell; commands are `[]string` for fixed binaries; every argument is built from validated fields; the fuzz target checks every command of every accepted operation for shell syntax and whitespace | `FuzzDecode`, `FuzzFrame`, `FuzzConn`, `decode_test.go`, `plan_test.go` |
+| Change the nftables rules of the host or of Docker | `nft_apply` accepts only objects in `inet chaosgw`; `nft_dup` only its own `netdev chaosgw_dup`; set and map operations name sets by a pattern and the namespace; `docker_user` adds one fixed rule | `CheckNftRuleset`, the nft oracle in `fuzz_test.go` |
+| Change the host's routes and rules | only the tables 100 to 110, every line carries `proto 201`, the main table and the local table are refused | `FuzzDecode` (`checkStdin`), `TestRoutingInOwnTablesWithOwnTag` |
+| Shape or redirect the traffic of the host | tc on interfaces assigned to Chaos Gateway only (`AssignInterfaces`, the OS-owned ones take no tc), arguments from a grammar (`tcgrammar.go`), filter handles and flow ids by pattern | `FuzzDecode`, `tcops_test.go`, `FuzzNormalizeTC` |
+| Set a sysctl | a fixed list with limits | `TestDecodeRejects` |
+| Read a file or write one | the executor opens no path an operation names: the keys by UUID below the secrets directory, BIRD's file in its own directory, the capture files with `os.OpenRoot` below the capture root and the name of a directory (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`) | `capture_validate_test.go`, `FuzzCaptureOpen`, `FuzzCaptureOpenFiles` |
+| Capture traffic of the host | a capture only on interfaces assigned to Chaos Gateway; a request before any interface is assigned is refused before a socket is opened | `FuzzCaptureOpen`, `TestACaptureIsRefusedOutsideTheScopeAndForBadRequests` |
+| Load BIRD with a hostile configuration | `bird -p` before it is used; `include` and anything outside the import tables is refused | `TestBirdCheckMutatesNothingAndApplyDoes`, seeds of the fuzz targets |
+| Make the executor start or hold too much | limits on the size, the number of items, captures and probe runs; a hung request has a deadline | `TestOversizedLineClosesTheConnection`, `FuzzConn` |
+| Speak the protocol to it from another process | the socket's owner and mode, `SO_PEERCRED`, the handshake with the protocol version (a mixed set of containers is refused) | `TestPeerCredentialsAreChecked`, `TestAllowUIDs`, `TestServerRefusesAClientWithAnotherProtocolVersion` |
+| A partly applied request | the engine recompiles the committed revision at the next start; a cut inside a request heals the same way | M27's tests |
+
+**What a taken-over API can still do** (accepted, and why): it can break the gateway's own networking and the tests (it is the gateway's control plane; the executor does not judge configurations, it limits *where* they may act); it can capture and replay the traffic of the interfaces assigned to Chaos Gateway
+(that is the test traffic); it can make the gateway and the probes open connections to any address the gateway reaches (diagnostics, decided in P6-M24-01), including the management network and the uplink; it can read the keys that the API itself holds. It cannot make the executor change the host's
+other interfaces, firewall rules, routes in other tables, files or processes, and it cannot run a command of its choosing. A taken-over *executor* is root on the host; that is why it is small, offline (a Unix socket, no listener) and read-only.
+
+**What the external review should look at** (see "Preparation for the external review" below): the completeness of the validation per operation (every field that reaches a command or a file name), the scope checks (`scope.go`, `validate.go`: `CheckNftRuleset`, `ownTable`, `checkSysctl`, the tc grammar), `probe_run` (it runs network I/O in a namespace of the host with content from the API),
+the capture path (`OpenRoot`, ownership of the files), the protocol (`server.go`, `proto.go`: framing, handshake, `SO_PEERCRED`) and what a peer with the right uid can do beyond the operations.
+
+### Fuzzing
+
+`make fuzz` runs six targets, `FUZZTIME` each (60 s by default, 6 minutes in CI; 45 minutes each in the nightly workflow, which uploads a crashing input as an artifact: it is the reproducer, and belongs in `testdata/fuzz` of its package). M3 gave the decoder alone 5 minutes in CI and an hour nightly; the time is now per target and the total is what is bounded, so the decoder's own time is lower (60 s in CI, 45 minutes nightly: six targets of 45 minutes make 4.5 hours in one job, which fits the default limit of six hours of a job, and a longer time for the decoder alone is a `make fuzz FUZZTIME=...` away). `make fuzz` runs every target even when one finds a crasher and fails at the end, so one nightly crasher does not hide the other five.
+
+| Target | Package | What it feeds | What it asserts |
+|---|---|---|---|
+| `FuzzDecode` | `internal/executor` | bytes to `Decode` | whatever is accepted encodes stably and yields commands that are inert (no shell syntax, no whitespace), stay in the own tables, `inet chaosgw` and the assigned interfaces |
+| `FuzzFrame` | `internal/executor` | a request frame to `Server.serve` | no panic, a response for every request, nothing runs for a request the decoder refuses, every command inert |
+| `FuzzConn` | `internal/executor` | bytes over a real socketpair after the handshake | the connection always ends, no panic, every command inert |
+| `FuzzCaptureOpen` | `internal/executor` | a capture request (M29) | a refused request opens nothing; an accepted one names one directory below the root and valid interfaces; an executor with no assigned interface refuses every one |
+| `FuzzCaptureOpenFiles` | `internal/executor` | a capture request on an executor whose interfaces are assigned, with a capture root that holds links out of it (M29) | nothing is created or changed outside the capture root, a link out of it is never followed (`os.OpenRoot`; asserted on the directory step itself, `openCaptureDir`, so it holds without the privilege for a raw socket too), nothing is deeper than one directory below the root |
+| `FuzzFilter` | `internal/capture` | a capture filter and a packet (M29) | no panic; a valid filter builds a program that the BPF VM accepts and that selects what the user-space matcher selects |
+
+`TestEveryOperationTypeHasAFuzzSeedThatTheDecoderAccepts` fails when a type of operation has no seed that the decoder accepts: four types had none (`nft_add_map_elements`, `nft_del_map_elements`, `conntrack_delete`, `service_ns`); they have seeds now. A new operation needs a seed in `fuzz_test.go` as before.
+
+### Preparation for the external review
+
+The external review itself is a human activity (who, when, how long: P7-M29-01 in `docs/open-items.md`). What is ready to hand over:
+
+- this section (threat model, accepted risks, the table of mitigations and the tests that hold them);
+- the source of the interface: `internal/executor/{op,validate,plan,scope,server,proto,runner,exec,capture,probe,dnssets,netlinkset,nftdup,tcgrammar,hostpreflight}.go` (about 6,500 lines without the tests) and the compose file of the container (`deploy/compose.executor.yaml`);
+- `go test ./internal/executor` (the unit and golden tests, no privilege needed), `make fuzz FUZZTIME=10m` (the six targets) and the level 1 tests of the executor on the real kernel (`internal/executor/integration_test.go`, `make test-privileged`), with the corpora in `internal/executor/testdata/fuzz`;
+- the acceptance map below, the container table above and the list of the operations with their effects (`op.go` has one type per operation; `plan.go` is the only place where a command is built).
+
+### Decisions
+
+1. **Two certificates, chosen by the address a connection came in on.** One certificate for everything would force the administrator's certificate to name `169.254.100.1` (which no CA issues) or the services to stop verifying. The services keep the gateway's own certificate on the addresses they use, the administrator's certificate is on the others.
+2. **The upload is checked strictly** and refused with the reason (`422 validation_failed`, the member and the message in `errors`), because a certificate that browsers refuse is found out by the administrator too late; an expired certificate, one without names and one for a client are refused instead of accepted.
+3. **The image's default user is 65532** (the open item "M1: container image has no non-root user"): a container that is started without a `user` is not root. The three root containers and the teardown say so in their files.
+4. **A damaged `ui.pem` is no failed start** (M27's rule that the gateway comes up): the gateway's own certificate is presented and the log says why.
+5. **No screen for the certificate in the web UI**: there is no design for a Settings screen (§2.17), and the operation is rare; `chaosctl certificate` and the API cover it.
+6. **The scopes stay as they were**; the review pinned them in a test so that a new operation has to be put into a class on purpose.
+7. **`no-new-privileges` stays off for Kea** until a level 2 run shows it works with Kea's package; the exception is pinned in `TestNoContainerWidensItsSandbox` and the level 2 deployment test; whether it stays is P7-M29-02 in `docs/open-items.md`.
+8. **No limits on memory and processes** of the containers before there are measurements (H1).
+
+### Tests
+
+Level 0 (run here): `internal/api/certs_test.go` (the certificate is replaced for new connections only and kept on the loopback address of the services, reset, restart, the 14 refusals (an expired or not yet valid intermediate included) and nothing changes, an RSA key, the scope `full`, a damaged file; the own certificate on every address of `builtinIPs` including the service link 169.254.100.1 and ::1; concurrent installs and resets leave the presented certificate and `ui.pem` the same, `Install` and `Reset` hold one mutex; a failing write or removal is a 500 that changes nothing), `internal/api/certs_ctl_test.go` (`chaosctl certificate`),
+`internal/api/scopes_test.go` (every operation of the spec against tokens of every scope, no credential and a wrong token; the result of the review), `internal/api/secrets_test.go` (no secret in any read, event, audit entry or log, and none in a file of the state on disk outside the secrets directories; the failed login is audited as `auth.login_failed`; the exports without secrets), `internal/api/secrets_files_test.go` (modes on disk),
+`internal/executor/hardening_review_test.go` (the containers as a set), `internal/executor/fuzz_seeds_test.go`, `internal/executor/fuzz_capture_test.go`, `internal/executor/fuzz_capture_files_test.go` (the files of a capture request, links out of the capture root) and `internal/capture/fuzz_test.go` (the three new fuzz targets), and the tests of M5 for the login limit and the token lifecycle (`TestTheWaitDoublesUpToFifteenMinutesAndStaysThere` in `internal/auth`: the doubling, the 15-minute cap and the `Retry-After` of the 429). The fuzz targets were run here for 15 to 40 seconds each (`make fuzz FUZZTIME=15s`) with no finding.
+Level 1 (`M29_LEVEL1`, `internal/api/e2e_security_test.go`, written, compiles and vets with `-tags testbed`, not run here: no network namespaces): the real HTTPS server in the gateway's namespace is reached from the management network, which is shown the gateway's own certificate and then the installed one while the loopback keeps the first, and not from a device in a test network
+(on its gateway address and on the management address), from the server behind the uplink or from a client of a WireGuard network with the role `test` through its tunnel. The older level 1 tests of M4 and M4b (`TestGatewayProtection` in `internal/apply`, `TestRolesDecideWhoReachesTheControlPlane` in `internal/engine`) stay in their lists.
+Level 2: the existing deployment tests follow the image's new default user (`--user 0:0` where they ran as root); nothing else changed.
+
+### Acceptance map (plan M29 "Scope" and "Tests")
+
+| Plan M29 | Test |
+|---|---|
+| Scope: HTTPS with a replaceable certificate (`/system/certificate`) | `TestTheCertificateIsReplacedForNewConnectionsAndCanBeReset`, `TestACertificateThatCannotServeIsRefusedAndChangesNothing`, `TestADamagedInstalledCertificateFallsBackToTheGatewaysOwn`, `TestChaosctlShowsInstallsAndResetsTheCertificate`; level 1 `TestTheUIAndTheAPIAreReachedFromTheManagementNetworkOnlyOnTheRealKernel` |
+| Scope: token scopes | `TestEveryOperationRefusesACallerWithoutTheScopeItNeeds`, `TestTheScopesOfTheOperationsAreTheResultOfTheReview`, `TestOnlyTheFullScopeInstallsACertificate`, `TestTokenScopesAndTheirLifecycle` |
+| Scope: secret storage | `TestEverySecretOnDiskIsPrivateToItsOwner`, `internal/secrets` and `internal/auth` tests (`TestKeysAreStoredPrivately`, `TestFilesAreWrittenPrivately`) |
+| Scope: secret-free exports | `TestNoSecretIsInAResponseAnEventAnAuditEntryOrALog`, `TestAnExportWithoutSecretsHoldsNoKeyInAnyFormat`, `TestExportWithSecretsNeedsFullAndIsAudited` |
+| Scope: rate limiting on login | the M5 tests named above |
+| Scope: container hardening review (capabilities, read-only root file systems) | the table above; `TestEveryContainerNamesItsUserAndTheImageDefaultsToTheUnprivilegedOne`, `TestTheContainersMountFromTheHostOnlyWhatTheReviewAllows`, `TestNoContainerWidensItsSandbox`, `TestOnlyTheExecutorIsPrivilegedAndTheCapabilitiesAreThoseOfThePlan` |
+| Scope: external review of the executor interface | the threat model, the fuzz targets and the package above; the review itself is P7-M29-01 in `docs/open-items.md` |
+| Tests: test networks and test-role WireGuard clients cannot reach the UI/API (regression of M4) | level 1 `TestTheUIAndTheAPIAreReachedFromTheManagementNetworkOnlyOnTheRealKernel` (the real server), `TestRolesDecideWhoReachesTheControlPlane` (M4b) |
+| Tests: tokens with insufficient scope are rejected | `TestEveryOperationRefusesACallerWithoutTheScopeItNeeds` |
+| Tests: exports contain no secrets | `TestNoSecretIsInAResponseAnEventAnAuditEntryOrALog` |
+| Tests: long fuzz runs on executor operations nightly | the workflow `nightly.yml` (job `fuzz`, `make fuzz FUZZTIME=45m`); `make fuzz` here |
+| Open items: M1 container image has no non-root user | the Dockerfile's `USER`; `TestEveryContainerNamesItsUserAndTheImageDefaultsToTheUnprivilegedOne` |
+| Open items: M5 certificate loaded once at start, SANs fixed | `Certificates` (looked up per handshake); the installed certificate has the names its owner chose |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -7122,7 +7294,7 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$M27_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
+Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$M27_LEVEL1,$M29_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
 tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of packet captures (M17: the AF_PACKET sockets
 need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of the DNS faults and hostname selectors (M20, with the executor's netlink connection), those of the TLS responder (M21), those of the interception proxy (M22, with the real mitmproxy, which the level 0 job installs too and requires), those of the DHCP test actions (M23, udhcpc and the real Kea), those of the probes and the calibration (M25, the real Kea, the real executor and the real netem), the one of the metrics (M26), those of Kea's packet socket after a link flap
 (issue #64), the tests against the real Kea (I64-05) and those of the recovery and the stop (M27), those of the observed state of a device (the acceptance of

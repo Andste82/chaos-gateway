@@ -42,6 +42,14 @@ func sessionCookie(r *http.Request) (*http.Cookie, error) {
 	return r.Cookie(SessionCookie)
 }
 
+// The operations that need a gateway that forwards, held back while it runs in safe mode (plan §3.9): they would change or
+// measure traffic that is not forwarded. Reading, the revisions, the removal of overlays and runs and everything else work, so
+// that the cause can be seen and a revision that works can be applied.
+var safeModeHolds = map[string]bool{
+	"createOverlay": true, "renewOverlay": true, "createRun": true, "runScenario": true, "renewRun": true,
+	"calibrateProbe": true, "startCapture": true, "runDiagnostic": true,
+}
+
 // Operations that work before the setup is finished.
 var beforeSetup = map[string]bool{"getSetup": true, "completeSetup": true, "getHealth": true}
 
@@ -129,6 +137,12 @@ func (s *Server) guard() gin.HandlerFunc {
 		if !p.Scope.Allows(o.Scope) {
 			s.write(c, newProblem(model.ErrorCodeForbidden, "this operation needs the scope %q", o.Scope))
 			return
+		}
+		if safeModeHolds[o.ID] {
+			if snap := s.cfg.Engine.Snapshot(); snap.SafeMode {
+				s.write(c, newProblem(model.ErrorCodeUnavailable, "the gateway is in safe mode: %s. Apply a revision that works (POST /revisions/{id}/clone, then apply) to leave it", firstLine(snap.SafeModeReason)))
+				return
+			}
 		}
 		if preconditionOps[o.ID] && c.GetHeader("If-Match") == "" {
 			s.write(c, newProblem(model.ErrorCodePreconditionRequired, "send the id of the base revision in If-Match, e.g. If-Match: \"42\""))

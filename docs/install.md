@@ -1,7 +1,7 @@
 # Installation (interim)
 
 How to install Chaos Gateway on a host today, until M28 (container deployment: one `compose.yaml`, the update
-script, `teardown`) and M30 (the user guide) replace this page. The host is Ubuntu 24.04 or 26.04, x86-64 or
+script) and M30 (the user guide) replace this page. The host is Ubuntu 24.04 or 26.04, x86-64 or
 ARM64, with at least one interface for the uplink and management and one interface per test network
 (plan §1.5, §3.8), and with `/usr/lib/systemd/network` (systemd ships it on Ubuntu; the executor mounts it read-only to
 read the distribution's systemd-networkd defaults). Everything below runs on that host.
@@ -364,20 +364,49 @@ docker run --rm -v "${COMPOSE_PROJECT_NAME}_chaosgw-secrets:/v" --entrypoint chm
 
 (A stack started from `deploy/` without `COMPOSE_PROJECT_NAME` has the project name `deploy`.)
 
-## Uninstall
+## Stop, restart and recovery
 
-`chaosgw teardown` (plan §3.8), which removes everything the gateway created in the kernel, comes with M27. Until
-then:
+Stopping the gateway (`docker compose stop`, which stops the API container before the executor) removes everything it created
+in the kernel (plan §3.8, D35): the overlays and the runs first, then the `inet chaosgw` table, its policy rules and routes,
+the test bridges and their addresses, the service pair and the name `cgsvc`, the probes with their namespaces and DHCP clients,
+the tc trees, the rules in `DOCKER-USER` and the WireGuard interfaces. Nothing of it changes the host's or the devices'
+traffic afterwards; the devices of a test network have no gateway until the next `docker compose up`, which builds the
+state again from the last confirmed revision. The revisions, the secrets, the audit log and the captures stay in their volumes.
+
+If the executor was killed (out of memory, `docker kill`, a power loss with the Docker volumes intact) it could not clean up.
+With the stack stopped, remove what it left:
 
 ```sh
+docker compose -f compose.teardown.yaml run --rm teardown
+```
+
+`-f` names only the teardown file, whatever `COMPOSE_FILE` says; `COMPOSE_PROJECT_NAME` must be the project of the stack, so
+that the volumes are the stack's. The `teardown` service mounts every volume writable, and `--purge` empties them all: the
+revisions, the secrets, the audit log, the service token, the TLS CAs, the captures, Kea's leases and the executor's state (irreversible;
+`docker compose down -v` removes the volumes themselves). It refuses while an executor is serving, and `--purge` empties the
+volumes only once the kernel is clean: when the teardown reports what it could not remove (it exits with 1), the volumes stay, because a
+second run needs the executor's state in them; run it again after the cause is gone.
+
+At the start the gateway applies the active revision. If that fails (it is tried twice) or its file is damaged, it applies the
+last revision that worked and makes that the active one; the log of the `api` container says
+`applying the last known good revision`, and the broken revision is marked `rolled_back`. If that fails too, or there is
+none, the gateway runs in **safe mode**: management access only, no forwarding for the test networks (a WireGuard tunnel of the role `management` is down too: the way in is the management interface). `GET /api/v1/state` reports `safe_mode` and
+`safe_mode_reason`, the web app shows a red banner, and everything that needs a forwarding gateway answers `503`. To leave it,
+clone a revision that works (`POST /api/v1/revisions/{id}/clone`), apply
+it and confirm it; the cause is in the reason and in the log of the `api` container. The recovery instructions of M30 replace
+this section.
+
+## Uninstall
+
+```sh
+docker compose -f compose.teardown.yaml run --rm teardown --purge   # only needed if the executor was killed; a normal stop did it
 docker compose down -v
 sudo sh host-setup.sh --remove-test-interface lan0
 sudo rm -f /etc/modules-load.d/chaos-gateway.conf /etc/sysctl.d/90-chaos-gateway.conf
-sudo reboot
 ```
 
-Stopping the executor removes the active faults; the bridges, nftables tables, routes and WireGuard interfaces of
-the last configuration stay until the reboot, which also unloads the modules and resets IPv4 forwarding.
+The stop removed what the gateway created in the kernel (above). What stays is the host's: the modules and
+`net.ipv4.ip_forward` (a reboot resets them) and the netplan entries you changed for the test interfaces.
 `--remove-test-interface` removes the systemd-networkd rule of a test interface (once per interface). Undo by
 hand what you changed in netplan for the test interfaces.
 

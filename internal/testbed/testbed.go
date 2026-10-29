@@ -315,6 +315,9 @@ func (p *Process) Output() string {
 	return p.out.String()
 }
 
+// Pid is the process ID of the command.
+func (p *Process) Pid() int { return p.cmd.Process.Pid }
+
 // Done is closed when the process has exited.
 func (p *Process) Done() <-chan struct{} { return p.done }
 

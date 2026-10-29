@@ -119,7 +119,7 @@ test-testbed: ## the namespace testbed: directly where possible, else in a VM
 	$(GO) run ./tools/testvm run $(ARGS)
 
 test-appliance: ## level 2: the gateway in a VM from the Ubuntu cloud images (needs root, QEMU, /dev/kvm and CHAOSGW_APPLIANCE_IMAGE_TAR)
-	$(GO) test -tags appliance -count=1 -timeout 80m -v -run TestSmokeOnCleanUbuntuHosts ./internal/appliance
+	$(GO) test -tags appliance -count=1 -timeout 140m -v -run 'TestSmokeOnCleanUbuntuHosts|TestRecoveryAndStopOnCleanUbuntuHosts' ./internal/appliance
 
 test-vm: ## the namespace testbed in a QEMU VM (level 1b)
 	$(GO) run ./tools/testvm run -mode vm $(ARGS)

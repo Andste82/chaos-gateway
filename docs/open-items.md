@@ -425,7 +425,7 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | Image holds only `chaosgw`/`chaosctl` and executor tools; full image with Kea, tcpdump, mitmproxy | M28 |
 | ~~Identity maps (address → device), classification and faults not compiled yet~~ — done in M7, M8a, M8b | M7, M8a, M8b |
 | ~~Reader pool and operation time stamps (M3 deferral)~~ — done in M8a | M8a |
-| Overlay removal on stop | M27 |
+| ~~Overlay removal on stop~~ — done in M27 (`Server.Shutdown`, run by `serveAPI` before the engine ends) | M27 |
 | ~~M6b: DNS faults, hostname selectors, redirect of hardcoded resolvers, DoT blocking, `/internal/dns/resolutions`~~ — done in M20 | M20 |
 | ~~M6b: classification sets the service mark (bit 20) that table 102 routes on~~ — done in M21 (`compiler/tls.go`: the chain `tls_redirect` writes it right after the classification, with the real redirect-interaction test) | M21 (confirmed 2026-10-11, P2-M7-01) |
 | ~~M6b: TLS responder joins the service namespace~~ — done in M21 (`deploy/compose.tls.yaml`) | M21 |
@@ -937,8 +937,9 @@ M27/M30.
 
 - Status: new
 - Severity: low
-- Reason: deferred. Safe mode itself comes with M27 (the API reports `safe_mode` and `safe_mode_reason`, which the banner
-  shows); there is no recovery document yet. The banner's link points to plan §3.9 "Updates and Recovery".
+- Reason: deferred. Safe mode itself came with M27 (the API reports `safe_mode` and `safe_mode_reason`, which the banner
+  shows); there is no recovery document yet. The banner's link points to plan §3.9 "Updates and Recovery". What is left is
+  the link target, which M30 writes.
 - Evidence: `web/src/components/layout/AppShell.vue`.
 - Task: when M27/M30 write the recovery instructions, point the link at them (served with the app or in the docs).
   M30's Scope in docs/plan.md §5 names the recovery instructions and the banner link (added by the Phase 3 audit).
@@ -1480,10 +1481,11 @@ plan:
   the test interface. Both are host changes made by hand during the install test. The host setup now writes and removes
   the networkd rule (`host-setup.sh --test-interface`, `--remove-test-interface`, issue #64); whether the executor should
   do it is I64-03. The netplan entry stays the operator's to remove.
-- Open: `chaosgw teardown` (M27) does not exist yet; the cleanup above is what it has to do. Until then the cleanup
-  is manual (see `docs/install.md`, Uninstall).
-- Status: decided; **not implemented.** The executor still keeps the kernel state on stop, so until the change lands the
-  plan describes the target and `docs/install.md` plus the manual cleanup apply.
+- Implemented in M27: the executor removes all of it on `SIGTERM` (`cmd/chaosgw/exec.go`, `apply.Teardown`), `chaosgw teardown`
+  does the same for a gateway that was killed, and `--purge` empties the volumes through the `teardown` service of
+  `deploy/compose.teardown.yaml`, which mounts every volume writable (`docs/install.md`, "Stop, restart and recovery").
+- Status: **implemented** (M27). What stays out of scope is the host's: the networkd rule and the netplan entry of a test
+  interface (I64-03).
 - Needs maintainer: no (decided 2026-10-16).
 
 ## Phase 3.1 audit result
@@ -3212,3 +3214,57 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is comple
 - Acceptance: the V1 scope summary of `docs/plan.md` names M26a (for (a)), lists it among the optional milestones (for (b)) or among those that ship after V1 (for (c)); for (c) the UI also loses *Add probe*.
 - Needs maintainer: yes
 - Effort: S
+
+## Phase 7 open items
+
+### P7-M27-01 Safe mode drops the management-role WireGuard networks, so a gateway administered over a tunnel loses its access
+
+- Status: new
+- Severity: minor
+- Reason: needs-decision. Plan §3.9 says safe mode keeps "management access only". `domain.SafeModeConfiguration` keeps the uplink, the management interface (with its allowed sources and the UI port) and the settings, and drops every network, so a WireGuard network with the role `management` (a management access path in plan §2.14) is gone: the tunnel is down in safe mode and the gateway is reachable through the management interface only. Keeping the tunnel is not a copy: its clients' `reachable` lists name test networks that safe mode does not have, its keys are generated secrets, and a failing WireGuard apply in the configuration of last resort would end safe mode in a failed start.
+- Evidence: `internal/domain/safemode.go`, `internal/domain/safemode_test.go` (`Networks == nil`), `docs/development.md` "Recovery and stop (M27)", decision 4.
+- Task: decide whether a management-role WireGuard network stays up in safe mode.
+- Options: (a) no: safe mode is the management interface alone (what M27 does); `docs/install.md` and the recovery instructions of M30 say that a tunnel is down and the way in is the management interface; (b) yes: the safe configuration keeps the networks of the role `management` with their clients, without the `reachable` entries, and a failing apply of the tunnel does not fail the safe configuration (the tunnel is reported as degraded).
+- Recommendation: (a) for V1: the management interface is the access that does not depend on a key, an interface that can fail to come up or a peer, which is what the last resort should rely on; the recovery instructions (M30) say it. (b) is worth doing if operators administer the gateway only over the tunnel.
+- Acceptance: for (a) the recovery instructions state that the tunnel is down in safe mode; for (b) a test of the compiler and the engine shows the management tunnel up in safe mode and a test network's client cut off.
+- Needs maintainer: yes
+- Effort: S for (a), M for (b)
+
+### P7-M27-02 A fallback to a revision from before a key rotation cannot be applied, because the rotation retired the key
+
+- Status: new
+- Severity: minor
+- Reason: needs-decision. The commit of a revision that raises the key generation of a WireGuard client or link peer retires the old generation's keys (`wireguard.Prune`, pinned by `TestRotatingAClientKeyKeepsTheOldKeysUntilTheCommitAndAFailedApplyStillRestores`). The start applies the last known good revision when the active one fails (M27). `wireguard.PruneKeeping` keeps the keys that a later revision dropped altogether (a network, a client or a peer that is gone), so a fallback to a revision from before such a deletion works. A fallback to a revision from before a rotation does not: the compile finds no key for the client, and the gateway enters safe mode although that revision once worked. Keeping the retired generation would let a compromised key that was rotated away come back with the fallback, which is what a rotation is for.
+- Evidence: `internal/wireguard/provision.go` (`PruneKeeping`, `keepKeysOfGone`), `internal/engine/owner.go` (`prune`), `internal/engine/recovery.go`, `docs/development.md` "Recovery and stop (M27)".
+- Task: decide whether the keys of a generation that a rotation replaced stay for the fallback.
+- Options: (a) no (what M27 does): a rotation retires the old key for good; the fallback to a pre-rotation revision ends in safe mode, and the way out is a new revision (a clone with the current keys); the recovery instructions (M30) say so; (b) yes, until the next commit: the generation before the last rotation stays as long as its revision is the fallback, and the recovery log names the key that came back.
+- Recommendation: (a): safe mode is the safe answer when the only revision to go back to needs a key the administrator retired on purpose; a clone of that revision with the current key applies in one step.
+- Acceptance: for (a) the recovery instructions state it; for (b) a test where R2 rotates a client key and fails at start falls back to R1 and applies it.
+- Needs maintainer: yes
+- Effort: S for (a), S to M for (b)
+
+### P7-M27-03 The level 2 recovery test does not read `safe_mode` from `GET /state`
+
+- Status: closed (2026-10-29): not a decision, only work, done in review: `TestRecoveryAndStopOnCleanUbuntuHosts` makes revision 1 with `POST /setup`, confirms it in a session, creates a token and reads `GET /state` (option (b)); written, not run yet (no KVM here), it runs in the nightly job
+- Severity: minor
+- Reason: the review found that this was no decision (the plan puts "Boot, recovery, safe mode" at level 2 and the Scope has the API report it). Plan §4 puts "Boot, recovery, safe mode, upgrades" at level 2 and the M27 Scope has the API report `safe_mode` and `safe_mode_reason`. `TestRecoveryAndStopOnCleanUbuntuHosts` sees safe mode in the log line, over SSH, in the forwarding that stopped and in the table of the safe configuration, but it never calls `GET /state`: it makes its revisions with `chaosgw apply --file` while the API is stopped, so no administrator exists and the service token has the scope `service` only. The report is checked at level 0 over HTTP (`TestSafeModeIsReportedAndHoldsBackWhatNeedsAForwardingGatewayUntilARevisionWorks`). The test cannot run here (no KVM), so a change of its flow would be unverified until the nightly run.
+- Evidence: `internal/appliance/recovery_test.go`, `internal/api/recovery_test.go`, `internal/api/system.go` (`GetState`).
+- Task: decide whether the level 2 test reads the API.
+- Options: (a) leave it: the REST report is level 0, the real kernel's safe mode is level 2; (b) make the first revision with `POST /setup` (the API running, the setup token from its log, then login and confirm), so that the test has a session and asserts `safe_mode`, a non-empty `safe_mode_reason` and `safe_mode: false` after the restart; the revision numbers of the flow shift by one.
+- Recommendation: (b) once a level 2 run is available to prove the changed flow (the nightly job, or the first CI run with KVM), because the report is the contract the UI banner relies on; until then (a).
+- Acceptance: for (b) the level 2 test asserts the three values.
+- Needs maintainer: no
+- Effort: S
+
+### P7-M27-04 No test kills a real executor process in the middle of an apply
+
+- Status: closed (2026-10-29): not a decision, only work, done in review: option (c) in another form, `TestKillingTheExecutorProcessInTheMiddleOfAnApplyIsRecoveredOnTheRealKernel` runs the executor as a process of its own in the gateway's namespace and kills it with SIGKILL while it runs the nftables transaction of an apply; it is the test binary run again (the VM of the testbed has no toolchain to build the `chaosgw` binary), serving with the same executor and server code; written, not run yet (no network namespaces here), it is in `M27_LEVEL1`
+- Severity: minor
+- Reason: the review found that this was no decision (the plan's clause is "killing the executor mid-apply is recovered"). The M27 test clause is "killing the executor mid-apply is recovered". Level 1 (`TestKillingTheExecutorInTheMiddleOfAnApplyIsRecoveredOnTheRealKernel`) uses an `apply.Exec` wrapper that runs the operations in front of the nftables transaction and fails every later request, on the real kernel with the real tools: the kill falls between the operations of one request. The testbed runs the executor in the test process, so a SIGKILL would end the test. Level 2 kills the executor's container with `docker kill` but in a settled state, then runs `teardown`. The recovery does not depend on where the process ended (the next start compiles and applies the committed revision against what the kernel holds, `TestAnInterruptedApplyIsRecoveredByRecompilingTheCommittedRevision`), but a cut inside an operation (half of an `ip -batch`, a half-written executor state file) is not exercised.
+- Evidence: `internal/engine/integration_recovery_test.go` (`killedExec`), `internal/appliance/recovery_test.go`, `docs/development.md` "Recovery and stop (M27)", "Tests".
+- Task: decide whether a real kill is worth a test.
+- Options: (a) leave it: the recovery is state-independent and the operation-granularity cut covers the engine's side; (b) add a level 2 step that kills the executor container with `docker kill` while a large apply runs (the API applies a revision with many bridges or faults; the kill is timed on a marker such as the first new bridge), restarts the stack and asserts the kernel equals the committed revision; (c) a level 1 variant that runs `chaosgw exec` as a subprocess over its socket and SIGKILLs it.
+- Recommendation: (b) when a level 2 run is available: it uses the shipped containers and needs no new harness; (c) needs the binary and a root harness in the testbed for one test.
+- Acceptance: the chosen test kills the process while a request is running and finds the committed revision in the kernel afterwards.
+- Needs maintainer: no
+- Effort: M

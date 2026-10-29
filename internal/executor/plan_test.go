@@ -385,9 +385,9 @@ func TestPlanServiceNamespaceGolden(t *testing.T) {
 	if c := steps[1].Cmd.String(); c != "ip netns attach cgsvc 77" {
 		t.Errorf("%s", c)
 	}
-	// delete only removes a veth
+	// delete removes a veth and the name of the namespace (the namespace itself is the holder's, M27)
 	steps = mustPlan(t, `{"type":"service_ns","action":"delete","name":"cgsvc","host_if":"svc0","peer_if":"svc1","host_cidr":"169.254.100.1/30","peer_cidr":"169.254.100.2/30"}`)
-	if len(steps) != 1 || steps[0].Cmd.String() != "ip link delete dev svc0 type veth" || !steps[0].RunIfProbeOK {
+	if len(steps) != 2 || steps[0].Cmd.String() != "ip link delete dev svc0 type veth" || !steps[0].RunIfProbeOK || steps[1].Cmd.String() != "ip netns delete cgsvc" || !steps[1].Idempotent {
 		t.Errorf("%+v", steps)
 	}
 }

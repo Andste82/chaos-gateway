@@ -114,6 +114,8 @@ type options struct {
 	metricsTimeout time.Duration
 	// execWrap, when set, wraps the engine's apply.Exec (fault injection, e.g. a panicking goroutine).
 	execWrap func(apply.Exec) apply.Exec
+	// retryDelay is the engine's wait before it applies again after a failure (0: 10 s)
+	retryDelay time.Duration
 	// root reuses an existing data directory instead of a fresh t.TempDir(), to simulate a restart
 	// on the same disk state (M5-01).
 	root string
@@ -229,7 +231,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	if o.execWrap != nil {
 		eng = o.execWrap(eng)
 	}
-	e, err := engine.New(engine.Config{Store: st, Exec: eng, Namespace: o.namespace, Secrets: sec, DHCP: fd, ServiceNS: o.serviceNS, ServiceHolderPID: o.holderPID, ClassLimit: o.classLimit, OfflineAfter: o.offlineAfter,
+	e, err := engine.New(engine.Config{Store: st, Exec: eng, Namespace: o.namespace, Secrets: sec, DHCP: fd, ServiceNS: o.serviceNS, ServiceHolderPID: o.holderPID, ClassLimit: o.classLimit, OfflineAfter: o.offlineAfter, RetryDelay: o.retryDelay,
 		GenerationFile: filepath.Join(root, "api", "generation")})
 	if err != nil {
 		t.Fatal(err)

@@ -58,6 +58,9 @@ type ownerInit struct {
 	// genReserved is the generation high-water mark already persisted to GenerationFile (M5-01);
 	// 0 when it is unset or the file does not exist yet.
 	genReserved uint64
+	// failure is why the active revision, revision, could not be read (a damaged file): config is nil then and the start
+	// goes to the last known good revision (recovery.go).
+	failure string
 }
 
 // command is a request to the state owner.
@@ -225,6 +228,11 @@ type owner struct {
 	pending *pendingState
 	timer   clock.Timer
 
+	// boot is the recovery of the start until a revision has been applied and verified; safe is set while the gateway runs in
+	// safe mode (recovery.go)
+	boot *bootState
+	safe bool
+
 	running *inflight
 	queue   []cmdApply
 	// barriers wait for the apply of the latest generation.
@@ -283,6 +291,9 @@ func (e *Engine) runOwner(ctx context.Context, init *ownerInit) error {
 		e.desired.Store(o.committed)
 		e.signal()
 		o.prune(init.config)
+		o.boot = &bootState{revision: init.revision, cfg: init.config, gen: o.gen}
+	} else if init.failure != "" {
+		o.recoverUnreadable(init)
 	}
 	o.publish()
 	close(e.ready)
@@ -350,7 +361,11 @@ func (o *owner) scheduleRetry() {
 	}
 	o.retrying = true
 	e := o.e
-	o.e.cfg.Clock.AfterFunc(retryDelay, func() {
+	delay := retryDelay
+	if o.e.cfg.RetryDelay > 0 {
+		delay = o.e.cfg.RetryDelay
+	}
+	o.e.cfg.Clock.AfterFunc(delay, func() {
 		go func() {
 			select {
 			case e.cmds <- cmdRetry{}:
@@ -392,7 +407,12 @@ func (o *owner) prune(cfg *model.Configuration) {
 			wgKeep = append(wgKeep, c)
 		}
 	}
-	if err := wireguard.Prune(o.e.cfg.Secrets, wgKeep...); err != nil {
+	// the revision the start falls back to (M27) is superseded but not gone: it keeps the keys of what a later revision dropped
+	_, fallback, err := o.e.cfg.Store.Fallback()
+	if err != nil {
+		fallback = nil
+	}
+	if err := wireguard.PruneKeeping(o.e.cfg.Secrets, fallback, wgKeep...); err != nil {
 		o.e.cfg.Log.Warn("cannot remove unused secrets", "error", err)
 	}
 	o.pruneRevisions(cfg)
@@ -685,6 +705,7 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 	// the overlay changes this apply carries are confirmed, or taken back when it failed: before the
 	// revision flow below builds a restore, which must not contain them
 	reverted := o.settleOverlays(r)
+	o.bootResult(r)
 	if run := o.running; run != nil {
 		switch {
 		case run.failure == nil && r.d.Generation >= run.d.Generation && r.err == nil:
@@ -782,6 +803,7 @@ func (o *owner) finishApply(run *inflight, r applyResult) {
 		return
 	}
 	o.committed = run.d
+	o.leaveSafeMode()    // a revision that is applied and committed ends the recovery of the start and the safe mode
 	o.e.TriggerObserve() // the devices of the new revision
 	o.prune(run.cfg)
 	o.snap.Revision, o.snap.Config = run.d.Revision, run.d.Config
@@ -824,6 +846,7 @@ func (o *owner) confirm(rev int64, actor model.Actor) error {
 		o.timer.Stop()
 	}
 	o.committed = o.pending.d
+	o.leaveSafeMode()
 	o.prune(o.committed.Config)
 	o.snap.Revision, o.snap.Config = o.committed.Revision, o.committed.Config
 	o.pending = nil

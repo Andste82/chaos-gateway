@@ -228,10 +228,21 @@ func InterfaceKeys(cfg *model.Configuration, sec *secrets.Store) (map[string]str
 // configuration and every candidate that may still be applied: a candidate with a rotated key has
 // its keys in the store already.
 func Prune(sec *secrets.Store, cfgs ...*model.Configuration) error {
+	return PruneKeeping(sec, nil, cfgs...)
+}
+
+// PruneKeeping is Prune that also keeps the keys of fallback, the revision the start goes back to when the active one cannot
+// be applied (M27), as far as the given configurations have not replaced them: the interface key of a network that is gone,
+// and the keys of a client or link peer that is gone. A key that a rotation replaced is retired with the commit of the
+// rotation, whatever revision names it, so the fallback to a revision from before the rotation finds no key for that client.
+func PruneKeeping(sec *secrets.Store, fallback *model.Configuration, cfgs ...*model.Configuration) error {
 	keep := map[string]bool{}
+	subjects := map[string]bool{}
 	for _, cfg := range cfgs {
 		keepKeys(cfg, keep)
+		keySubjects(cfg, subjects)
 	}
+	keepKeysOfGone(fallback, subjects, keep)
 	ids, err := sec.IDs()
 	if err != nil {
 		return err
@@ -244,6 +255,54 @@ func Prune(sec *secrets.Store, cfgs ...*model.Configuration) error {
 		}
 	}
 	return nil
+}
+
+// keySubjects adds to subjects the ids of the clients and the link peers (LinkPeerKeyID) that cfg names, in any generation.
+func keySubjects(cfg *model.Configuration, subjects map[string]bool) {
+	forEachWireGuard(cfg, func(id string, wg model.WireGuardNetwork) {
+		for cid := range derefMap(wg.Clients) {
+			subjects[cid] = true
+		}
+		if wg.Peer != nil {
+			subjects[LinkPeerKeyID(id)] = true
+		}
+	})
+}
+
+// keepKeysOfGone adds to keep the keys cfg uses and subjects does not name: a network's own key while the network is not in
+// subjects either, and the keys of a client or link peer that is not.
+func keepKeysOfGone(cfg *model.Configuration, subjects, keep map[string]bool) {
+	forEachWireGuard(cfg, func(id string, wg model.WireGuardNetwork) {
+		for cid, c := range derefMap(wg.Clients) {
+			if !subjects[cid] {
+				keep[KeyID(cid, generationOf(c.Key))] = true
+			}
+		}
+		if wg.Peer != nil && !subjects[LinkPeerKeyID(id)] {
+			keep[KeyID(LinkPeerKeyID(id), generationOf(wg.Peer.Key))] = true
+		}
+		keep[id] = true
+	})
+}
+
+func forEachWireGuard(cfg *model.Configuration, f func(id string, wg model.WireGuardNetwork)) {
+	if cfg == nil || cfg.Networks == nil {
+		return
+	}
+	for id, n := range *cfg.Networks {
+		wg, err := n.AsWireGuardNetwork()
+		if err != nil || wg.Type != model.WireGuardNetworkTypeWireguard {
+			continue
+		}
+		f(id, wg)
+	}
+}
+
+func derefMap[V any](m *map[string]V) map[string]V {
+	if m == nil {
+		return nil
+	}
+	return *m
 }
 
 func keepKeys(cfg *model.Configuration, keep map[string]bool) {

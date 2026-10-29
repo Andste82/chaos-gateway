@@ -72,11 +72,16 @@ func (s *Server) runRetention() time.Duration {
 
 // closeRuns aborts the runs that are left, which removes their overlays through the engine, and waits for them.
 func (s *Server) closeRuns() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	s.closeRunsWithin(ctx)
+}
+
+// closeRunsWithin is closeRuns that waits until ctx ends.
+func (s *Server) closeRunsWithin(ctx context.Context) {
 	if s.runs == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	s.runs.Close(ctx)
 	if s.runsTemp != "" {
 		_ = os.RemoveAll(s.runsTemp)

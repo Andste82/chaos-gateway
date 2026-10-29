@@ -384,6 +384,11 @@ func (e *Executor) stopProbeClient(name string) {
 	}
 }
 
+// StopProbeClients stops the DHCP clients of all probes and waits for them: the first step of the stop cleanup (M27), so that
+// no client sends or configures anything while the probes' namespaces and pairs are removed. A probe that is made again
+// (ensure) starts its client again.
+func (e *Executor) StopProbeClients() { e.stopProbeClients() }
+
 func (e *Executor) stopProbeClients() {
 	e.probes.mu.Lock()
 	var names []string

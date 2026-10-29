@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Andste82/chaos-gateway/internal/apply"
@@ -25,7 +26,11 @@ const (
 )
 
 // idleSocket is the DHCP socket of a probe in a test: nothing ever answers.
-type idleSocket struct{ done chan struct{} }
+type idleSocket struct {
+	done chan struct{}
+	// closed counts the sockets that were closed (newProbeEnv); nil in a test that does not count
+	closed *atomic.Int32
+}
 
 func (s *idleSocket) Send([]byte, netip.AddrPort) error { return nil }
 func (s *idleSocket) Recv() ([]byte, error)             { <-s.done; return nil, net.ErrClosed }
@@ -34,6 +39,9 @@ func (s *idleSocket) Close() error {
 	case <-s.done:
 	default:
 		close(s.done)
+		if s.closed != nil {
+			s.closed.Add(1)
+		}
 	}
 	return nil
 }
@@ -44,7 +52,7 @@ func newProbeEnv(t *testing.T) *env {
 	e := newEnv(t)
 	ex, err := executor.New(e.k, executor.WithNetnsInode(e.k.NetnsInode), executor.WithProbeSocket(func(ns, ifname string) (probe.Socket, error) {
 		e.sockets.Add(1)
-		return &idleSocket{done: make(chan struct{})}, nil
+		return &idleSocket{done: make(chan struct{}), closed: &e.closed}, nil
 	}))
 	if err != nil {
 		t.Fatal(err)

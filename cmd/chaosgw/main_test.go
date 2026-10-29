@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/apply/kernelsim"
 	"github.com/Andste82/chaos-gateway/internal/auth"
+	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/secrets"
 
 	"go.uber.org/goleak"
@@ -102,6 +104,15 @@ func TestExecStartsServesAndStopsOnSIGTERM(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
+	// the stop reads the kernel to remove what the gateway made: an unprivileged test process has no kernel to read, so the
+	// executor runs on a simulated one (the real tools are the level 1 test of the stop cleanup)
+	old := newExecRunner
+	newExecRunner = func() executor.Runner {
+		k := kernelsim.New()
+		k.AddDockerChain()
+		return k
+	}
+	defer func() { newExecRunner = old }()
 	sock := dir + "/e.sock"
 	var out, errb bytes.Buffer
 	done := make(chan int, 1)

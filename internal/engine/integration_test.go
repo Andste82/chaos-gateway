@@ -70,6 +70,12 @@ func newReal(t *testing.T, wrap func(apply.Exec) apply.Exec, opts ...bool) *real
 // real nft and ip commands: a test can hold or time a command there while the kernel stays real.
 func newRealRunner(t *testing.T, wrapRunner func(executor.Runner) executor.Runner, wrap func(apply.Exec) apply.Exec, opts ...bool) *real {
 	t.Helper()
+	return newRealConfig(t, wrapRunner, wrap, nil, opts...)
+}
+
+// newRealConfig is newRealRunner with a change to the engine's configuration (for example a service namespace).
+func newRealConfig(t *testing.T, wrapRunner func(executor.Runner) executor.Runner, wrap func(apply.Exec) apply.Exec, tweak func(*engine.Config), opts ...bool) *real {
+	t.Helper()
 	var runner executor.Runner = executor.NewExecRunner()
 	if wrapRunner != nil {
 		runner = wrapRunner(runner)
@@ -102,7 +108,11 @@ func newRealRunner(t *testing.T, wrapRunner func(executor.Runner) executor.Runne
 	if len(opts) > 0 && opts[0] {
 		clk = &clock.Real{}
 	}
-	e, err := engine.New(engine.Config{Store: st, Exec: x, Namespace: top.GW.Name, Clock: clk})
+	ecfg := engine.Config{Store: st, Exec: x, Namespace: top.GW.Name, Clock: clk}
+	if tweak != nil {
+		tweak(&ecfg)
+	}
+	e, err := engine.New(ecfg)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -179,3 +179,31 @@ func TestRoutingWithoutABirdDirectoryFailsInPlan(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// The stop withdraws BIRD's protocols last, so that a BIRD container that has stopped already (it depends on the executor, so
+// compose stops it first) does not end the cleanup before the IFB device and the scope are dealt with (M27).
+func TestTeardownWithdrawsBIRDLast(t *testing.T) {
+	e := newWGEnv(t)
+	withBGP(e)
+	res := e.apply()
+	if res.After.Bird == nil || !res.After.Bird.Running {
+		t.Fatalf("%+v", res.After.Bird)
+	}
+	p, err := apply.Teardown(context.Background(), e.exec(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if birdOps(&apply.Result{Plan: p}) != 1 {
+		t.Fatalf("plan %v", p.Summary)
+	}
+	if _, last := p.Ops[len(p.Ops)-1].(*executor.Bird); !last {
+		t.Errorf("BIRD is not the last operation: %T", p.Ops[len(p.Ops)-1])
+	}
+	s, err := apply.ReadState(context.Background(), e.exec(), "", apply.Want{BirdInstance: "chaosgw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left := apply.Leftovers(s, nil); len(left) != 0 {
+		t.Errorf("left: %v", left)
+	}
+}

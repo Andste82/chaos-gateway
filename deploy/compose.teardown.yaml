@@ -1,0 +1,57 @@
+# The teardown container (plan §3.8 "Stop", D35, M27): `chaosgw teardown` removes what Chaos Gateway created in the kernel for a
+# gateway whose executor was killed, and with --purge empties the volumes. The executor's own container mounts only the volumes
+# it needs (the secrets read-only, no revisions, no audit log), so this service mounts every volume of the deployment writable;
+# it is the executor's profile otherwise (privileged, the host's network stack and /run/netns), and it refuses while an executor
+# is serving on the socket in chaosgw-run.
+#
+# It is under a profile: `docker compose up` never starts it. Run it with the project name of the deployment, alone or named in
+# COMPOSE_FILE with the others:
+#   docker compose -f compose.teardown.yaml run --rm teardown [--purge]
+services:
+  teardown:
+    image: chaos-gateway:${CHAOSGW_VERSION:-latest}
+    # the flags that name this container's places are in the entrypoint, because `compose run teardown --purge` replaces the command
+    entrypoint: ["chaosgw", "teardown", "--socket", "/run/chaosgw/exec.sock", "--state", "/var/lib/chaosgw/exec/state.json", "--bird-dir", "/run/chaosgw-bird"]
+    profiles: ["teardown"]
+    user: "0:0"
+    privileged: true
+    network_mode: host
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=0700
+      # iptables -w keeps its lock file in /run; the volumes below are mounted on top
+      - /run:size=4m,mode=0755
+    volumes:
+      # the executor's socket: a serving executor is refused
+      - chaosgw-run:/run/chaosgw
+      - chaosgw-bird:/run/chaosgw-bird
+      # the volumes --purge empties (cmd/chaosgw/teardown.go, dataDirs)
+      - chaosgw-state:/var/lib/chaosgw/state
+      - chaosgw-secrets:/var/lib/chaosgw/secrets
+      - chaosgw-api:/var/lib/chaosgw/api
+      - chaosgw-service:/var/lib/chaosgw/service
+      - chaosgw-tlsca:/var/lib/chaosgw/tlsca
+      - chaosgw-captures:/var/lib/chaosgw/captures
+      - chaosgw-exec-state:/var/lib/chaosgw/exec
+      - chaosgw-kea-state:/var/lib/kea
+      # the names of the probes' namespaces and of the service namespace are removed with the host
+      - type: bind
+        source: /run/netns
+        target: /run/netns
+        bind:
+          propagation: rshared
+          create_host_path: true
+
+volumes:
+  chaosgw-run:
+  chaosgw-bird:
+  chaosgw-state:
+  chaosgw-secrets:
+  chaosgw-api:
+  chaosgw-service:
+  chaosgw-tlsca:
+  chaosgw-captures:
+  chaosgw-exec-state:
+  chaosgw-kea-state:

@@ -251,13 +251,3 @@ func (s *Server) bindError(c *gin.Context, err error, status int) {
 	}
 	s.write(c, newProblem(code, "%s", err))
 }
-
-// unsupported answers an operation whose milestone is not in this build.
-func (s *Server) unsupported(c *gin.Context) {
-	o := s.opOf(c)
-	m := "a later milestone"
-	if o != nil {
-		m = "milestone " + o.Milestone
-	}
-	s.write(c, newProblem(model.ErrorCodeUnsupportedFeature, "this operation is not available in this build; it arrives with %s (see GET /capabilities)", m))
-}

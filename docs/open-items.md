@@ -395,13 +395,13 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 
 | Item | Milestone |
 |---|---|
-| M1: container image has no non-root user (`deploy/Dockerfile`) | M29 |
+| ~~M1: container image has no non-root user (`deploy/Dockerfile`)~~ — done in M29: the image has `USER 65532:65532`, every compose file names its user (`TestEveryContainerNamesItsUserAndTheImageDefaultsToTheUnprivilegedOne`) | M29 |
 | ~~M2: overlay `expires_at` / `lease_expires_at` not set by `NewOverlay`~~ — set since M8a (`internal/overlay/store.go`, P2-AUDIT-16) | M8a |
 | ~~M3: DNS set updates spawn `nft` per call, no persistent netlink connection~~ — done in M20: the executor operation `nft_dns_elements` writes them on a persistent netlink connection (google/nftables) beside the plans | M20 (plan §3.4) |
 | M4: verify matches rules by comment hash only (expressions not compared) | M38 drift detection (partial) |
 | M4: Docker started after the last apply is not noticed (`DOCKER-USER`) | M38 drift detection (partial) |
 | M4c: received-prefix list in routing view | M14 |
-| M5: certificate loaded once at start, SANs fixed (`/system/certificate`) | M29 |
+| ~~M5: certificate loaded once at start, SANs fixed (`/system/certificate`)~~ — done in M29: `GET`, `PUT` and `DELETE /system/certificate` replace the certificate for new connections without a restart, the installed certificate has the names its owner chose (`api.Certificates`, `TestTheCertificateIsReplacedForNewConnectionsAndCanBeReset`) | M29 |
 | ~~M5: `lockout_protected` never produced~~ — decided 2026-10-11 (P2-M9-08): the anti-lockout rule cannot be overridden and lockout-relevant configuration changes take commit-confirm, which is enough; the code stays reserved | decided |
 | ~~M5: `capacity_exceeded` never produced~~ — produced for classes, fault ids, map cells and rules since M8a; the preview refuses with it (M10 test) | M8a, M10 |
 | ~~M5: `target_busy` never produced~~ — produced since M15: 409 on `POST /runs?queue=false` for a target with a run | M15 |
@@ -3216,6 +3216,32 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is comple
 - Effort: S
 
 ## Phase 7 open items
+
+### P7-M29-01 Who reviews the executor's interface from outside, when, and for how long
+
+- Status: new
+- Severity: major
+- Reason: needs-decision. The plan's M29 Scope ends with the "external review of the executor interface". A review by someone who did not write the code is a human activity: it needs a reviewer, a date and a scope, and it is a gate of the release (M30). What can be prepared is done and checked in: the threat model, the accepted risks, the table of mitigations with the test that holds each, the six fuzz targets (`make fuzz`, nightly with 45 minutes each), the source list and the command lines to run the tests, all in `docs/development.md` "Security hardening (M29)" ("Preparation for the external review"). No code can decide who reviews or whether V1 may ship without the review.
+- Evidence: `docs/plan.md` M29 Scope, `docs/development.md` "Security hardening (M29)", "Preparation for the external review" (the hand-over package), `Makefile` (`fuzz`), `.github/workflows/nightly.yml` (job `fuzz`).
+- Task: decide who performs the review of the executor interface (the Unix socket protocol, the operation decoder and planner, the capture path, the privileged container), when it takes place, how long it may take, and whether V1 is released without it.
+- Options: (a) a person from outside the project reviews before the V1 release, for a fixed time (about two days for the 6,500 lines of the interface plus the fuzz runs), and its findings are fixed or recorded before the tag; (b) the release goes out with the self-review and the fuzz runs, the external review follows within a named period after V1, and the release notes say the interface has not been reviewed from outside yet; (c) the review is dropped from V1 and moves to M38 (After V1) with the other deferred items.
+- Recommendation: (a) if a reviewer is available before the release: the interface is the one place where a taken-over API process becomes root on the host, and two days of a second pair of eyes are cheap beside that. (b) if no reviewer is found: the release notes must say so (M30).
+- Acceptance: the plan's M29 text names the reviewer and the date (for (a)) or the period after V1 (for (b)); for (a) the findings are in `docs/open-items.md` and closed before the tag.
+- Needs maintainer: yes
+- Effort: S for the decision, M for the review itself
+
+### P7-M29-02 Kea runs without `no-new-privileges`
+
+- Status: new
+- Severity: minor
+- Reason: needs-decision. The review of the containers (M29) found one container that does not set `no-new-privileges`: `kea` (user 0:65532 with the capabilities `NET_RAW`, `NET_BIND_SERVICE`, `CHOWN`, `FOWNER`, `DAC_OVERRIDE`). Kea's Debian package may start its binaries through file capabilities, which `no-new-privileges` would break, and nothing here could start the container to try (no Docker on the development machine). The exception is pinned in `TestNoContainerWidensItsSandbox` (no other container may lack the option) and in the level 2 deployment test, so it does not widen by accident.
+- Evidence: `docs/development.md` "Security hardening (M29)" (the container table, decision 7), `deploy/compose.kea.yaml`, `internal/executor/hardening_review_test.go`.
+- Task: decide whether the exception stays for V1 or `no-new-privileges` is required once a level 2 run shows Kea works with it.
+- Options: (a) accept the exception for V1: the container has a read-only root file system and five capabilities (raw sockets for DHCP in the host network namespace), and the tests keep the exception from growing; (b) try `no-new-privileges: true` on the nightly level 2 run, and if the DHCP test passes keep it, remove the exception from the review test, the level 2 test and the table; if it fails keep (a) and note why in the table.
+- Recommendation: (b): it costs one nightly run, and (a) stays the fallback if Kea's package needs the file capabilities.
+- Acceptance: for (a) the table in `docs/development.md` names the reason as accepted; for (b) the compose file sets the option, the tests no longer except `kea`, and the level 2 DHCP test passes.
+- Needs maintainer: yes
+- Effort: S
 
 ### P7-M28-01 The arm64 image is tested by an emulated level 2 smoke test and `smoke-image.sh`, not by the namespace testbed in emulation (level 1b)
 

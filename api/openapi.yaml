@@ -2087,6 +2087,11 @@ paths:
       tags: [system]
       operationId: getCertificate
       summary: The UI/API HTTPS certificate
+      description: |
+        The certificate the management listeners present: the one that was installed with `PUT`, else
+        the gateway's own self-signed one. The loopback address and the link to the service
+        namespace always present the gateway's own certificate, which the service containers verify
+        (it is published to them); an installed certificate does not have to name those addresses.
       x-milestone: M29
       x-required-scope: read
       responses:
@@ -2100,6 +2105,13 @@ paths:
       tags: [system]
       operationId: replaceCertificate
       summary: Replace the self-signed HTTPS certificate (takes effect for new connections)
+      description: |
+        Installs a certificate chain and its private key for the management listeners. The
+        certificate must be valid now, name at least one DNS name or IP address, the key must
+        belong to it, an RSA key needs at least 2048 bits, and the chain must be in order (leaf
+        first, each certificate signed by the next). The key is stored in the secrets directory
+        and never returned. Established connections keep the certificate they started with.
+        The change is audit-logged (`certificate.install`) without the key.
       x-milestone: M29
       x-required-scope: full
       requestBody:
@@ -2110,6 +2122,20 @@ paths:
       responses:
         '200':
           description: Installed
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CertificateInfo'}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      tags: [system]
+      operationId: resetCertificate
+      summary: Go back to the gateway's own self-signed certificate
+      description: Removes the installed certificate and its key. Audit-logged as `certificate.reset`.
+      x-milestone: M29
+      x-required-scope: full
+      responses:
+        '200':
+          description: The certificate the listeners present now
           content:
             application/json:
               schema: {$ref: '#/components/schemas/CertificateInfo'}
@@ -6526,7 +6552,19 @@ components:
           type: array
           items: {type: string}
         self_signed: {type: boolean}
-        fingerprint_sha256: {type: string}
+        fingerprint_sha256:
+          type: string
+          description: SHA-256 of the leaf certificate (64 lower-case hex digits), what `chaosctl --fingerprint` pins.
+        serial_number:
+          type: string
+          description: Serial number of the leaf certificate, in hex.
+        source:
+          type: string
+          enum: [own, installed]
+          description: "`own`: the gateway's own self-signed certificate; `installed`: one that was put with `PUT /system/certificate`."
+        chain_length:
+          type: integer
+          description: Number of certificates the listeners send (the leaf and the intermediates).
     CertificateUpload:
       type: object
       required: [certificate, private_key]

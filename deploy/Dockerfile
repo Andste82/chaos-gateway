@@ -80,6 +80,12 @@ RUN mkdir -p /var/lib/chaosgw/state /var/lib/chaosgw/secrets /var/lib/chaosgw/ap
     && chown 65532:65532 /var/lib/chaosgw/state /var/lib/chaosgw/secrets /var/lib/chaosgw/api /var/lib/chaosgw/service /var/lib/chaosgw/captures /var/lib/chaosgw/tlsca /run/chaosgw-svcns /run/chaosgw-kea-events \
     && chmod 0700 /var/lib/chaosgw/secrets \
     && chmod 0750 /run/chaosgw-kea-events
+# The image's default user is the unprivileged one (M29, security review; the M1 item "no non-root user"): a container started from
+# it without a `user` (a manual `docker run`, a service somebody adds to the compose file) is not root. Every service of
+# deploy/compose.yaml names its user all the same, and the three that are root (the executor and the teardown with its privileges,
+# BIRD and Kea for the capabilities they need) say so; internal/executor/hardening_review_test.go pins both. The commands of the
+# documentation that need root (moving the old volumes) pass --user 0:0.
+USER 65532:65532
 LABEL org.opencontainers.image.source="https://github.com/Andste82/chaos-gateway" \
       org.opencontainers.image.documentation="https://github.com/Andste82/chaos-gateway/blob/main/docs/install.md"
 ENTRYPOINT ["chaosgw"]

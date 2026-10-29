@@ -92,6 +92,8 @@ type gw struct {
 	cap *fakeCapturer
 	// root is the directory of the gateway's data
 	root string
+	// certs holds the certificates of the HTTPS listeners (M29)
+	certs *api.Certificates
 }
 
 type options struct {
@@ -281,6 +283,12 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 	if err := tlsresponder.EnsureCAs(apiCfg.TLSCADir, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	// the HTTPS certificates (M29): the gateway's own, as the daemon makes it
+	certs, err := api.OpenCertificates(filepath.Join(root, "secrets", "tls"), []string{"gateway.test"}, nil, time.Now, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiCfg.Certificates = certs
 	srv, err := api.New(apiCfg)
 	if err != nil {
 		t.Fatal(err)
@@ -300,7 +308,7 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 		t.Fatal(err)
 	}
 	jar, _ := cookiejar.New(nil)
-	g := &gw{t: t, k: k, ex: ex, st: st, sec: sec, au: au, log: lg, e: e, srv: srv, ts: ts, client: &http.Client{Jar: jar, Timeout: time.Minute}, router: router, doc: doc, authPath: authPath, dhcp: fd, cap: fc, root: root}
+	g := &gw{t: t, k: k, ex: ex, st: st, sec: sec, au: au, log: lg, e: e, srv: srv, ts: ts, client: &http.Client{Jar: jar, Timeout: time.Minute}, router: router, doc: doc, authPath: authPath, dhcp: fd, cap: fc, root: root, certs: certs}
 	switch {
 	case o.done:
 		g.completeSetupDirectly()

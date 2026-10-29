@@ -326,6 +326,49 @@ func TestLoginIsRateLimitedPerClient(t *testing.T) {
 	}
 }
 
+// Plan §2.16: after five wrong passwords the wait doubles with every further failure and stops at 15 minutes, however many
+// failures follow (the shift that computes it overflows long before that).
+func TestTheWaitDoublesUpToFifteenMinutesAndStaysThere(t *testing.T) {
+	s, clk, _ := open(t)
+	_ = s.CompleteSetup("a long enough password")
+	var waits []time.Duration
+	for i := 1; i <= 90; i++ {
+		_, err := s.Login("wrong password!", "attacker")
+		var rl *RateLimited
+		switch {
+		case i < maxFailures:
+			if !errors.Is(err, ErrBadCredentials) {
+				t.Fatalf("failure %d: %v", i, err)
+			}
+			continue
+		case !errors.As(err, &rl):
+			t.Fatalf("failure %d: %v", i, err)
+		}
+		waits = append(waits, rl.RetryAfter)
+		// while the wait runs even the right password is refused, with the time that is left
+		if _, err := s.Login("a long enough password", "attacker"); !errors.As(err, &rl) || rl.RetryAfter != waits[len(waits)-1] {
+			t.Fatalf("failure %d: during the wait %v", i, err)
+		}
+		clk.Advance(waits[len(waits)-1])
+	}
+	// the values of the plan and of docs/development.md, written out and not computed from the constants of the implementation:
+	// five failures, then 5 s, 10 s, 20 s ... doubling to 5 min 20 s, 10 min 40 s and the cap of 15 minutes
+	literal := []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second, 160 * time.Second,
+		320 * time.Second, 640 * time.Second, 15 * time.Minute}
+	if maxFailures != 5 || len(waits) < len(literal) {
+		t.Fatalf("maxFailures is %d, %d waits were seen", maxFailures, len(waits))
+	}
+	for i, w := range waits {
+		want := 15 * time.Minute
+		if i < len(literal) {
+			want = literal[i]
+		}
+		if w != want {
+			t.Errorf("failure %d waits %s, want %s", i+maxFailures, w, want)
+		}
+	}
+}
+
 func TestTheServiceTokenIsForTheServicesOnly(t *testing.T) {
 	s, _, dir := open(t)
 	file := filepath.Join(t.TempDir(), "service", "token")

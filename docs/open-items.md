@@ -48,14 +48,14 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   [the remaining points](#phase-5-audit-result-of-the-round-and-remaining-points). The one item that needed the
   maintainer, P5-AUDIT-10 (what a test network without a `dhcp` block means), was decided on 2026-10-27 (option (b)) and is
   fixed on the same branch, see [Phase 5 audit items for the maintainer](#phase-5-audit-items-for-the-maintainer). The nine open items P5-M20-01 to P5-M23-01 were decided by the maintainer on 2026-10-25, see [Phase 5 open items](#phase-5-open-items) at the end of the file: eight closed (the forms and the interception UI became the milestones M23b and M23c; P5-M21-02 and P5-M22-03, the per-case field `upstream`, are implemented on the branch `phase-5b` and ran green in CI run 40258339299 on `aebbae8`, so M21 and M22 are done) and one waiting for H1 (P5-M22-02).
-- **Phase 6** (M24 to M26a: diagnostics, probes and calibration, observability, probe management; on the branch `worktree-phase-6`, PR #125, not merged yet; CI run 40771332746 on `7048cae` green in every job): audited on
+- **Phase 6** (M24 to M26a: diagnostics, probes and calibration, observability, probe management; merged to `main` with PR #125 on 2026-10-29, `6a3e9f2`; CI run 40771332746 on `7048cae` and CI run 40787584917 on `815441e`, the head of the PR, green in every job): audited on
   2026-10-28 at `b80fa86`. The result is in [Phase 6 audit result](#phase-6-audit-result), right before the Phase 6 open items: 14 items of major and 51 of minor
   severity, P6-AUDIT-01 to P6-AUDIT-69 except -39, -56, -57 and -68, which the verifiers refuted. All 65 are closed on the branch (seven fix commits, `c29d100` to `b00df9c`):
   63 with a change of their own, two (P6-AUDIT-16 and -30) already fixed by another item of the round; six are fixed in part or differently (P6-AUDIT-13, -22, -25,
-  -42, -43, -55), see the verdict table and [the remaining points](#phase-6-audit-result-of-the-round-and-remaining-points). No audit item needed the maintainer. The CI run
-  that covers the fix commits has not happened yet. The open items are
+  -42, -43, -55), see the verdict table and [the remaining points](#phase-6-audit-result-of-the-round-and-remaining-points). No audit item needed the maintainer. CI run 40771332746
+  covers the fix commits and the CI round after the audit and is green in every job. The open items are
   under [Phase 6 open items](#phase-6-open-items) at the end of the file. P6-M24-01 (the destinations of a diagnostic) and P6-M25-01 (probe management in the web UI and with
-  `chaosctl`, which is M26a) were decided by the maintainer on 2026-10-28 (option (a) each) and are closed; P6-M26a-01 (whether M26a belongs to V1) is open.
+  `chaosctl`, which is M26a) were decided by the maintainer on 2026-10-28 (option (a) each) and are closed; P6-M26a-01 (whether M26a belongs to V1) was decided by the maintainer on 2026-10-29 (option (a): part of V1) and is closed. No item of Phase 6 is open.
 
 ## Phase 1 audit result
 
@@ -3076,7 +3076,7 @@ Regressions to code from before Phase 6: none found.
 
 ### Phase 6 audit: result of the round and remaining points
 
-The round after the audit (2026-10-28, branch `worktree-phase-6`, PR #125, not merged yet) closed every confirmed item, see the Fix column of
+The round after the audit (2026-10-28, branch `worktree-phase-6`, merged to `main` with PR #125 on 2026-10-29) closed every confirmed item, see the Fix column of
 the table. The seven fix commits, by lens: `c29d100` (probes, P6-AUDIT-01 to -13), `d10a94e` (diagnostics and security, -14 to -20),
 `a92abff` (tests, -21 to -28), `d6efa02` (API, spec and docs, -29 to -38 and -40), `ecc5ac8` (web app, -41 to -49), `4d4dbd3` (metrics
 and the flow view, -50 to -55, -58, -59) and `b00df9c` (plan completeness, -60 to -67 and -69). The final checks of the round and what
@@ -3172,7 +3172,7 @@ in `M25_LEVEL1`) are vetted with `-tags testbed` and run in the next CI run, whi
 
 ## Phase 6 open items
 
-Phase 6 (M24 to M26a, diagnostics, observability and probe management) is under way: M24, M25, M26 and M26a are implemented and closed after their reviews, all on the branch `worktree-phase-6` (not merged yet); M26 found nothing that needs a decision, M26a one (P6-M26a-01). Items below are what the implementation of a milestone found that no later milestone of the plan completes and that needs a decision of the maintainer.
+Phase 6 (M24 to M26a, diagnostics, observability and probe management) is complete: M24, M25, M26 and M26a are implemented and closed after their reviews and merged to `main` with PR #125 on 2026-10-29; M26 found nothing that needs a decision, M26a one (P6-M26a-01, decided on 2026-10-29: part of V1). Items below are what the implementation of a milestone found that no later milestone of the plan completes and that needs a decision of the maintainer.
 
 ### P6-M24-01 A diagnostic can be pointed at any address the gateway can reach, by a token with the scope `overlays`
 
@@ -3202,7 +3202,7 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is under 
 
 ### P6-M26a-01 Whether probe management (M26a) belongs to V1
 
-- Status: new
+- Status: closed (2026-10-29): decided by the maintainer, option (a): M26a is part of V1, like M25; the "V1 Scope Summary" of `docs/plan.md` names it
 - Severity: minor
 - Reason: needs-decision. The V1 scope summary of `docs/plan.md` names M24 and M25 and does not name M26a, which the maintainer added on 2026-10-28 (P6-M25-01, option (a)) as the part of M25 that lets a user add, change and remove a probe in the web UI and with `chaosctl`. M25 itself is in V1. Without M26a a probe is made only by editing the configuration (a revision made with the API, a merge patch, or the YAML import), so the probes of V1 (testing "before the hardware is connected", plan §2.12) would be reachable from the web UI for diagnostics and measurements but not creatable there. Whether the feature ships with V1 is a scope decision; the plan's rule is that nothing is in V1 unless the maintainer put it there (the "V1 Scope Summary" of `docs/plan.md` lists what is).
 - Evidence: `docs/plan.md` ("V1 Scope Summary", M26a, §2.17 "Probes"), `docs/development.md` "Probe management (M26a)", `docs/open-items.md` P6-M25-01.

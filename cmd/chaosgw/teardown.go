@@ -75,6 +75,9 @@ func runTeardown(args []string, stdout, stderr io.Writer) int {
 	defer ex.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
+	for _, name := range ex.RemoveCheckNamespaces(ctx) {
+		fmt.Fprintf(stdout, "removed the namespace %s of an interrupted host check\n", name)
+	}
 	plan, err := apply.Teardown(ctx, apply.Local{E: ex}, "", *serviceNS)
 	if plan != nil {
 		for _, line := range plan.Summary {
@@ -97,8 +100,9 @@ func runTeardown(args []string, stdout, stderr io.Writer) int {
 	return purgeVolumes(dataDirs, stdout, stderr)
 }
 
-// purgeVolumes empties the data directories that are mounted here and says which are not: a volume that this container does
-// not mount is removed with `docker compose down -v`.
+// purgeVolumes empties the data directories that are mounted here and says which are not. They are directories of the host
+// (plan §3.6, bind mounts): `docker compose down -v` removes named volumes only and leaves them, so a directory that is not
+// mounted writable here is named, to be removed on the host.
 func purgeVolumes(dirs []struct{ path, what string }, stdout, stderr io.Writer) int {
 	code := 0
 	var absent []string
@@ -114,7 +118,7 @@ func purgeVolumes(dirs []struct{ path, what string }, stdout, stderr io.Writer) 
 			continue
 		}
 		if unix.Access(d.path, unix.W_OK) != nil {
-			fmt.Fprintf(stderr, "chaosgw teardown: %s is mounted read-only here: %s stay (docker compose down -v removes the volume)\n", d.path, d.what)
+			fmt.Fprintf(stderr, "chaosgw teardown: %s is mounted read-only here: %s stay (remove them with rm -rf on the host: docker compose down -v leaves the directories of the host alone)\n", d.path, d.what)
 			code = 1
 			continue
 		}
@@ -130,7 +134,7 @@ func purgeVolumes(dirs []struct{ path, what string }, stdout, stderr io.Writer) 
 		}
 	}
 	if len(absent) > 0 {
-		fmt.Fprintf(stdout, "Not mounted in this container, so not removed: %s (docker compose down -v removes the volumes).\n", strings.Join(absent, ", "))
+		fmt.Fprintf(stdout, "Not mounted in this container, so not removed: %s (remove them with rm -rf on the host: docker compose down -v leaves the directories of the host alone).\n", strings.Join(absent, ", "))
 	}
 	return code
 }

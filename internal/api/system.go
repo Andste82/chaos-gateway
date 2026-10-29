@@ -469,7 +469,7 @@ func (s *Server) healthReport(parent context.Context) (string, []healthComponent
 // GetPreflight implements GET /system/preflight: the checks of the host made when the process started, and
 // the check of every interface that is or may become a test interface, made now (P3-M12-07).
 func (s *Server) GetPreflight(c *gin.Context) {
-	osc := s.readOSConfig(contextOf(c))
+	osc := s.readPreflightInputs(contextOf(c))
 	c.JSON(200, s.preflightReport(s.hostInterfaces(osc), osc, true, false))
 }
 
@@ -499,6 +499,9 @@ type hostInterface struct {
 type osConfig struct {
 	state *executor.HostNetState
 	err   error
+	// host holds the checks the executor made of the host (plan §3.4, M28); hostErr is set when they could not be read
+	host    *executor.HostPreflightState
+	hostErr error
 }
 
 func (s *Server) readOSConfig(ctx context.Context) osConfig {
@@ -512,6 +515,20 @@ func (s *Server) readOSConfig(ctx context.Context) osConfig {
 		s.log.Debug("cannot read the host's network configuration", "error", err)
 	}
 	return osConfig{state: st, err: err}
+}
+
+// readPreflightInputs is readOSConfig and the executor's checks of the host (M28): what the report of the preflight is made of.
+// The interface listing, which polls, needs only the first.
+func (s *Server) readPreflightInputs(ctx context.Context) osConfig {
+	osc := s.readOSConfig(ctx)
+	osc.host, osc.hostErr = s.cfg.Engine.HostPreflight(ctx)
+	switch changed, before := s.hostPreflightErr.set(osc.hostErr); {
+	case changed && osc.hostErr != nil:
+		s.log.Warn("cannot read the executor's preflight", "error", osc.hostErr)
+	case changed:
+		s.log.Info("the executor's preflight can be read again", "error_before", before)
+	}
+	return osc
 }
 
 // lastError remembers the message of the last failure of a repeated operation (empty: it succeeded).
@@ -701,7 +718,7 @@ func (s *Server) GetSetup(c *gin.Context) {
 		return
 	}
 	// an unauthenticated caller shares the executor's read with the others (setupOSConfig)
-	osc := s.setupOSConfig.get(contextOf(c), s.clk.Now(), s.readOSConfig)
+	osc := s.setupOSConfig.get(contextOf(c), s.clk.Now(), s.readPreflightInputs)
 	ifaces := s.hostInterfaces(osc)
 	st := gin.H{"completed": false, "interfaces": ifaces, "preflight": s.preflightReport(ifaces, osc, false, true)}
 	snap := s.cfg.Engine.Snapshot()
@@ -722,7 +739,8 @@ func (s *Server) GetSetup(c *gin.Context) {
 // interfaces, not a candidate's warning. noRun adds a warning when no check of the host has run in this
 // process (Config.Preflight is nil or returns nil; a report without a time, such as a host that cannot be
 // inspected, is a check that ran). public is set for the unauthenticated GET /setup: the report then does not
-// quote why the executor could not read the configuration (that error is in the log). It still names the
+// quote why the executor could not read the configuration (that error is in the log), nor the messages of the executor's checks of
+// the host (it gets their status and fix). It still names the
 // files that cannot be read and the entries and connections that configure an interface, because the
 // wizard must say what to remove (plan §3.4, the Phase 3 audit).
 func (s *Server) preflightReport(ifaces []hostInterface, osc osConfig, noRun, public bool) *PreflightReport {
@@ -740,6 +758,24 @@ func (s *Server) preflightReport(ifaces []hostInterface, osc osConfig, noRun, pu
 	}
 	add := func(c PreflightCheck) {
 		r.Checks = append(r.Checks, c)
+	}
+	switch {
+	case osc.host != nil:
+		for _, c := range osc.host.Checks {
+			if public {
+				// the messages hold tool versions, the stderr of tools, the names of other firewalls' tables and file system errors: the
+				// caller of the unauthenticated endpoint gets the status and the fix, the executor logs the rest at its start
+				c.Message = "the check passed"
+				if c.Status != "ok" {
+					c.Message = "the check did not pass (the reason is in the log of the executor)"
+				}
+			}
+			add(PreflightCheck{ID: c.ID, Status: c.Status, Message: c.Message, Fix: c.Fix})
+		}
+	case osc.hostErr != nil && !public:
+		add(PreflightCheck{ID: "host", Status: "warn", Message: "the executor's checks of the host cannot be read: " + firstLine(osc.hostErr.Error())})
+	case osc.hostErr != nil:
+		add(PreflightCheck{ID: "host", Status: "warn", Message: "the executor's checks of the host cannot be read (the reason is in the log of the gateway)"})
 	}
 	switch {
 	case osc.err != nil && public:

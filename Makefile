@@ -23,7 +23,7 @@ LDFLAGS := -s -w -X $(PKG)/internal/version.Version=$(VERSION) -X $(PKG)/interna
 RACE := $(shell command -v gcc >/dev/null 2>&1 && echo -race)
 
 .PHONY: help tools generate generate-go generate-web generate-python \
-        check-spec check-generated check-clients lint test fuzz test-web test-examples test-testbed test-vm test-appliance \
+        check-spec check-generated check-clients check-compose compose lint test fuzz test-web test-examples test-testbed test-vm test-appliance \
         test-privileged vm-up vm-down vm-status vm-test vm-exec test-arm64 test-e2e build build-web dev image image-local clean
 
 help: ## list the targets
@@ -68,10 +68,16 @@ generate-python: $(PYTOOLS) ## Python client (not committed)
 check-spec: $(PYTOOLS) ## the spec validates and the examples match their schemas
 	$(VENV)/bin/python api/examples/validate.py
 
-check-generated: generate-go ## the committed generated Go code is current and everything compiles
+check-generated: generate-go check-compose ## the committed generated Go code and deploy/compose.yaml are current and everything compiles
 	git ls-files --error-unmatch internal/model/model.gen.go internal/apiserver/server.gen.go >/dev/null
 	git diff --exit-code -- internal/model internal/apiserver
 	$(GO) build ./...
+
+compose: ## make deploy/compose.yaml from the compose files of the containers (tools/composegen)
+	$(GO) run ./tools/composegen
+
+check-compose: ## deploy/compose.yaml is what the compose files of the containers give
+	$(GO) run ./tools/composegen -check
 
 check-clients: generate-web generate-python ## the generated TypeScript and Python clients compile
 	cd web && npx vue-tsc --noEmit -p tsconfig.json
@@ -119,8 +125,8 @@ test-examples: generate-web generate-python ## the example suites for pytest and
 test-testbed: ## the namespace testbed: directly where possible, else in a VM
 	$(GO) run ./tools/testvm run $(ARGS)
 
-test-appliance: ## level 2: the gateway in a VM from the Ubuntu cloud images (needs root, QEMU, /dev/kvm and CHAOSGW_APPLIANCE_IMAGE_TAR)
-	$(GO) test -tags appliance -count=1 -timeout 140m -v -run 'TestSmokeOnCleanUbuntuHosts|TestRecoveryAndStopOnCleanUbuntuHosts' ./internal/appliance
+test-appliance: ## level 2: the gateway in a VM from the Ubuntu cloud images (needs root, QEMU, /dev/kvm, udhcpc and CHAOSGW_APPLIANCE_IMAGE_TAR)
+	$(GO) test -tags appliance -count=1 -timeout 200m -v -run 'TestSmokeOnCleanUbuntuHosts|TestRecoveryAndStopOnCleanUbuntuHosts|TestContainerDeploymentOnCleanUbuntuHosts' ./internal/appliance
 
 test-vm: ## the namespace testbed in a QEMU VM (level 1b)
 	$(GO) run ./tools/testvm run -mode vm $(ARGS)

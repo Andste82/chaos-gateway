@@ -75,6 +75,13 @@ type Executor struct {
 	// hostFS is the host's root file system, read for its netplan, NetworkManager and systemd-networkd configuration
 	// (ReadHostNet); nil reads the executor's own root
 	hostFS fs.FS
+	// pfDirs, pfFS and pfRelease are what the preflight looks at (hostpreflight.go); the cache keeps the last run for ten seconds
+	pfDirs    []preflight.DataDir
+	pfFS      fs.FS
+	pfRelease string
+	pfMu      sync.Mutex
+	pfAt      time.Time
+	pfState   HostPreflightState
 	// probes are the DHCP clients of the probes (probe.go); probeSock opens their sockets, probeNet gives the stack a probe run
 	// uses and probeRetry shortens the clients' wait for an answer (tests)
 	probes     probeClients
@@ -878,6 +885,9 @@ func (e *Executor) read(ctx context.Context, o *Read) (json.RawMessage, error) {
 	}
 	if o.What == ReadHostNet {
 		return json.Marshal(e.hostNet())
+	}
+	if o.What == ReadHostPreflight {
+		return json.Marshal(e.HostPreflight(ctx))
 	}
 	if o.What == ReadProbes {
 		st, err := e.readProbes(ctx, o.Target)

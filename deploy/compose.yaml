@@ -1,0 +1,613 @@
+# Chaos Gateway: the containers of one gateway (plan §3.8). Made from the compose files of this directory by tools/composegen
+# (go run ./tools/composegen; make check-generated fails when this file is not current): change a container in its own file.
+#
+#   docker compose up -d                       the gateway (the host setup, deploy/host-setup.sh, comes first: it makes the directories below)
+#   COMPOSE_PROFILES=interception docker compose up -d     with the interception proxy
+#   docker compose --profile teardown run --rm teardown [--purge]    remove what a killed gateway left in the kernel (and the data)
+#
+# Start order: exec first (healthy: its socket answers), then api, svcns (the executor attaches the veth pair to its namespace) and
+# kea, then the services that join the service namespace (dns, tls, tls-proxy) once the API is healthy, and bird. The persistent
+# data is in /var/lib/chaosgw on the host (plan §3.6); the sockets between the containers are in named volumes.
+name: chaosgw
+services:
+  # Container hardening profile of the executor (plan §2.16, §3.8). compose.yaml (the full set of containers, made from the files of
+  # this directory by tools/composegen) holds this service unchanged; internal/executor/hardening_test.go pins the settings that matter.
+  #
+  # The executor is the only privileged container: it writes nftables, tc, routes and sysctls on the
+  # host's network stack, and per-interface sysctls of new bridges need a writable /proc/sys, which
+  # only a privileged container has (spike S7). Everything else about it is closed down:
+  #   - read-only root file system; the only writable places are the socket and BIRD volumes, two directories of the host (the interfaces
+  #     it keeps and the captures) and a tmpfs
+  #   - no-new-privileges, and `chaosgw exec` sets PR_SET_NO_NEW_PRIVS itself
+  #   - it runs no shell: operations are typed, commands are argument arrays with fixed binary paths
+  #   - the socket is reachable only for root and the API container's user (SO_PEERCRED check)
+  exec:
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
+    command: ["exec", "--socket", "/run/chaosgw/exec.sock", "--state", "/var/lib/chaosgw/exec/state.json", "--secrets-dir", "/var/lib/chaosgw/secrets", "--bird-dir", "/run/chaosgw-bird", "--allow-uid", "65532", "--socket-owner", "65532", "--host-root", "/host", "--captures-dir", "/var/lib/chaosgw/captures"]
+    user: "0:0"
+    privileged: true
+    network_mode: host
+    # the service namespace of the gateway services is the namespace of the holder container: the
+    # executor attaches it by the holder's PID, which it can only see in the host's PID namespace
+    pid: host
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=0700
+      # iptables -w keeps its lock file in /run; the volumes below are mounted on top
+      - /run:size=4m,mode=0755
+    volumes:
+      # the socket the API container connects to
+      - chaosgw-run:/run/chaosgw
+      # BIRD's configuration file and control socket, shared with the BIRD container (compose.bird.yaml)
+      - chaosgw-bird:/run/chaosgw-bird
+      # the interfaces assigned to Chaos Gateway; nothing else is stored
+      - type: bind
+        source: /var/lib/chaosgw/exec
+        target: /var/lib/chaosgw/exec
+        bind:
+          create_host_path: false
+      # the packet captures (M17): the executor holds the privilege for the raw sockets and writes the files into the
+      # directories the API container makes; the API container reads, serves and deletes them
+      - type: bind
+        source: /var/lib/chaosgw/captures
+        target: /var/lib/chaosgw/captures
+        bind:
+          create_host_path: false
+      # the WireGuard keys: the executor only reads them (the API container writes)
+      - type: bind
+        source: /var/lib/chaosgw/secrets
+        target: /var/lib/chaosgw/secrets
+        read_only: true
+        bind:
+          create_host_path: false
+      # named network namespaces are shared with the host (probes, the service namespace)
+      - type: bind
+        source: /run/netns
+        target: /run/netns
+        bind:
+          propagation: rshared
+          create_host_path: true
+      # missing kernel modules are loaded from the host's modules
+      - type: bind
+        source: /lib/modules
+        target: /lib/modules
+        read_only: true
+      # the host's /etc, read-only: the preflight reads where netplan, NetworkManager and systemd-networkd configure an
+      # interface (/etc/netplan, /etc/NetworkManager/system-connections, /etc/systemd/network; their files are root's), so the
+      # setup wizard can say which entry to remove from a test interface. Only the file, the entry and the
+      # interface it names leave the executor, never a file's content. The whole /etc, not only those
+      # directories: a bind mount needs its source, and a host without netplan or NetworkManager has none
+      # (create_host_path would create them on the host).
+      - type: bind
+        source: /etc
+        target: /host/etc
+        read_only: true
+      # the host's systemd-networkd defaults, read-only: the preflight reads the .network files of every directory
+      # networkd reads (internal/preflight/networkd.go), and a distribution's default here can configure a test
+      # interface (I64-02, decided 2026-10-18). /usr/lib/systemd/network is part of systemd's package, so the bind
+      # mount always has its source. /run/systemd/network is not mounted: it exists only while networkd or
+      # netplan has written to it, and the host setup's check (host-setup.sh --check) reads it.
+      - type: bind
+        source: /usr/lib/systemd/network
+        target: /host/usr/lib/systemd/network
+        read_only: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "chaosgw", "exec", "--health", "--socket", "/run/chaosgw/exec.sock"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  # The API container (plan §2.15, §2.16, §3.8): the REST API, and later the web UI and the scheduler.
+  # It is unprivileged: it runs as the user the executor lets through its socket, drops every
+  # capability and has a read-only root file system. It owns the engine: it compiles revisions and has
+  # the executor apply them, it keeps the revisions, the credentials and the audit log, and it writes
+  # the WireGuard keys the executor reads, and it configures Kea through its control socket.
+  #
+  # It runs in the host's network namespace to listen on the management network (and, until the setup is
+  # finished, on every address of the host) and to watch the interfaces; the port is above 1024, so it
+  # needs no capability for that. The first start prints a one-time setup token to its log
+  # (`docker compose logs api`).
+  api:
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
+    command: ["api", "--socket", "/run/chaosgw/exec.sock", "--state-dir", "/var/lib/chaosgw/state", "--secrets-dir", "/var/lib/chaosgw/secrets", "--data-dir", "/var/lib/chaosgw/api", "--kea-socket", "/run/kea/kea4-ctrl.sock", "--kea-events-socket", "/run/chaosgw-kea-events/events.sock", "--service-token-file", "/var/lib/chaosgw/service/token", "--service-ns", "cgsvc", "--service-holder-pid-file", "/run/chaosgw-svcns/pid", "--captures-dir", "/var/lib/chaosgw/captures", "--tls-ca-dir", "/var/lib/chaosgw/tlsca", "--port", "${CHAOSGW_UI_PORT:-8443}"]
+    user: "65532:65532"
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=0700
+    volumes:
+      # the executor's socket
+      - chaosgw-run:/run/chaosgw
+      # the revisions
+      - type: bind
+        source: /var/lib/chaosgw/state
+        target: /var/lib/chaosgw/state
+        bind:
+          create_host_path: false
+      # WireGuard keys, credentials, the HTTPS key: the executor mounts this directory read-only
+      - type: bind
+        source: /var/lib/chaosgw/secrets
+        target: /var/lib/chaosgw/secrets
+        bind:
+          create_host_path: false
+      # the audit log, the runs and the idempotency keys
+      - type: bind
+        source: /var/lib/chaosgw/api
+        target: /var/lib/chaosgw/api
+        bind:
+          create_host_path: false
+      # the packet captures (M17): the API makes the directory of a capture, the executor writes the packet files in it
+      # (as the owner of the directory), and the API serves and deletes them and keeps the quota
+      - type: bind
+        source: /var/lib/chaosgw/captures
+        target: /var/lib/chaosgw/captures
+        bind:
+          create_host_path: false
+      # the CAs of the TLS responder (M21): the API makes them at its start and serves the test CA's certificate; the
+      # responder's container (compose.tls.yaml) reads the directory
+      - type: bind
+        source: /var/lib/chaosgw/tlsca
+        target: /var/lib/chaosgw/tlsca
+        bind:
+          create_host_path: false
+      # Kea's control socket (the Kea container creates it, in the group of this user)
+      - chaosgw-kea-run:/run/kea
+      # the datagram socket of Kea's lease events: this user's directory, where it creates the socket;
+      # the Kea container mounts it read-only (issue #57 F3)
+      - chaosgw-kea-events:/run/chaosgw-kea-events
+      # the token of the service containers and the API's published certificate: written here, read by Kea's hook and the
+      # service containers
+      - type: bind
+        source: /var/lib/chaosgw/service
+        target: /var/lib/chaosgw/service
+        bind:
+          create_host_path: false
+      # the resolvers of a host with systemd-resolved (its stub 127.0.0.53 is no use to the DNS proxy)
+      - type: bind
+        source: /run/systemd/resolve
+        target: /run/systemd/resolve
+        read_only: true
+        bind:
+          create_host_path: true
+      # the PID of the service namespace's holder, written by the svcns container (compose.dns.yaml)
+      - type: volume
+        source: chaosgw-svcns
+        target: /run/chaosgw-svcns
+        read_only: true
+    depends_on:
+      exec:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      # the port is the one the setup configured (.env: CHAOSGW_UI_PORT), the same the command gives as the default
+      test: ["CMD", "chaosgw", "api", "--health", "--port", "${CHAOSGW_UI_PORT:-8443}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  # The Kea DHCP server container (plan §2.7, §3.8): one Kea instance for all networks, one subnet per
+  # network on the network's bridge. It listens with raw sockets on the host's bridges, so it runs in the
+  # host network namespace, and it needs only NET_RAW and NET_BIND_SERVICE (plus CHOWN, FOWNER and DAC_OVERRIDE to give
+  # its control socket directory to the API's group at start). It runs as root without any other
+  # capability; its root file system is read-only. The API container configures it through the control
+  # socket (`config-set`) and gets the lease events from Kea's run_script hook (`chaosgw-kea-hook`),
+  # which posts them over the datagram socket the API serves in the chaosgw-kea-events volume (M6a-09;
+  # HTTP with the service token is the fallback when that socket is unavailable). That volume is the
+  # API's (Kea keeps its control socket directory at 0750, too closed for the API to create a socket in
+  # it, issue #57 F3); Kea mounts it read-only, which is enough to send to a socket.
+  kea:
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
+    entrypoint: ["/usr/local/bin/chaosgw-kea-start"]
+    user: "0:65532"
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_RAW, NET_BIND_SERVICE, CHOWN, FOWNER, DAC_OVERRIDE]
+    tmpfs:
+      - /tmp:size=4m,mode=0700
+    volumes:
+      # the control socket, shared with the API container
+      - chaosgw-kea-run:/run/kea
+      # the API's datagram socket of the lease events: sending needs no write access to the mount
+      - type: volume
+        source: chaosgw-kea-events
+        target: /run/chaosgw-kea-events
+        read_only: true
+      # the leases and the configuration Kea was started with
+      - type: bind
+        source: /var/lib/chaosgw/kea
+        target: /var/lib/kea
+        bind:
+          create_host_path: false
+      # the service token and the API's certificate the hook reads: nothing else of the secrets
+      - type: bind
+        source: /var/lib/chaosgw/service
+        target: /var/lib/chaosgw/service
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      # where the hook reports lease events: the API on the loopback of the host
+      CHAOSGW_API: https://127.0.0.1:${CHAOSGW_UI_PORT:-8443}
+      # the API's certificate, so the hook verifies it instead of trusting whatever is presented
+      CHAOSGW_API_CERT: /var/lib/chaosgw/service/api.pem
+      # the hook posts over this datagram socket instead of HTTP when it is available (M6a-09);
+      # HTTP (CHAOSGW_API above) stays the fallback
+      CHAOSGW_KEA_EVENTS_SOCKET: /run/chaosgw-kea-events/events.sock
+    depends_on:
+      # start order (plan §3.8): the executor first; the API configures Kea through its control socket as soon as it is up
+      exec:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 10s
+    healthcheck:
+      # Kea is up when it has made its control socket
+      test: ["CMD", "test", "-S", "/run/kea/kea4-ctrl.sock"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  # The gateway services' namespace and the DNS proxy (plan §2.6, §3.3, §3.8).
+  #
+  # `svcns` is the holder of the service namespace: an unprivileged container without a network that
+  # only keeps its namespace alive. It runs in the host's PID namespace, so the PID it writes is the one
+  # the executor (privileged, also in the host's PID namespace) attaches the namespace of before it
+  # connects the namespace to the gateway with the veth pair svc0/svc1 (169.254.100.0/30).
+  #
+  # `dns` joins that namespace (`network_mode: service:svcns`): it binds port 53 there and has no other
+  # network. Queries to each test network's gateway address are redirected into it by the gateway's
+  # nftables; it fetches its configuration from the API at 169.254.100.1 and posts its query log. It
+  # keeps no state: restarting it costs nothing, restarting the holder is healed by the next apply
+  # (the pair is created again), and Compose restarts `dns` with it (`depends_on ... restart: true`), which
+  # re-joins the new namespace.
+  svcns:
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
+    command: ["svcns", "--pid-file", "/run/chaosgw-svcns/pid"]
+    user: "65532:65532"
+    network_mode: none
+    pid: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - chaosgw-svcns:/run/chaosgw-svcns
+    depends_on:
+      # start order (plan §3.8): the executor first, then the holder, whose namespace the executor attaches the veth pair to
+      exec:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 5s
+    healthcheck:
+      # the holder is ready when it has written its PID file
+      test: ["CMD", "test", "-s", "/run/chaosgw-svcns/pid"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: "2"
+  dns:
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
+    command: ["dns", "--listen", ":53", "--api", "https://169.254.100.1:${CHAOSGW_UI_PORT:-8443}", "--service-token-file", "/var/lib/chaosgw/service/token", "--api-cert-file", "/var/lib/chaosgw/service/api.pem"]
+    user: "65532:65532"
+    network_mode: "service:svcns"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=4m,mode=0700
+    volumes:
+      # the token the proxy authenticates with and the API's certificate: nothing else of the secrets
+      - type: bind
+        source: /var/lib/chaosgw/service
+        target: /var/lib/chaosgw/service
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      svcns:
+        condition: service_healthy
+        # a recreated holder has a new namespace: the proxy has to join it again
+        restart: true
+      # the proxy fetches its configuration from the API (169.254.100.1)
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 10s
+    healthcheck:
+      test: ["CMD", "chaosgw", "dns", "--health", "--listen", ":53"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  # The TLS responder (plan §2.8, §3.3, §3.8): the certificate test cases.
+  #
+  # It joins the service namespace that `svcns` holds (compose.dns.yaml) and listens there on the port the namespace
+  # redirects the selected connections to: the gateway routes a connection that a TLS case selects unchanged into the
+  # namespace, nftables there redirects it to port 9443, and the responder reads the original destination with
+  # SO_ORIGINAL_DST. It asks the API (169.254.100.1) for the decision of every connection and reports the outcome of
+  # every handshake. It keeps no state: restarting it costs nothing; Compose restarts it with the holder
+  # (`depends_on ... restart: true`), which re-joins the new namespace.
+  #
+  # The two CAs (the test CA a development firmware may install, and the unknown CA nobody gets) are made by the API at its
+  # start in the directory /var/lib/chaosgw/tlsca of the host and read here, keys included, which is why that directory is the CAs' alone: nothing of
+  # the API's secrets is mounted. The responder needs only the capability that a port above 1024 does not need; it
+  # drops them all.
+  tls:
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
+    command: ["tls", "--listen", ":9443", "--api", "https://169.254.100.1:${CHAOSGW_UI_PORT:-8443}", "--service-token-file", "/var/lib/chaosgw/service/token", "--api-cert-file", "/var/lib/chaosgw/service/api.pem", "--ca-dir", "/var/lib/chaosgw/tlsca"]
+    user: "65532:65532"
+    network_mode: "service:svcns"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=4m,mode=0700
+    volumes:
+      # the token the responder authenticates with and the API's certificate: nothing else of the service directory
+      - type: bind
+        source: /var/lib/chaosgw/service
+        target: /var/lib/chaosgw/service
+        read_only: true
+        bind:
+          create_host_path: false
+      # the two CAs the API made
+      - type: bind
+        source: /var/lib/chaosgw/tlsca
+        target: /var/lib/chaosgw/tlsca
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      svcns:
+        condition: service_healthy
+        # a recreated holder has a new namespace: the responder has to join it again
+        restart: true
+      # the responder asks the API (169.254.100.1) for the decision of every connection
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 10s
+    healthcheck:
+      test: ["CMD", "chaosgw", "tls", "--health", "--listen", ":9443"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  # The BIRD container (plan §2.2.2): the routing daemon of the dynamic routing protocols. It reads the
+  # configuration the executor writes into the shared volume (the executor reconfigures it through the
+  # control socket in the same place) and speaks BGP, OSPF and Babel on the host's network stack, in
+  # the host's network namespace so it sees the WireGuard interfaces and writes table 100. It is not
+  # privileged: it needs the network capabilities and nothing else.
+  bird:
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
+    entrypoint: ["/usr/sbin/bird"]
+    command: ["-f", "-c", "/run/chaosgw-bird/chaosgw.conf", "-s", "/run/chaosgw-bird/chaosgw.ctl"]
+    user: "0:0"
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_RAW, NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=4m,mode=0700
+    volumes:
+      # the configuration and the control socket; the executor writes the file, BIRD only reads it
+      - chaosgw-bird:/run/chaosgw-bird
+    depends_on:
+      # the executor writes the idle chaosgw.conf at start; without it BIRD crash-loops
+      exec:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 10s
+    healthcheck:
+      test: ["CMD", "birdc", "-s", "/run/chaosgw-bird/chaosgw.ctl", "show", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  # The interception proxy (plan §2.8, §3.8, M22): mitmproxy with the Chaos Gateway addon, for the TLS case `intercept`. It is
+  # optional: without it the other cases work, and a connection that an interception case selects is reset (the health check lists
+  # the component `tls_proxy` as degraded while such a case is in force).
+  #
+  # It joins the service namespace that `svcns` holds (compose.dns.yaml), like the TLS responder, and listens on the loopback of that
+  # namespace: the responder (which decides every connection that the gateway sends into the namespace) hands the connections of the
+  # case to it with `CONNECT` and relays the bytes, so nothing outside the namespace can reach the proxy. Its own connections to the
+  # servers leave through the namespace and the gateway's service path, as those of the DNS proxy do. It fetches its rules from the API
+  # (169.254.100.1) and reports what it sees; the responder's control interface (127.0.0.1:9445) is where it asks for a connection to
+  # be paced or reset.
+  #
+  # It signs with the test CA, which the API makes in the directory /var/lib/chaosgw/tlsca of the host and which this container reads, key included
+  # (the directory is the CAs' alone), and starts mitmproxy again when `POST /tls/ca/regenerate` replaces it. It needs no capability (its
+  # ports are above 1024) and keeps its working files in a tmpfs. The certificates of the servers are verified against the bundle of
+  # mitmproxy; `CHAOSGW_UPSTREAM_CA_FILE` names other CAs (the path of a file you mount into the container, docs/install.md section 3
+  # has a compose file for it), `CHAOSGW_UPSTREAM_INSECURE=1` verifies nothing (a lab with private servers). Both are the default of the installation: a case says otherwise for its own devices with
+  # `intercept.upstream` (`verify`: the bundle, `own_ca`: the file named here, `insecure`: no check).
+  tls-proxy:
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
+    entrypoint: ["/opt/chaosgw/tls-proxy/venv/bin/python", "-m", "chaosgw_tlsproxy.launcher"]
+    command: ["--api", "https://169.254.100.1:${CHAOSGW_UI_PORT:-8443}", "--service-token-file", "/var/lib/chaosgw/service/token", "--api-cert-file", "/var/lib/chaosgw/service/api.pem", "--ca-dir", "/var/lib/chaosgw/tlsca", "--listen", "127.0.0.1:9444", "--control", "http://127.0.0.1:9445", "--confdir", "/tmp/mitmproxy"]
+    environment:
+      PYTHONPATH: /opt/chaosgw/tls-proxy
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      HOME: /tmp
+      CHAOSGW_UPSTREAM_CA_FILE: ${CHAOSGW_UPSTREAM_CA_FILE:-}
+      CHAOSGW_UPSTREAM_INSECURE: ${CHAOSGW_UPSTREAM_INSECURE:-0}
+    user: "65532:65532"
+    network_mode: "service:svcns"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      # owned by the proxy's user: a tmpfs is root's unless it is told otherwise, and mitmproxy's configuration directory is made in it
+      - /tmp:size=64m,mode=0700,uid=65532,gid=65532
+    volumes:
+      # the token the proxy authenticates with and the API's certificate: nothing else of the service directory
+      - type: bind
+        source: /var/lib/chaosgw/service
+        target: /var/lib/chaosgw/service
+        read_only: true
+        bind:
+          create_host_path: false
+      # the test CA the API made (and the unknown CA beside it, which the proxy does not use)
+      - type: bind
+        source: /var/lib/chaosgw/tlsca
+        target: /var/lib/chaosgw/tlsca
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      svcns:
+        condition: service_healthy
+        # a recreated holder has a new namespace: the proxy has to join it again. This acts on Compose operations only; after a restart
+        # of the holder by the daemon the launcher notices that its namespace lost the service address 169.254.100.2 and exits (code 3,
+        # --namespace-check, on by default), and `restart` brings it back into the current namespace
+        restart: true
+      # the proxy fetches its rules from the API (169.254.100.1)
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD", "/opt/chaosgw/tls-proxy/venv/bin/python", "-c", "import socket; socket.create_connection(('127.0.0.1', 9444), 3).close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    profiles: [interception]
+  # The teardown container (plan §3.8 "Stop", D35, M27): `chaosgw teardown` removes what Chaos Gateway created in the kernel for a
+  # gateway whose executor was killed, and with --purge empties the data directories of the host (plan §3.6). The executor's own
+  # container mounts only the directories it needs (the secrets read-only, no revisions, no audit log), so this service mounts every
+  # one of them writable; it is the executor's profile otherwise (privileged, the host's network stack and /run/netns), and it
+  # refuses while an executor is serving on the socket in chaosgw-run.
+  #
+  # It is under a profile: `docker compose up` never starts it. Run it with the project name of the deployment (compose.yaml has
+  # the service too, and names the project chaosgw):
+  #   docker compose --profile teardown run --rm teardown [--purge]      (in the directory of compose.yaml)
+  #   docker compose -p chaosgw -f compose.teardown.yaml run --rm teardown [--purge]
+  teardown:
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
+    # the flags that name this container's places are in the entrypoint, because `compose run teardown --purge` replaces the command
+    entrypoint: ["chaosgw", "teardown", "--socket", "/run/chaosgw/exec.sock", "--state", "/var/lib/chaosgw/exec/state.json", "--bird-dir", "/run/chaosgw-bird"]
+    profiles: ["teardown"]
+    user: "0:0"
+    privileged: true
+    network_mode: host
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=0700
+      # iptables -w keeps its lock file in /run; the volumes below are mounted on top
+      - /run:size=4m,mode=0755
+    volumes:
+      # the executor's socket: a serving executor is refused
+      - chaosgw-run:/run/chaosgw
+      - chaosgw-bird:/run/chaosgw-bird
+      # the directories --purge empties (cmd/chaosgw/teardown.go, dataDirs)
+      - type: bind
+        source: /var/lib/chaosgw/state
+        target: /var/lib/chaosgw/state
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/chaosgw/secrets
+        target: /var/lib/chaosgw/secrets
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/chaosgw/api
+        target: /var/lib/chaosgw/api
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/chaosgw/service
+        target: /var/lib/chaosgw/service
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/chaosgw/tlsca
+        target: /var/lib/chaosgw/tlsca
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/chaosgw/captures
+        target: /var/lib/chaosgw/captures
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/chaosgw/exec
+        target: /var/lib/chaosgw/exec
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/chaosgw/kea
+        target: /var/lib/kea
+        bind:
+          create_host_path: false
+      # the names of the probes' namespaces and of the service namespace are removed with the host
+      - type: bind
+        source: /run/netns
+        target: /run/netns
+        bind:
+          propagation: rshared
+          create_host_path: true
+volumes:
+  chaosgw-run:
+  chaosgw-bird:
+  chaosgw-kea-run:
+  chaosgw-kea-events:
+  chaosgw-svcns:

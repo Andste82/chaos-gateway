@@ -20,6 +20,7 @@ var logCommands = []struct{ File, Command string }{
 	{"iptables.txt", "sudo iptables -S; sudo iptables -t nat -S"},
 	{"sysctl.txt", "sysctl net.ipv4.ip_forward; cat /etc/sysctl.d/90-chaos-gateway.conf /etc/modules-load.d/chaos-gateway.conf"},
 	{"modules.txt", "lsmod"},
+	{"deployment.txt", "ls -la /opt/chaosgw /var/lib/chaosgw; cat /opt/chaosgw/.env; cd /opt/chaosgw && sudo docker compose ps -a; ip netns list; networkctl list --no-pager; nmcli device status"},
 	{"os-release.txt", "cat /etc/os-release; uname -a"},
 }
 

@@ -35,13 +35,16 @@ jobs:
   # Level 2 (plan §4.5, M5b): the gateway in a QEMU VM from the Ubuntu cloud image, host setup, Docker
   # and the executor container inside, traffic from a client namespace through the VM, and a port forward
   # (M35a) to the client namespace next to a port a container publishes (the go toolchain above builds the
-  # test's listener). Hosted
+  # test's listener); the recovery and the stop (M27); and the container deployment of M28: the host setup
+  # with the image, compose.yaml, the setup wizard, a device that gets its lease from Kea, S7 (netplan,
+  # systemd-networkd, NetworkManager), a reboot and the update script during an idle gateway and during a
+  # run (TestContainerDeploymentOnCleanUbuntuHosts; the device's DHCP client is udhcpc). Hosted
   # runners offer /dev/kvm (plan Q1). Run it by hand on a branch with
   # `gh workflow run nightly.yml --ref <branch>`.
   appliance:
     name: appliance (level 2, Ubuntu ${{ matrix.release }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
+    timeout-minutes: 210
     strategy:
       fail-fast: false
       matrix:
@@ -54,7 +57,7 @@ jobs:
       - name: Install QEMU and the tools of the harness
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils python3 curl iproute2 iptables
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils python3 curl iproute2 iptables udhcpc
       - name: Allow access to /dev/kvm
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -79,7 +82,7 @@ jobs:
           CHAOSGW_APPLIANCE_ARTIFACTS: ${{ runner.temp }}/appliance-logs
         run: |
           export CHAOSGW_APPLIANCE_CACHE="$HOME/.cache/chaosgw-appliance"
-          go test -tags appliance -count=1 -timeout 140m -v -run 'TestSmokeOnCleanUbuntuHosts|TestRecoveryAndStopOnCleanUbuntuHosts' ./internal/appliance
+          go test -tags appliance -count=1 -timeout 200m -v -run 'TestSmokeOnCleanUbuntuHosts|TestRecoveryAndStopOnCleanUbuntuHosts|TestContainerDeploymentOnCleanUbuntuHosts' ./internal/appliance
       - uses: actions/upload-artifact@v7
         if: always()
         with:

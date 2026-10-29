@@ -461,6 +461,9 @@ const (
 	// ReadHostNet returns where the host's operating system configures network interfaces (netplan,
 	// NetworkManager; HostNetState): the preflight's check that test interfaces carry no OS configuration.
 	ReadHostNet = "host_net"
+	// ReadHostPreflight returns the checks the executor makes of the host it runs on (HostPreflightState): the tools, the
+	// kernel modules it loads, forwarding, /proc/sys, the namespaces, other firewalls and the data directories (M28).
+	ReadHostPreflight = "host_preflight"
 )
 
 func (NftApply) OpType() string          { return TypeNftApply }

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/Andste82/chaos-gateway/internal/executor"
+	"github.com/Andste82/chaos-gateway/internal/preflight"
 	"github.com/Andste82/chaos-gateway/internal/secrets"
 )
 
@@ -72,7 +74,8 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	}
 	syscall.Umask(0o077)
 
-	opts := []executor.Option{executor.WithLogger(log), executor.WithStateFile(*state), executor.WithHostRoot(os.DirFS(*hostRoot))}
+	opts := []executor.Option{executor.WithLogger(log), executor.WithStateFile(*state), executor.WithHostRoot(os.DirFS(*hostRoot)),
+		executor.WithPreflight(preflightDirs(allow, *state, *secretsDir, *capturesDir))}
 	if *birdDir != "" {
 		opts = append(opts, executor.WithBirdDir(*birdDir))
 	}
@@ -90,6 +93,7 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer ex.Close()
+	logPreflight(ex.HostPreflight(context.Background()), log)
 	if err := ex.EnsureBirdConfig(compiler.BirdInstance); err != nil {
 		fmt.Fprintf(stderr, "chaosgw exec: %v\n", err)
 		return 1
@@ -119,6 +123,39 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// preflightDirs are the directories of the persistence layout (plan §3.6) the executor's container mounts, for the preflight: the
+// compose files bind-mount them from the host, and the API container's user (the first uid allowed on the socket) has to be able
+// to write the ones it fills, the capture directories above all. The secrets must not be open to others.
+func preflightDirs(allow uidList, stateFile, secretsDir, capturesDir string) []preflight.DataDir {
+	uid := -1
+	if len(allow) > 0 {
+		uid = int(allow[0])
+	}
+	dirs := []preflight.DataDir{{Path: filepath.Dir(stateFile), What: "the interfaces assigned to the executor", UID: -1}}
+	if secretsDir != "" {
+		dirs = append(dirs, preflight.DataDir{Path: secretsDir, What: "the secrets", UID: uid, MaxMode: 0o700})
+	}
+	if capturesDir != "" {
+		dirs = append(dirs, preflight.DataDir{Path: capturesDir, What: "the packet captures", UID: uid})
+	}
+	return dirs
+}
+
+// logPreflight writes the checks of the host into the container log, where the administrator who runs `docker compose logs
+// exec` finds them; a failed check is an error line with its fix. The executor serves anyway: the API shows the same checks.
+func logPreflight(st executor.HostPreflightState, log *slog.Logger) {
+	for _, c := range st.Checks {
+		switch c.Status {
+		case "ok":
+			log.Info("preflight", "check", c.ID, "message", c.Message)
+		case "warn":
+			log.Warn("preflight", "check", c.ID, "message", c.Message, "fix", c.Fix)
+		default:
+			log.Error("preflight", "check", c.ID, "message", c.Message, "fix", c.Fix)
+		}
+	}
+}
+
 // newExecRunner is the runner of the executor's commands; the tests of the command replace it with a simulated kernel.
 var newExecRunner = func() executor.Runner { return executor.NewExecRunner() }
 
@@ -132,6 +169,9 @@ func stopCleanup(ex *executor.Executor, serviceNS string, log *slog.Logger) erro
 	ctx, cancel := context.WithTimeout(context.Background(), stopCleanupTimeout)
 	defer cancel()
 	ex.StopProbeClients()
+	for _, name := range ex.RemoveCheckNamespaces(ctx) {
+		log.Info("stop cleanup", "step", "removed the namespace "+name+" of an interrupted host check")
+	}
 	plan, err := apply.Teardown(ctx, apply.Local{E: ex}, "", serviceNS)
 	if plan != nil {
 		for _, line := range plan.Summary {

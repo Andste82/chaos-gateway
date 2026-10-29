@@ -77,6 +77,8 @@ The plan (§4.5) defines levels; this is how they map to commands.
 | 1b | `make test-vm` | the testbed tests in a QEMU VM with a stock Ubuntu kernel | `vng`, QEMU, the kernels in `/boot` (all in the devcontainer) |
 | – | `make test-testbed` | level 1 if the preflight allows it, else level 1b | |
 | – | `make test-arm64` | the unit tests as arm64 binaries under `qemu-user` | `qemu-aarch64` |
+| – | `make check-compose` / `make compose` | `deploy/compose.yaml` is what the compose files of the containers give (M28, `tools/composegen`) / make it | nothing |
+| 2 | `make test-appliance` | the gateway in a QEMU/KVM VM from the Ubuntu cloud images: the smoke test, the recovery and stop (M27) and the container deployment with the updates (M28); `CHAOSGW_APPLIANCE_ARCH=arm64` runs the smoke test on an emulated ARM64 machine (the other two tests skip with a message on arm64; the weekly workflow selects the smoke test with `-run`) | root, QEMU, `/dev/kvm`, `udhcpc`, `CHAOSGW_APPLIANCE_IMAGE_TAR` (nightly and weekly workflows) |
 | – | `make test-e2e` | Playwright tests of the web app against a mocked API (port and server reuse: see below) | `npx playwright install chromium` once |
 | – | `make test-examples` | the example suites of `clients/examples` (pytest with the generated Python client, Jest with the generated TypeScript client, both also driving `chaosctl`) against a gateway on the simulated kernel (M18; test tag `examples`) | network access for `pip` and `npm ci`; no root |
 | 1/1b | `make test-vm ARGS='-tags testbed,browser -run InTheBrowser ./internal/api'` | the browser flows of the web app against the real stack in the testbed: first start (M12), a fault created in the UI and measured (M13) (also `test-privileged`) | `make build-web`, `cd web && npm ci && npx playwright install chromium` |
@@ -6934,8 +6936,8 @@ and a stop that leaves nothing of the gateway on the host. There is no change of
   while an executor answers on the socket (two writers of the kernel would break the serialization), and with `--purge` it also empties the volumes (`dataDirs`) and names the ones it does not see, once the kernel is clean: a teardown that fails (it lists what is still there) leaves the volumes and says so,
   because the state file in them names the interfaces assigned to the executor that a second run needs, and the emptying cannot be undone (`TestPurgeLeavesTheVolumesWhenTheKernelCleanupFails`). The executor's
   container mounts only what it needs (the secrets read-only, no revisions or audit log), so the shipped deployment has `deploy/compose.teardown.yaml`: one service under the profile `teardown` (`up` never starts
-  it), the executor's profile (privileged, the host's network stack, `/run/netns`) with every volume that holds data or state (ten) mounted writable; its flags are in the `entrypoint`, because `compose run teardown --purge` replaces the
-  `command`. `TestTheTeardownServiceMountsEveryVolumePurgeEmptiesWritable` pins that every directory of `dataDirs` is mounted writable, from a volume that the other compose files declare and at the path they mount it at; the CI job `mounts` renders the file with
+  it), the executor's profile (privileged, the host's network stack, `/run/netns`) with every directory that holds data or state (eight, below `/var/lib/chaosgw` of the host since M28) mounted writable; its flags are in the `entrypoint`, because `compose run teardown --purge` replaces the
+  `command`. `TestTheTeardownServiceMountsEveryDirectoryPurgeEmptiesWritable` pins that every directory of `dataDirs` is mounted writable, from the directory of the host (plan §3.6, M28) that the other compose files mount, at the path they mount it at; the CI job `mounts` renders the file with
   `docker compose config`, runs the service and checks that its volumes and the shared `/run/netns` do not leak into the host's mount table and that `down -v` works (issue #57).
 - **What the stop does not undo.** The addresses and routes of the uplink and the management interface (the host's), the networkd rule and the netplan entry of a test interface (out of scope until the host
   setup or the executor writes them, `docs/open-items.md` "Shutdown and host cleanup"), the global `ip_forward` (Docker needs it), the loaded modules, the offloads switched off on a port (a driver setting
@@ -6994,6 +6996,97 @@ at level 2 is the test of M28.
 | Tests: shutdown order of plan §3.11, observers after the last apply | `TestTheAPIRemovesItsOverlaysWhenItStopsAndRecordsTheStop` (the observers still read while the last apply is held) |
 | Open item "Shutdown and host cleanup" | implemented (stop cleanup, teardown, purge of every volume) |
 
+## Container deployment (M28)
+
+Plan §3.6, §3.8, §3.9, §4.4 and M28 (the rows of `docs/open-items.md` that name M28: M1-02, M2-08, P3-M12-07, the netplan hints and the x86-64-only deployment of M5b, S7, `image.yml`, the full image, M6a-10, M6b-06 and M6b-10).
+M28 turns the compose files of the earlier milestones into one deployment that an administrator installs, starts, updates and removes without the repository.
+There is no change of the spec and none of the HTTP API: the preflight adds checks to the existing `GET /system/preflight` and to the preflight of `GET /setup`.
+
+### How it works
+
+- **The image** (`deploy/Dockerfile`). One multi-arch image (amd64, arm64) for every container. M28 adds `tcpdump` (for the administrator's shell: `docker compose exec exec tcpdump -i br-iot`; the gateway's own captures are
+  AF_PACKET sockets, M17) and `kmod` (`modprobe`, for the executor's preflight), the files of the deployment under `/usr/local/share/chaosgw` (`compose.yaml`, `update.sh`, `host-setup.sh`, `env.example`) and the
+  labels `org.opencontainers.image.source` and `.documentation`. The description of the image that still said the full image follows with M28 (P5-AUDIT-22) is replaced. `.dockerignore` lets the four files in.
+- **`deploy/compose.yaml`** is made from the compose files of the containers (`compose.executor.yaml`, `compose.api.yaml`, `compose.kea.yaml`, `compose.dns.yaml`: the holder `svcns` and the DNS proxy, `compose.tls.yaml`, `compose.bird.yaml`,
+  `compose.tlsproxy.yaml`, `compose.teardown.yaml`) by `tools/composegen` (`make compose`; `make check-compose`, part of `make check-generated`, and a Go test fail when it is not current). The files stay what the lower levels start
+  (the executor alone, with BIRD, the proxy of the interception alone), so there is one definition of every container. The union has three changes: a dependency on a service of another file that is optional in its file
+  (`required: false`) is a plain one, the interception proxy is under the profile `interception` (`COMPOSE_PROFILES=interception`), and the project is named `chaosgw`. The image is
+  `${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}` in all of them; `.env` (written by the host setup) names the published image and its version.
+- **Bind mounts at the §3.6 paths** (M2-08, decided 2026-10-04). The persistent data is in `/var/lib/chaosgw/{state,secrets,api,service,tlsca,captures,exec,kea}` of the host (`kea` is Kea's `/var/lib/kea` inside), mounted with
+  `create_host_path: false`: Docker would make a missing directory as root's, which the API container (user 65532, no capability) could not write (issue #57); the host setup makes them with their owners instead, and a compose file started
+  without it fails with the name of the missing directory. The sockets between the containers (`chaosgw-run`, `chaosgw-bird`, `chaosgw-kea-run`, `chaosgw-kea-events`, `chaosgw-svcns`) stay named volumes: they carry no state, and the Kea events
+  directory takes its owner from the image. `teardown --purge` empties the directories and leaves them. `docs/install.md` has the move from the named volumes of an older installation.
+- **Start order and health checks** (plan §3.8). `exec` first (its health check is the answer of its socket), then `api`, `svcns` and `kea` (each `depends_on: exec: service_healthy`), `bird` (as before), then `dns`, `tls` and `tls-proxy`
+  once `svcns` and `api` are healthy (`depends_on` with `restart: true` on the holder). New health checks: `svcns` (its PID file is written: `test -s`), `kea` (its control socket is there: `test -S`). The cross-file dependencies are `required: false`
+  in the files, so `compose.dns.yaml` still starts without the executor in the lower-level tests.
+- **The preflight in the executor** (`internal/preflight/host.go`, `internal/executor/hostpreflight.go`). The privileged process checks the host it runs on at its start and writes each check into its log (`docker compose logs exec | grep preflight`):
+  the tools and their versions (`host.tools`; legacy `iptables` is `host.iptables`, because Docker's `DOCKER-USER` is in the nf_tables backend), the required kernel modules, which it loads with `modprobe -a -q` when they exist and are
+  not loaded (`host.modules`), forwarding and the ping group range, a writable `/proc/sys`, a network namespace that can be made and `/run/netns` shared with the host (`host.netns`; the throw-away namespace is `pfchk-<8 hex>`, and one that a killed executor left is removed before the next check, by the stop cleanup and by `chaosgw teardown`: `preflight.RemoveCheckNamespaces`), other firewalls (`ufw` by its chains, `firewalld` and other
+  nftables tables by name, `host.firewall`) and the data directories' owner and mode (`host.data.<dir>`: the API's user must be able to write `captures`, the secrets are 0700). The read operation `host_preflight` returns the checks (cached for
+  ten seconds), `Engine.HostPreflight` reads it, and the API adds the checks to the report of `GET /system/preflight` and of `GET /setup` (the status of the report counts them; an executor that cannot be asked is a warning, the reason only in the log for the
+  unauthenticated `GET /setup`). It does not stop the executor: a failed check is shown with its fix, the rest goes on. An executor on a simulated kernel (a runner other than `ExecRunner`) has no tools to check and returns none.
+- **The host setup** (`deploy/host-setup.sh`) is final: besides Docker, the modules, the sysctls and the networkd rule of a test interface it makes the data directories (`DATA_DIRS`, owner and mode, the directory itself only), and with `--image REF`
+  copies `compose.yaml`, `update.sh`, `host-setup.sh` and `env.example` out of the image (`docker run --entrypoint tar`) into `--install-dir` (`/opt/chaosgw`) and writes `.env` (never over one). `--data-only` makes only the directories (CI, a repair after
+  a restore). The netplan hints are the existing check: it names the file and line of the entry of a test interface and the fix, the setup exits 1 until the entry is gone.
+- **The setup token** is printed to the log of the `api` container at the first start (`docker compose logs api | grep 'Setup token'`; M5, unchanged); the host setup and the level 2 tests use that line.
+- **The update** (`deploy/update.sh`). Pull, then `chaosgw schema-check` of the new image against the revisions of the host (read-only, no network, no capability, as user 65532; a newer schema is exit 4 with the version needed and nothing stopped),
+  then wait for `GET /system/busy` (a token with the scope `read`: `--token-file` or `CHAOSGW_TOKEN`) up to `--timeout`, exit 3 when a run is still active unless `--force`, then `docker compose up -d --remove-orphans`, a wait for the health checks of `exec api svcns kea bird` (and of `dns` and `tls` too once `GET /setup` says the gateway is set up: they cannot be healthy before the first configuration), and the API's health. The token goes to `curl` as a configuration on its standard input (`-K -`), never in the arguments. `INT` and `TERM` end the script (`exit 130`/`143`; a handler that returns would let it go on to the restart). Before the restart it replaces `compose.yaml` with the one of the new image (checked with `docker compose -f NEW --project-directory DIR config -q` first; the old one is kept as `compose.yaml.bak`), and `env.example` and, where one is installed, `update.sh` (by a rename). The test is `tools/deployscripts` (stubs of `docker` and `curl`). D35: the executor stops,
+  tears the test networks down and rebuilds them from the confirmed revision; the devices lose the gateway for that time. `store.CheckSchema` is the store's reading without opening it (no lock, so it runs beside the API); `chaosgw schema-check` is its command.
+- **Teardown** is M27's `chaosgw teardown` with the directories of the host instead of volumes, in `compose.yaml` under the profile `teardown`: `docker compose --profile teardown run --rm teardown [--purge]`.
+- **ARM64** (M1-02, plan §4.4). Every commit builds the image for both architectures and runs `deploy/smoke-image.sh` for each (the arm64 image under `qemu-user`: the binaries start, the architecture, the tools at the pinned versions, `tcpdump`, the files of
+  the deployment, Kea accepts the configuration the gateway starts it with, `schema-check` runs as user 65532); `image.yml` runs it before it pushes. The weekly workflow boots the Ubuntu 24.04 arm64 cloud image in a QEMU `virt` machine under software emulation
+  (`appliance.BootArch`, `QEMUArgs` with `Arch: arm64` and the UEFI firmware of `qemu-efi-aarch64`, `CHAOSGW_APPLIANCE_ARCH=arm64`) and runs the smoke test of level 2 with the arm64 image: host setup, Docker, the executor and BIRD, an applied configuration and traffic.
+  That is the emulated whole-machine test of the arm64 image; the namespace testbed (level 1b proper) does not run on arm64, because `tools/testvm` boots x86-64 kernels (open item).
+
+### Decisions
+
+1. **One `compose.yaml` generated from the files, not a copy.** The files are what lower-level tests start; a hand-kept union would drift (`TestComposeYAMLIsMadeFromTheComposeFilesOfTheContainers`).
+2. **Bind mounts with `create_host_path: false` and a host setup that makes the directories**, instead of an init container that fixes owners: the failure on a host where the setup did not run names the directory, and the owner of a bind mount is a thing
+   an administrator can see and back up.
+3. **The executor's preflight reports and does not stop.** A failed check is shown where the administrator looks (the log, the wizard); stopping the one privileged process would make the cause harder to see.
+4. **The update asks the API for the runs with a token,** like any client; there is no unauthenticated way to ask, and the script does not read the service token. A gateway that is not set up has no run and needs no token.
+5. **The schema is checked by the new image before the old one stops,** so that a downgrade onto a newer configuration is refused with the gateway still running.
+6. **The release assets and the smoke test before the push** are in `image.yml` (it has never run on a tag; the first release is its first run).
+
+### Tests
+
+Level 0 (run here): `internal/preflight/host_test.go` (every check, scripted), `internal/preflight/hostsetup_deploy_test.go` (the directories, `--data-only`, `--image` with a stub of `docker`, `.env` kept, bad references),
+`internal/executor/hostpreflight_test.go`, `internal/api/hostpreflight_test.go` (the checks in `GET /system/preflight` and `GET /setup`, a failing read, the reason hidden from the unauthenticated caller), `cmd/chaosgw/preflight_test.go`,
+`internal/store/schemacheck_test.go` and `cmd/chaosgw/schemacheck_test.go`, `tools/composegen/main_test.go` (compose.yaml current; the privileges and capabilities of the table of §3.8; the start order and health checks; the bind mounts and named volumes; one image),
+`tools/deployscripts/update_test.go` (the update script against stubs of `docker` and `curl`: the order, the busy wait and its timeout, `--force`, the refusal of a newer schema, the token, `--check`, the failures and their exit codes), `tools/ciconfig/deploy_test.go`
+(the host setup's directories equal the Dockerfile's and the compose file's, the files of the image, the smoke tests run by the jobs), the updated `hardening_test.go`, `capture_deploy_test.go` and `cmd/chaosgw/teardown_test.go`, and `internal/appliance` unit tests of the arm64 machine.
+`shellcheck` passes on every script of `deploy/`. Level 2 (nightly, needs KVM and `udhcpc`): `internal/appliance/deployment_test.go`, `TestContainerDeploymentOnCleanUbuntuHosts`, Ubuntu 24.04 and 26.04, three and two ports:
+the netplan hint and the removal of the entry, the host setup with the image, `compose up`, the order of the starts, the privileges read from the container runtime (the `privileged` flag, the bounding set of capabilities and no-new-privileges of the main process), the setup token and the executor's checks in the setup status, the wizard,
+a device that gets its lease from the Kea container (M6a-10: the `dhcp_lease` event of the hook in the stream, `GET /networks/{id}/leases`, no hook error in Kea's log), the gateway's DNS from the service namespace next to the host's `systemd-resolved` (M6b-06), S7 (`netplan apply`, a restart of
+`systemd-networkd`, NetworkManager installed and running leave the bridge, its address, the table and the traffic alone), the PID file of the holder naming another real container process (M6b-10), a reboot, and the updates (idle; a newer schema refused; an active run: the wait, exit 3, `--force`, the run `aborted`,
+the fault gone, the same lease and the gateway back). The existing level 2 tests (`TestSmokeOnCleanUbuntuHosts`, `TestRecoveryAndStopOnCleanUbuntuHosts`) follow the bind mounts. CI: the job `deployment` (`deploy/smoke-compose.sh` on a hosted runner: `compose.yaml` renders and starts,
+the containers are healthy in the order of the plan, the privileges from the runtime, the setup token and the executor's checks, the containers stop and start again; it applies no configuration, so what the stop removes from the kernel is checked by the recovery test only), the image smoke test for amd64 and arm64 in the job `arm64`, the host setup's directories in place of the fresh named volumes, and `shellcheck` in the level 0 job.
+
+Not run on the development machine (an unprivileged container without Docker, KVM or network namespaces): `docker compose config` and every compose file against a real Compose (the structure is checked by the Go tests above), `deploy/smoke-image.sh`,
+`deploy/smoke-compose.sh`, the level 2 tests and the weekly arm64 job; they compile, vet (`go vet -tags appliance ./internal/appliance`, also with `GOARCH=arm64`) and the scripts pass `shellcheck`. `image.yml` has not run.
+
+### Acceptance map (plan M28 "Scope" and "Tests")
+
+| Plan M28 | Test |
+|---|---|
+| Scope: multi-arch image, tcpdump | the Dockerfile; `smoke-image.sh` (CI jobs `arm64`, `image.yml`); `TestTheFilesOfTheDeploymentAreInTheImage` |
+| Scope: `compose.yaml` with the containers and privileges of §3.8 | `deploy/compose.yaml`; `TestComposeYAMLIsMadeFromTheComposeFilesOfTheContainers`, `TestOnlyTheExecutorIsPrivilegedAndTheCapabilitiesAreThoseOfThePlan`; level 2 (the runtime) |
+| Scope: health checks and start order | `TestTheStartOrderFollowsPlan38AndEveryServiceHasAHealthCheck`; the job `deployment`; level 2 |
+| Scope: final host-setup script (modules, `ip_forward`, netplan hints) | `TestHostSetup*`; level 2 (the check names the entry, the removal, "ready") |
+| Scope: preflight in the executor | `TestEveryCheckPassesOnAPreparedHost` and the others of `host_test.go`, `TestTheExecutorChecksTheHostAndKeepsTheAnswerForTenSeconds`, `TestThePreflightCarriesTheChecksTheExecutorMadeOfTheHost` |
+| Scope: setup token in the container log | `deploy/smoke-compose.sh`; level 2 (the token is read from the log and used) |
+| Scope: update script (waits for `system/busy`, refuses newer schemas) | `tools/deployscripts/update_test.go`, `TestCheckSchema*`, `TestSchemaCheck*`; level 2 (the three updates) |
+| Scope: teardown | M27's tests with the bind mounts: `TestTheTeardownServiceMountsEveryDirectoryPurgeEmptiesWritable`, level 2 `TestRecoveryAndStopOnCleanUbuntuHosts` |
+| Scope: bind mounts at the §3.6 paths | `TestPersistentDataIsInBindMountsAtThePathsOfThePlan`, `TestTheHostSetupMakesEveryDirectoryTheImageGivesTheAPIAndTheComposeFileMounts` |
+| Tests: smoke tests on Ubuntu 24.04 and 26.04, two and three ports: host setup, `compose up`, wizard, reboot | `TestContainerDeploymentOnCleanUbuntuHosts` |
+| Tests: image update during an idle and an active run (devices get gateway and DHCP back, the run ends `aborted`) | the same test |
+| Tests: the arm64 image starts and passes the functional smoke test in emulated level 1b | `smoke-image.sh linux/arm64` under `qemu-user` on every commit; the weekly `appliance-arm64` job (the emulated machine); the namespace testbed on arm64 is not built |
+| Tests: non-exec containers run without privileges, checked from the container runtime | level 2 (`docker inspect`, `/proc/1/status`), `deploy/smoke-compose.sh` |
+| Tests: DNS proxy next to `systemd-resolved` (M6b-06) | level 2 |
+| Tests: the PID file reused by another real container process is refused (M6b-10) | level 2 (`holderPIDFileReusedByAnotherProcess`) |
+| Tests: Kea starts from compose, the API configures it, a client gets a lease, the hook posts with the real token (M6a-10) | level 2 |
+| Open items: S7 coexistence | level 2 (`netplan apply`, `systemd-networkd`, NetworkManager) |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -7013,7 +7106,7 @@ Python clients and checks that they compile and import. CI runs all three.
 `.github/workflows/ci.yml`: level 0 with the generated-code checks and the example suites of `clients/examples` (`make test-examples`, M18), the Playwright tests, the
 testbed tests in a VM and in a privileged container, the browser flows of the web app against the real stack
 (`testbed-ui`, a privileged container that builds the app and installs Chromium first; the flows of M12, M13 and M14), the arm64 job (multi-arch image build,
-unit tests under `qemu-user`) and the job `tlsproxy-image` (the image is built and the container of the interception proxy starts from its compose file: `deploy/smoke-tlsproxy.sh`, M22). Where the hosted runner offers `/dev/kvm`, the VM job uses it; where
+unit tests under `qemu-user`, the host setup's directories written by the API's user, the image smoke test for both architectures, M28), the job `deployment` (`compose.yaml` starts on a Docker host: `deploy/smoke-compose.sh`, M28) and the job `tlsproxy-image` (the image is built and the container of the interception proxy starts from its compose file: `deploy/smoke-tlsproxy.sh`, M22). Where the hosted runner offers `/dev/kvm`, the VM job uses it; where
 it does not, it runs emulated. KVM-dependent tests run on hosted GitHub runners (plan D33).
 
 The privileged-container job mounts the runner's `/lib/modules` and runs the tests directly
@@ -7037,7 +7130,7 @@ issue #79, issue #92) must each pass, so one that is renamed, skips or is no
 longer built fails the job. `tools/ciconfig` checks that every job passes every list of the file and that the list quoted here names them all
 (`TestEveryTestbedRunNamesTheLevel1Lists`, `TestTheDevelopmentGuideQuotesEveryLevel1List`, P5-AUDIT-42).
 
-The fresh-volume check of the `arm64` job (issue #57) runs the image as user 65532 against a new named volume for every directory the API container mounts writable: state, secrets, api, service, captures (the API makes the directory of every capture, M17, and the executor writes into it), tlsca (the CAs of the TLS responder, M21) and the Kea events directory; `docs/install.md` has the same list in its upgrade note.
+The fresh-directory check of the `arm64` job (issue #57; since M28 the host setup's `--data-only` makes the directories of the host and the container mounts them, the directory of Kea's events socket stays a fresh named volume) runs the image as user 65532 against every directory the API container mounts writable: state, secrets, api, service, captures (the API makes the directory of every capture, M17, and the executor writes into it), tlsca (the CAs of the TLS responder, M21) and the Kea events directory; `docs/install.md` has the same list in its upgrade note.
 
 What the first CI run (2026-10-02) showed about hosted `ubuntu-24.04` runners: they offer
 `/dev/kvm`, so the VM job ran with `accurate=true` (a topology builds in about 7 s instead of 70 s,
@@ -7063,4 +7156,4 @@ the version build arguments, loads it and tags it `chaos-gateway:latest` (what t
 `chaos-gateway:$(VERSION)`; `make image` is the multi-arch build without a local image (issue #57 F7,
 `TestMakeImageLocalBuildsAVersionedLocalImage` checks the command `make -n` prints).
 
-The image holds `chaosgw`, `chaosctl`, the pinned Kea and BIRD and the interception proxy (mitmproxy in its own virtualenv `/opt/chaosgw/tls-proxy/venv` with the addon of `sidecars/tls-proxy`, M22, run by `deploy/compose.tlsproxy.yaml`); M28 adds tcpdump and the rest of the container deployment.
+The image holds `chaosgw`, `chaosctl`, the tools of the containers, the pinned Kea and BIRD, the interception proxy (mitmproxy in its own virtualenv `/opt/chaosgw/tls-proxy/venv` with the addon of `sidecars/tls-proxy`, M22, run by `deploy/compose.tlsproxy.yaml`), tcpdump and the files of the deployment (M28, "Container deployment (M28)"). The workflow builds and starts each platform with `deploy/smoke-image.sh` (the arm64 image under `qemu-user`) before it pushes the multi-arch image, and on a release tag attaches `compose.yaml`, `host-setup.sh`, `update.sh`, `env.example` and `SHA256SUMS` to the release; it has not run on a tag yet.

@@ -35,12 +35,13 @@ import (
 //   - stopping the containers leaves nothing of the gateway on the host (no table, no rule or route, no bridge, veth, namespace
 //     or DOCKER-USER rule, no fault), the test interface included, and starting them again rebuilds the state from the confirmed revision;
 //   - `docker compose run teardown` (compose.teardown.yaml) removes what an executor that was killed left behind, and `--purge`
-//     the volumes: the revisions, the secrets and the audit log are empty afterwards.
+//     empties the data directories: the revisions, the secrets and the audit log are gone afterwards, the directories stay.
 //
 // The break is made on the host, not in the files of the store: a dummy interface with the name of the bridge of a network makes
 // every revision with that network fail ("exists but is not a bridge: refusing to touch it"), as a host configuration that
 // collides with the gateway's does.
 func TestRecoveryAndStopOnCleanUbuntuHosts(t *testing.T) {
+	amd64Only(t)
 	tar := os.Getenv("CHAOSGW_APPLIANCE_IMAGE_TAR")
 	if tar == "" {
 		t.Skip("CHAOSGW_APPLIANCE_IMAGE_TAR is not set: build the image and save it (see .github/workflows/nightly.yml)")
@@ -246,11 +247,11 @@ func recovery(t *testing.T, rel appliance.Release, imageTar string) {
 		t.Fatal(err)
 	}
 	must(compose + " stop api")
-	out := must("sudo docker run --rm --user 65532:65532 --network host -v chaosgw_chaosgw-run:/run/chaosgw -v chaosgw_chaosgw-state:/var/lib/chaosgw/state " +
+	out := must("sudo docker run --rm --user 65532:65532 --network host -v chaosgw_chaosgw-run:/run/chaosgw -v /var/lib/chaosgw/state:/var/lib/chaosgw/state " +
 		"-v /opt/chaosgw/gateway2.yaml:/gateway.yaml:ro " + tag +
 		" apply --file /gateway.yaml --socket /run/chaosgw/exec.sock --state-dir /var/lib/chaosgw/state --executor-uid 0 2>&1")
 	t.Logf("apply 2: %s", strings.TrimSpace(out))
-	stateDir := "/var/lib/docker/volumes/chaosgw_chaosgw-state/_data"
+	stateDir := "/var/lib/chaosgw/state" // a bind mount of the host since M28 (plan §3.6)
 	if out := must("sudo cat " + stateDir + "/config.json"); !regexp.MustCompile(`"active": 2`).MatchString(out) {
 		t.Fatalf("revision 2 is not the active one:\n%s", out)
 	}
@@ -410,22 +411,26 @@ func recovery(t *testing.T, rel appliance.Release, imageTar string) {
 		t.Errorf("teardown:\n%s", out)
 	}
 	nothingLeft("after teardown")
-	// the volumes hold the revisions, the secrets and the audit log until --purge empties them, all of them: the teardown
-	// container mounts every volume writable
-	volumes := "/var/lib/docker/volumes/chaosgw_chaosgw-"
+	// the directories hold the revisions, the secrets and the audit log until --purge empties them, all of them: the teardown
+	// container mounts every one writable
+	dirs := "/var/lib/chaosgw/"
 	for _, v := range []string{"state", "secrets", "api"} {
-		if out := output("sudo ls -A " + volumes + v + "/_data"); strings.TrimSpace(out) == "" {
-			t.Fatalf("the volume %s is empty before --purge, so the test checks nothing:\n%s", v, out)
+		if out := output("sudo ls -A " + dirs + v); strings.TrimSpace(out) == "" {
+			t.Fatalf("the directory %s is empty before --purge, so the test checks nothing:\n%s", v, out)
 		}
 	}
 	out = must(teardown + " --purge 2>&1")
 	if !strings.Contains(out, "Removed /var/lib/chaosgw/state") || !strings.Contains(out, "Removed /var/lib/chaosgw/secrets") || strings.Contains(out, "Not mounted in this container") {
 		t.Errorf("teardown --purge:\n%s", out)
 	}
-	for _, v := range []string{"state", "secrets", "api", "service", "tlsca", "captures", "exec-state"} {
-		if out := output("sudo ls -A " + volumes + v + "/_data"); strings.TrimSpace(out) != "" {
-			t.Errorf("the volume %s is not empty after --purge:\n%s", v, out)
+	for _, v := range []string{"state", "secrets", "api", "service", "tlsca", "captures", "exec", "kea"} {
+		if out := output("sudo ls -A " + dirs + v); strings.TrimSpace(out) != "" {
+			t.Errorf("the directory %s is not empty after --purge:\n%s", v, out)
 		}
+	}
+	// the directories themselves stay, with their owners: the next start needs nothing from the host setup
+	if out := must("stat -c '%u:%g %a' /var/lib/chaosgw/secrets /var/lib/chaosgw/state"); strings.TrimSpace(out) != "65532:65532 700\n65532:65532 755" {
+		t.Errorf("the directories after --purge:\n%s", out)
 	}
 }
 

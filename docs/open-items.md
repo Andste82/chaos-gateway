@@ -129,9 +129,9 @@ The most common causes are:
 | Item | Question | Recommendation | Decision (2026-10-04) |
 |---|---|---|---|
 | M1-01 | Where do KVM-dependent tests run (Q1)? | Hosted GitHub runners with `/dev/kvm` now, a self-hosted runner when H1 hardware exists | hosted runners only |
-| M1-02 | Arm64 level 1b now or with M28? | With M28, amend §4.4 | with M28 |
+| M1-02 | Arm64 level 1b now or with M28? | With M28, amend §4.4 | with M28 (done as an emulated level 2 smoke test and `deploy/smoke-image.sh`; the namespace testbed on arm64 is P7-M28-01) |
 | M2-03 | Configured address vs. DHCP lease: who wins? | Configuration wins (current) | configuration wins |
-| M2-08 | Persistence layout: named volumes or §3.6 bind mounts? | Bind mounts in M28; amend §3.6 now for the status files | bind mounts in M28 |
+| M2-08 | Persistence layout: named volumes or §3.6 bind mounts? | Bind mounts in M28; amend §3.6 now for the status files | bind mounts in M28 (done) |
 | M3-01 | Restrict ops on OS-owned interfaces (uplink)? | Yes, an `os_owned` class | `os_owned` |
 | M3-04 | Persist the executor generation? | No, document it as per-process | document |
 | M4-02 | Management matrix endpoint: spec or code? | The spec follows the code | spec follows code |
@@ -408,21 +408,21 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 | M5: IPv6 management addresses never bound | M32 |
 | ~~M5: `counter_epoch` always 0~~ — done in M8b (P2-M8b-05 for what it means) | M8b |
 | ~~M5: capabilities list `step_types` empty~~ — filled since M15 (profile, fault, rule, wireguard, wait, remove, restore; the types of M17, M20, M21 and M23 are added by those milestones) | M15 |
-| M5b: netplan hints are static text | M28 |
-| M5b: only the executor is deployed, x86-64 only | M28 |
+| ~~M5b: netplan hints are static text~~ — done in M28: the final host setup names the file and line of the entry and the fix, and exits 1 until the entry is gone (`TestHostSetup*`; level 2 `TestContainerDeploymentOnCleanUbuntuHosts`: the hint, the removal, ready) | M28 |
+| ~~M5b: only the executor is deployed, x86-64 only~~ — done in M28: `deploy/compose.yaml` runs every container (`tools/composegen`, `tools/deployscripts`), the image is built for amd64 and arm64 (`deploy/smoke-image.sh`, the weekly emulated level 2 smoke test); the image smoke tests, the compose smoke test and the level 2 tests are written and run in the CI jobs `arm64`, `deployment`, the nightly and the weekly workflow (not run on the development machine: no Docker, no KVM); the arm64 testbed is P7-M28-01 | M28 |
 | M0: S8 on real hardware (HTB with 500 classes, 50/250 faults, offloads, loss) | H1 |
 | M0: S1 testbed on Raspberry Pi | H1 |
 | M0: DNS proxy at least 1000 queries/s on Pi | H1 |
 | M0: scenario step timing on real hardware | H1, M15 |
-| M0: S7 coexistence with netplan, NetworkManager, systemd-networkd | M28 (no explicit test named: add one to the M28 tests) |
+| ~~M0: S7 coexistence with netplan, NetworkManager, systemd-networkd~~ — test written in M28 (`TestContainerDeploymentOnCleanUbuntuHosts`: `netplan apply`, a restart of `systemd-networkd`, NetworkManager installed and running leave the bridge, its address, the table and the traffic alone); it runs in the nightly workflow (not run on the development machine: no KVM) | M28 |
 | ~~M0: S4 TLS 1.2 vs 1.3, connection reuse, control from the core~~ — done in M21 for the certificate and handshake cases (both versions in the tests of the responder and of the real kernel; only new connections are selected, an established one stays with its server unless `cut_existing`; the responder is controlled by the API's configuration and decisions) and in M22 for the interception (`TestDevicesOfTLS12AndTLS13AreInterceptedAndTheirSecretsReachTheGateway`, `TestConnectionReuseAcrossRequestsIsOneHandoverAndManyExchanges`; the proxy is controlled by the API's configuration, its rules and the responder's control interface) | M22 |
 | M0: IPv6 never spiked | M32 |
 | ~~M0: persistent nft session for DNS-derived sets (DNS over TCP is done in M6b)~~ — done in M20 | M20 |
-| M0: `image.yml` has never run (ghcr push, release tags) | M28 |
+| ~~M0: `image.yml` has never run (ghcr push, release tags)~~ — done in M28 as written: it builds the two architectures, runs the image smoke test, pushes the release tags (`:latest` and the major and minor tags only for a release without a pre-release part) and attaches the deployment files to the release; its first run is the first tag (a pre-release tag such as `v0.0.0-rc.1` tries it without moving `:latest`), which needs a runner with the registry and cannot happen on the development machine | M28 |
 | M0: persistent faults for DNS, TLS, DHCP and profile activations (D31) | M39 |
 | M0: three-way merge, NFLOG capture, extra diagnostics, drift detection, .deb (D28) | M38 |
 | Stubs: ~~`chaosgw tls`~~ — done in M21; ~~`chaosctl` beyond `version`~~ — done in M18 (`chaosctl explain` with P4-AUDIT-47) | M21 |
-| Image holds only `chaosgw`/`chaosctl` and executor tools; full image with Kea, tcpdump, mitmproxy | M28 |
+| ~~Image holds only `chaosgw`/`chaosctl` and executor tools; full image with Kea, tcpdump, mitmproxy~~ — done in M28 (tcpdump added; `tools/ciconfig/deploy_test.go` pins the files of the image) | M28 |
 | ~~Identity maps (address → device), classification and faults not compiled yet~~ — done in M7, M8a, M8b | M7, M8a, M8b |
 | ~~Reader pool and operation time stamps (M3 deferral)~~ — done in M8a | M8a |
 | ~~Overlay removal on stop~~ — done in M27 (`Server.Shutdown`, run by `serveAPI` before the engine ends) | M27 |
@@ -3216,6 +3216,19 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is comple
 - Effort: S
 
 ## Phase 7 open items
+
+### P7-M28-01 The arm64 image is tested by an emulated level 2 smoke test and `smoke-image.sh`, not by the namespace testbed in emulation (level 1b)
+
+- Status: new
+- Severity: minor
+- Reason: needs-decision. The plan's M28 Tests say that the arm64 image "passes the functional smoke test in emulated level 1b", and the table of §4.5 puts the arm64 image there (decision M1-02: "with M28"). What was built is the image smoke test `deploy/smoke-image.sh` under `qemu-user` (the binaries start and have the architecture asked for, the tools run at the pinned versions, Kea accepts its configuration, the schema check runs as the unprivileged user; the executor is not started, so there is no handshake check) and the weekly job `appliance-arm64`: the level 2 smoke test on an emulated aarch64 Ubuntu 24.04 machine, the three-port topology only, with a budget of five hours. The level 1 testbed (`make test-privileged`) on arm64 under emulation is not built: it needs a privileged arm64 container with network namespaces under `qemu-user` or a VM, and the kernel features it uses (nftables, `tc`, WireGuard) are those of the emulating host. The emulated level 2 test proves that the image and the deployment work on the architecture; it does not run the testbed there.
+- Evidence: `docs/plan.md` M28 Tests and §4.5, `deploy/smoke-image.sh`, `.github/workflows/weekly.yml` (`appliance-arm64`), `docs/development.md` "Container deployment (M28)".
+- Task: decide whether the emulated level 2 smoke test replaces the emulated level 1b in the plan or the testbed runs on arm64 too.
+- Options: (a) accept the emulated level 2 smoke test and `smoke-image.sh`, and amend the M28 Tests and the table of §4.5 to say so; the testbed on arm64 runs on real hardware with H1; (b) build the testbed on arm64 in emulation (a weekly job with a privileged `linux/arm64` container under QEMU, which takes much longer than the budget of the weekly job and is slow enough to make timing tests unusable, so only the functional tests could run).
+- Recommendation: (a): the functional smoke test of the plan is what the emulated level 2 test does, and the testbed's logic does not depend on the architecture; the Raspberry Pi targets are validated with H1 anyway.
+- Acceptance: for (a) the plan's M28 Tests and §4.5 name the emulated level 2 smoke test; for (b) a weekly job runs the functional testbed tests on arm64.
+- Needs maintainer: yes
+- Effort: S for (a), L for (b)
 
 ### P7-M27-01 Safe mode drops the management-role WireGuard networks, so a gateway administered over a tunnel loses its access
 

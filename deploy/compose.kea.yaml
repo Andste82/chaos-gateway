@@ -10,7 +10,7 @@
 # it, issue #57 F3); Kea mounts it read-only, which is enough to send to a socket.
 services:
   kea:
-    image: chaos-gateway:${CHAOSGW_VERSION:-latest}
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
     entrypoint: ["/usr/local/bin/chaosgw-kea-start"]
     user: "0:65532"
     network_mode: host
@@ -28,12 +28,18 @@ services:
         target: /run/chaosgw-kea-events
         read_only: true
       # the leases and the configuration Kea was started with
-      - chaosgw-kea-state:/var/lib/kea
-      # the service token and the API's certificate the hook reads: nothing else of the secrets volume
-      - type: volume
-        source: chaosgw-service
+      - type: bind
+        source: /var/lib/chaosgw/kea
+        target: /var/lib/kea
+        bind:
+          create_host_path: false
+      # the service token and the API's certificate the hook reads: nothing else of the secrets
+      - type: bind
+        source: /var/lib/chaosgw/service
         target: /var/lib/chaosgw/service
         read_only: true
+        bind:
+          create_host_path: false
     environment:
       # where the hook reports lease events: the API on the loopback of the host
       CHAOSGW_API: https://127.0.0.1:${CHAOSGW_UI_PORT:-8443}
@@ -42,8 +48,20 @@ services:
       # the hook posts over this datagram socket instead of HTTP when it is available (M6a-09);
       # HTTP (CHAOSGW_API above) stays the fallback
       CHAOSGW_KEA_EVENTS_SOCKET: /run/chaosgw-kea-events/events.sock
+    depends_on:
+      # start order (plan §3.8): the executor first; the API configures Kea through its control socket as soon as it is up
+      exec:
+        condition: service_healthy
+        required: false
     restart: unless-stopped
     stop_grace_period: 10s
+    healthcheck:
+      # Kea is up when it has made its control socket
+      test: ["CMD", "test", "-S", "/run/kea/kea4-ctrl.sock"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     logging:
       driver: json-file
       options:
@@ -53,5 +71,3 @@ services:
 volumes:
   chaosgw-kea-run:
   chaosgw-kea-events:
-  chaosgw-kea-state:
-  chaosgw-service:

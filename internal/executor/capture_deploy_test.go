@@ -78,8 +78,8 @@ func TestTheCapturesVolumeIsTheSameInTheExecutorAndTheAPI(t *testing.T) {
 	}
 	for _, f := range []string{"../../deploy/compose.executor.yaml", "../../deploy/compose.api.yaml"} {
 		raw, _ := os.ReadFile(f)
-		if !strings.Contains(string(raw), "\n  chaosgw-captures:") {
-			t.Errorf("%s does not declare the volume chaosgw-captures", f)
+		if !strings.Contains(string(raw), "source: "+dir+"\n") {
+			t.Errorf("%s does not bind-mount %s from the host (plan §3.6)", f, dir)
 		}
 	}
 }

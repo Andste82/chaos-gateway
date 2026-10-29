@@ -5,7 +5,7 @@
 # privileged: it needs the network capabilities and nothing else.
 services:
   bird:
-    image: chaos-gateway:${CHAOSGW_VERSION:-latest}
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
     entrypoint: ["/usr/sbin/bird"]
     command: ["-f", "-c", "/run/chaosgw-bird/chaosgw.conf", "-s", "/run/chaosgw-bird/chaosgw.ctl"]
     user: "0:0"

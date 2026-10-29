@@ -10,8 +10,8 @@
 # (`docker compose logs api`).
 services:
   api:
-    image: chaos-gateway:${CHAOSGW_VERSION:-latest}
-    command: ["api", "--socket", "/run/chaosgw/exec.sock", "--state-dir", "/var/lib/chaosgw/state", "--secrets-dir", "/var/lib/chaosgw/secrets", "--data-dir", "/var/lib/chaosgw/api", "--kea-socket", "/run/kea/kea4-ctrl.sock", "--kea-events-socket", "/run/chaosgw-kea-events/events.sock", "--service-token-file", "/var/lib/chaosgw/service/token", "--service-ns", "cgsvc", "--service-holder-pid-file", "/run/chaosgw-svcns/pid", "--captures-dir", "/var/lib/chaosgw/captures", "--tls-ca-dir", "/var/lib/chaosgw/tlsca"]
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
+    command: ["api", "--socket", "/run/chaosgw/exec.sock", "--state-dir", "/var/lib/chaosgw/state", "--secrets-dir", "/var/lib/chaosgw/secrets", "--data-dir", "/var/lib/chaosgw/api", "--kea-socket", "/run/kea/kea4-ctrl.sock", "--kea-events-socket", "/run/chaosgw-kea-events/events.sock", "--service-token-file", "/var/lib/chaosgw/service/token", "--service-ns", "cgsvc", "--service-holder-pid-file", "/run/chaosgw-svcns/pid", "--captures-dir", "/var/lib/chaosgw/captures", "--tls-ca-dir", "/var/lib/chaosgw/tlsca", "--port", "${CHAOSGW_UI_PORT:-8443}"]
     user: "65532:65532"
     network_mode: host
     read_only: true
@@ -24,24 +24,49 @@ services:
       # the executor's socket
       - chaosgw-run:/run/chaosgw
       # the revisions
-      - chaosgw-state:/var/lib/chaosgw/state
-      # WireGuard keys, credentials, the HTTPS key: the executor mounts this volume read-only
-      - chaosgw-secrets:/var/lib/chaosgw/secrets
-      # the audit log and the idempotency keys
-      - chaosgw-api:/var/lib/chaosgw/api
+      - type: bind
+        source: /var/lib/chaosgw/state
+        target: /var/lib/chaosgw/state
+        bind:
+          create_host_path: false
+      # WireGuard keys, credentials, the HTTPS key: the executor mounts this directory read-only
+      - type: bind
+        source: /var/lib/chaosgw/secrets
+        target: /var/lib/chaosgw/secrets
+        bind:
+          create_host_path: false
+      # the audit log, the runs and the idempotency keys
+      - type: bind
+        source: /var/lib/chaosgw/api
+        target: /var/lib/chaosgw/api
+        bind:
+          create_host_path: false
       # the packet captures (M17): the API makes the directory of a capture, the executor writes the packet files in it
       # (as the owner of the directory), and the API serves and deletes them and keeps the quota
-      - chaosgw-captures:/var/lib/chaosgw/captures
+      - type: bind
+        source: /var/lib/chaosgw/captures
+        target: /var/lib/chaosgw/captures
+        bind:
+          create_host_path: false
       # the CAs of the TLS responder (M21): the API makes them at its start and serves the test CA's certificate; the
-      # responder's container (compose.tls.yaml) reads the volume
-      - chaosgw-tlsca:/var/lib/chaosgw/tlsca
+      # responder's container (compose.tls.yaml) reads the directory
+      - type: bind
+        source: /var/lib/chaosgw/tlsca
+        target: /var/lib/chaosgw/tlsca
+        bind:
+          create_host_path: false
       # Kea's control socket (the Kea container creates it, in the group of this user)
       - chaosgw-kea-run:/run/kea
       # the datagram socket of Kea's lease events: this user's directory, where it creates the socket;
       # the Kea container mounts it read-only (issue #57 F3)
       - chaosgw-kea-events:/run/chaosgw-kea-events
-      # the token of the service containers: written here, read by Kea's hook
-      - chaosgw-service:/var/lib/chaosgw/service
+      # the token of the service containers and the API's published certificate: written here, read by Kea's hook and the
+      # service containers
+      - type: bind
+        source: /var/lib/chaosgw/service
+        target: /var/lib/chaosgw/service
+        bind:
+          create_host_path: false
       # the resolvers of a host with systemd-resolved (its stub 127.0.0.53 is no use to the DNS proxy)
       - type: bind
         source: /run/systemd/resolve
@@ -60,7 +85,8 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     healthcheck:
-      test: ["CMD", "chaosgw", "api", "--health"]
+      # the port is the one the setup configured (.env: CHAOSGW_UI_PORT), the same the command gives as the default
+      test: ["CMD", "chaosgw", "api", "--health", "--port", "${CHAOSGW_UI_PORT:-8443}"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -73,12 +99,6 @@ services:
 
 volumes:
   chaosgw-run:
-  chaosgw-state:
-  chaosgw-secrets:
-  chaosgw-api:
-  chaosgw-captures:
-  chaosgw-tlsca:
   chaosgw-kea-run:
   chaosgw-kea-events:
-  chaosgw-service:
   chaosgw-svcns:

@@ -2,8 +2,11 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 // Migration upgrades the content of a file from one schema version to the next.
@@ -92,6 +95,38 @@ func (s *Store) migrateAll() error {
 		}
 		if err := writeFileAtomic(path, migrated, 0o640); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// CheckSchema says whether this build can read the store in dir (plan §3.9, downgrade), without opening it: it takes no
+// lock, so it runs next to a running API, and it writes nothing, not even a migration. It returns an *ErrNewerSchema for
+// the first file (the pointer, a revision or a revision's status) written by a newer version. A store that does not exist yet
+// is fine, and a file that does not parse is left to the start, which reports it. The update script runs it with the image
+// it is about to install, before it stops the running gateway (deploy/update.sh).
+func CheckSchema(dir string) error {
+	var paths []string
+	paths = append(paths, filepath.Join(dir, "config.json"))
+	entries, err := os.ReadDir(filepath.Join(dir, "revisions"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".json") {
+			paths = append(paths, filepath.Join(dir, "revisions", e.Name()))
+		}
+	}
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if v, err := schemaVersionOf(raw); err == nil && v > SchemaVersion {
+			return &ErrNewerSchema{Path: path, Found: v, Supported: SchemaVersion}
 		}
 	}
 	return nil

@@ -22,7 +22,7 @@
 #      executor protocol version (plan §3.1) rejects a set of containers of two versions, which is why they all go at once,
 #   5. waits for the health checks and asks the API for its health (exit 5 when the gateway does not come up, with the way back).
 #
-# The busy question needs a token with the scope `read` (the web UI: Settings, Tokens), from --token-file or the variable
+# The busy question needs a token with the scope `read` (made from the admin session with POST /api/v1/auth/tokens, docs/api-guide.md), from --token-file or the variable
 # CHAOSGW_TOKEN, and it goes only to an API whose certificate is the one in /var/lib/chaosgw/service/api.pem (CHAOSGW_API_CERT), which
 # the API publishes for the other containers. A gateway where nothing listens has no run; one that is not set up yet has none either;
 # one that listens and does not answer in time may have one, so the update stops (--force goes on).

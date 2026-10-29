@@ -78,7 +78,7 @@ function expired() {
       <AppBanner v-if="state.data.value?.safe_mode" kind="safe-mode" title="Safe mode: forwarding is disabled.">
         {{ state.data.value.safe_mode_reason || 'The configuration could not be applied at start.' }}
         Only management access works.
-        <a href="https://github.com/Andste82/chaos-gateway/blob/main/docs/plan.md#39-updates-and-recovery" target="_blank" rel="noopener"
+        <a href="https://github.com/Andste82/chaos-gateway/blob/main/docs/recovery.md#safe-mode" target="_blank" rel="noopener"
           >How to recover</a
         >
       </AppBanner>

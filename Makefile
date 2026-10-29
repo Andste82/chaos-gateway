@@ -3,6 +3,7 @@
 # Test levels (docs/development.md, plan §4.5):
 #   make test             level 0: unit tests, no root, every commit
 #   make test-examples    the example suites for pytest and Jest (clients/examples) against a simulated gateway
+#   make test-docs        the examples of the user documentation (docs/) run against a simulated gateway
 #   make test-testbed     levels 1/1b: the namespace testbed, directly or in a VM, chosen automatically
 #   make test-vm          level 1b: always in a QEMU VM (the unprivileged devcontainer)
 #   make test-privileged  level 1: directly (needs a privileged container or a VM)
@@ -23,7 +24,7 @@ LDFLAGS := -s -w -X $(PKG)/internal/version.Version=$(VERSION) -X $(PKG)/interna
 RACE := $(shell command -v gcc >/dev/null 2>&1 && echo -race)
 
 .PHONY: help tools generate generate-go generate-web generate-python \
-        check-spec check-generated check-clients check-compose compose lint test fuzz test-web test-examples test-testbed test-vm test-appliance \
+        check-spec check-generated check-clients check-compose compose lint test fuzz test-web test-examples test-docs test-testbed test-vm test-appliance \
         test-privileged vm-up vm-down vm-status vm-test vm-exec test-arm64 test-e2e build build-web dev image image-local clean
 
 help: ## list the targets
@@ -123,6 +124,14 @@ test-examples: generate-web generate-python ## the example suites for pytest and
 	cd $(EXAMPLES)/jest && npm ci --no-audit --no-fund && node_modules/.bin/tsc -p tsconfig.json
 	EXAMPLES_PYTHON=$(CURDIR)/$(VENV)/bin/python EXAMPLES_PYTEST_DIR=$(CURDIR)/$(EXAMPLES)/pytest EXAMPLES_JEST_DIR=$(CURDIR)/$(EXAMPLES)/jest \
 	  $(GO) test -tags examples -count=1 -timeout 15m -v -run TestTheExampleSuitesPassAgainstTheGateway ./internal/api
+
+# The examples of the documentation (M30): the `sh run` blocks of the documents in internal/docscheck run against a gateway on the
+# simulated kernel, with chaosctl built by the test, curl and jq; their printed output is compared with what the documents show.
+# CHAOSGW_DOCS=docs/api-guide.md runs one document. The level 0 checks of the documents (the lint of the blocks, the schemas, the
+# links) are part of `make test`.
+test-docs: ## the examples of the user documentation, run against a simulated gateway (needs curl and jq)
+	@command -v curl >/dev/null && command -v jq >/dev/null || { echo "test-docs needs curl and jq"; exit 1; }
+	$(GO) test -tags examples -count=1 -timeout 15m -v -run TestTheDocumentationExamplesRunAgainstTheGateway ./internal/api
 
 test-testbed: ## the namespace testbed: directly where possible, else in a VM
 	$(GO) run ./tools/testvm run $(ARGS)

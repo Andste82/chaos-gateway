@@ -138,8 +138,11 @@ jobs:
           # a tag with a pre-release part (v1.0.0-rc.1) is a pre-release on GitHub and does not move :latest
           flags=""
           case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
+          # the notes of the release are docs/release-notes/<tag>.md when the tag has one (M30), else generated from the commits
+          notes="--generate-notes"
+          if [ -f "../docs/release-notes/$GITHUB_REF_NAME.md" ]; then notes="--notes-file ../docs/release-notes/$GITHUB_REF_NAME.md"; fi
           # shellcheck disable=SC2086
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes $flags
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" $notes $flags
           gh release upload "$GITHUB_REF_NAME" compose.yaml host-setup.sh update.sh env.example SHA256SUMS --clobber
 
       - name: Summary

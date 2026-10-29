@@ -49,6 +49,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `web/` | the web app (M12; scenarios M19; captures M23a; the forms of the DNS, TLS and DHCP kinds M23b; the interception M23c; the diagnostics M24): Vue 3, Vite, Tailwind 4, TanStack Query, Pinia, Reka UI, Vue Router, uPlot; `web/embed.go` embeds its build into `chaosgw` (tag `webui`) |
 | `web/e2e`, `web/e2e-testbed` | Playwright: the screens against a mocked API, and the browser flows against the real stack in the testbed |
 | `clients/` | generated TypeScript and Python clients (not committed), and `clients/examples`: the example suites for pytest and Jest and a scenario file (M18) |
+| `internal/docscheck` | the checks of the user documentation (M30): the fenced blocks of `docs/*.md` with the words of their info string, the lint, the links and anchors, and the matching of printed output |
 | `deploy/` | the container image (multi-arch) and the compose files of the deployment ([`install.md`](install.md)); `internal/executor/hardening_test.go` pins their hardening |
 
 ## Setup
@@ -81,6 +82,7 @@ The plan (§4.5) defines levels; this is how they map to commands.
 | 2 | `make test-appliance` | the gateway in a QEMU/KVM VM from the Ubuntu cloud images: the smoke test, the recovery and stop (M27) and the container deployment with the updates (M28); `CHAOSGW_APPLIANCE_ARCH=arm64` runs the smoke test on an emulated ARM64 machine (the other two tests skip with a message on arm64; the weekly workflow selects the smoke test with `-run`) | root, QEMU, `/dev/kvm`, `udhcpc`, `CHAOSGW_APPLIANCE_IMAGE_TAR` (nightly and weekly workflows) |
 | – | `make test-e2e` | Playwright tests of the web app against a mocked API (port and server reuse: see below) | `npx playwright install chromium` once |
 | – | `make test-examples` | the example suites of `clients/examples` (pytest with the generated Python client, Jest with the generated TypeScript client, both also driving `chaosctl`) against a gateway on the simulated kernel (M18; test tag `examples`) | network access for `pip` and `npm ci`; no root |
+| – | `make test-docs` | the `sh run` examples of the user documentation (`docs/`) against a gateway on the simulated kernel, their printed output compared with what the documents show (M30; test tag `examples`) | `curl`, `jq`; no root |
 | 1/1b | `make test-vm ARGS='-tags testbed,browser -run InTheBrowser ./internal/api'` | the browser flows of the web app against the real stack in the testbed: first start (M12), a fault created in the UI and measured (M13) (also `test-privileged`) | `make build-web`, `cd web && npm ci && npx playwright install chromium` |
 
 **Playwright port.** The e2e tests (`web/playwright.config.ts`) build the app and start `vite preview` on
@@ -7275,7 +7277,8 @@ Python clients and checks that they compile and import. CI runs all three.
 
 ## CI
 
-`.github/workflows/ci.yml`: level 0 with the generated-code checks and the example suites of `clients/examples` (`make test-examples`, M18), the Playwright tests, the
+`.github/workflows/ci.yml`: level 0 with the generated-code checks and the example suites of `clients/examples` (`make test-examples`, M18), the job `docs` (the shell examples of `docs/*.md` against the simulated gateway,
+`make test-docs`, M30), the Playwright tests, the
 testbed tests in a VM and in a privileged container, the browser flows of the web app against the real stack
 (`testbed-ui`, a privileged container that builds the app and installs Chromium first; the flows of M12, M13 and M14), the arm64 job (multi-arch image build,
 unit tests under `qemu-user`, the host setup's directories written by the API's user, the image smoke test for both architectures, M28), the job `deployment` (`compose.yaml` starts on a Docker host: `deploy/smoke-compose.sh`, M28) and the job `tlsproxy-image` (the image is built and the container of the interception proxy starts from its compose file: `deploy/smoke-tlsproxy.sh`, M22). Where the hosted runner offers `/dev/kvm`, the VM job uses it; where
@@ -7317,7 +7320,8 @@ the testbed tests directly in 12 s.
 - **Manual:** Actions > Image > Run workflow, or `gh workflow run image.yml -f tag=test` (add
   `--ref <branch>` for a branch). It pushes `:<tag>` and `:sha-<commit>`; with `push` off it only
   builds. Use it for test containers.
-- **Release:** pushing a tag `v1.2.3` pushes `:1.2.3`, `:1.2`, `:1` and `:latest` (no `:0` for `v0.x`).
+- **Release:** pushing a tag `v1.2.3` pushes `:1.2.3`, `:1.2`, `:1` and `:latest` (no `:0` for `v0.x`) and makes the GitHub release, whose
+  notes are `docs/release-notes/v1.2.3.md` when the file exists (M30), else generated from the commits.
 - The first push creates the package as private; make it public under the package settings on
   GitHub if it should be pulled without login. Pulling a private image needs
   `docker login ghcr.io` with a token that has `read:packages`.
@@ -7329,3 +7333,86 @@ the version build arguments, loads it and tags it `chaos-gateway:latest` (what t
 `TestMakeImageLocalBuildsAVersionedLocalImage` checks the command `make -n` prints).
 
 The image holds `chaosgw`, `chaosctl`, the tools of the containers, the pinned Kea and BIRD, the interception proxy (mitmproxy in its own virtualenv `/opt/chaosgw/tls-proxy/venv` with the addon of `sidecars/tls-proxy`, M22, run by `deploy/compose.tlsproxy.yaml`), tcpdump and the files of the deployment (M28, "Container deployment (M28)"). The workflow builds and starts each platform with `deploy/smoke-image.sh` (the arm64 image under `qemu-user`) before it pushes the multi-arch image, and on a release tag attaches `compose.yaml`, `host-setup.sh`, `update.sh`, `env.example` and `SHA256SUMS` to the release; it has not run on a tag yet.
+
+## Documentation examples (M30)
+
+Plan M30: the user guide, the API guide with examples, the scenario cookbook, the troubleshooting (the preflight messages of M28), the
+recovery instructions (safe mode, last known good revision, teardown; M27), linked from the safe-mode banner of the web app (P3-M12-05),
+and the release notes, which name what is unvalidated on ARM64 until H1 has run (the Raspberry Pi targets of §3.10 and the interception
+proxy; P5-M22-02, P5-AUDIT-25). "Documentation examples run in CI."
+
+| Document | Content |
+|---|---|
+| [`user-guide.md`](user-guide.md) | what the gateway is, the ideas (overlays beat the configuration, per-family precedence), the web app screen by screen, scenarios and checks, captures, probes, networks and WireGuard, the draft with preview and commit-confirm, `chaosctl`, security, limits |
+| [`api-guide.md`](api-guide.md) | tokens and scopes, the conventions (problems, generation, idempotency, lists), reading the state and `explain`, overlays, the other overlay kinds, runs and reports, events, revisions, captures and diagnostics, the clients |
+| [`cookbook.md`](cookbook.md) | nine recipes: a test under a fault in CI (`chaosctl with`), a broker outage with a reconnect check, a lossy link during an update, DNS failure, a bad certificate, DHCP, flapping, a capture of a failing run, `explain` |
+| [`troubleshooting.md`](troubleshooting.md) | where to look, a table of every preflight check id with what it looks at and the fix, and the symptoms in the order they appear |
+| [`recovery.md`](recovery.md) | what a start does, the last known good revision, safe mode and the way out, a change that locks out, `teardown`, a forgotten password, an update that went wrong, backup |
+| [`release-notes/v1.0.0.md`](release-notes/v1.0.0.md) | the contents of 1.0.0, what is not validated on ARM64, what was not reviewed from outside, the behavior to know; `image.yml` publishes it as the notes of the release |
+
+### How the examples are tested
+
+Every fenced block of code in these documents (the list is `docscheck.Documents`) says what it is in the words after its language
+(`internal/docscheck`, package comment):
+
+| Info string | Meaning | Checked by |
+|---|---|---|
+| `sh run`, `sh run exit=N` | a script a reader pastes into a shell, run with `bash -eo pipefail`; it must end with the exit code (0 unless `exit=N`) | `TestTheDocumentationExamplesRunAgainstTheGateway` (`internal/api/docs_test.go`, tag `examples`, `make test-docs`, the CI job `docs`) |
+| `text output` | what the `run` block before it prints; each line must be a line of the real output, and `…` in a line stands for any text (ids, times) | the same test |
+| `yaml schema=Scenario`, `json schema=OverlayRequest`, ... | a complete document, validated against that schema of `api/openapi.yaml` (a scenario also by `domain.DecodeScenario` and `domain.ValidateScenario` against the example configuration, so a window that starts at a step that does not exist fails) | `TestEveryDocumentAndScenarioIsValidAgainstTheSpec` (level 0) |
+| `sh host` | a command for the host of the gateway (docker, `update.sh`); not run in CI. The commands of `chaosgw` and the options of `update.sh` it names must exist | `TestTheHostCommandsOfTheDocumentsNameThingsThatExist` (level 0) |
+| `fragment` | a part of a file that is not complete on its own | the lint only |
+
+A block in `sh`, `yaml`, `json`, `http`, `ini` or `toml` without one of these words fails the lint (`TestEveryExampleOfTheDocumentsSaysWhatItIs`),
+so a new example cannot be added without saying how it is tested. The runner starts one gateway per document (the simulated kernel with the real
+engine and the real clock, as `make test-examples`), with the device `esp32-42` online in the network `IoT`, and runs the blocks in the order of the
+document in a working directory of their own; after each block it removes every overlay and run (`POST /reset?owner=all`); revisions, profiles and scenarios a block makes stay, so a block that needs
+configuration makes or reads its own (an example never hard-codes a revision id except in the document of the recovery, which says so). The
+environment of a script is what the documents tell the reader to have: `CHAOSGW_URL` (plain HTTP on the loopback; the documents' `curl` lines carry
+no `--cacert`), `CHAOSGW_TOKEN` (scope `overlays`), `CHAOSGW_ADMIN_TOKEN` (scope `full`), `CHAOSGW_ADMIN_PASSWORD`, `chaosctl` on the `PATH` (built by
+the test), `curl` and `jq`. `CHAOSGW_DOCS=docs/api-guide.md make test-docs` runs one document while you write it.
+
+What this does and does not show: the requests, the answers and the exit codes are the real ones, so a document cannot name a field, a path or a
+command that does not exist, and an output block cannot show a line the tool does not print. The simulated gateway carries no traffic, so the
+examples that depend on a device that talks (a `reconnected` check, the counters of a fault) either show the failing outcome on purpose
+(`exit=1`, the cookbook says so) or only show that the command is accepted. Nothing here tests the host commands (`docker compose`, `update.sh`
+against a real host) or the web app's screens; those are the levels 1 and 2 of M28 and the Playwright tests.
+
+The level 0 checks of `internal/docscheck` (part of `make test`) are the rest: the lint of the blocks; the schemas; the links and anchors of the six
+documents, `README.md` and `install.md` (`docscheck.Links`: a relative link must lead to a file and an anchor to a heading, in the way GitHub makes
+the anchor; an address of a file of this repository on the site is checked as that file); every preflight check the code can report (the ids written in
+`internal/preflight`, `internal/executor/hostpreflight.go`, `cmd/chaosgw/api.go` and `internal/api/system.go`, which the test also demands to find by name
+so that a pattern that stops matching fails it, and the three families `host.data.<dir>`, `module.<name>` and `interface.<name>.os_config`) is explained in `troubleshooting.md`
+(`TestEveryPreflightCheckIsExplainedInTheTroubleshooting`), and so is every health component of the spec (`TestEveryHealthComponentIsNamedInTheTroubleshooting`); the safe-mode banner of `AppShell.vue` links to `docs/recovery.md#safe-mode` and the
+heading exists (`TestTheBannerOfSafeModeLinksToTheRecoveryInstructions`; the Playwright test of the banner, `web/e2e/states.spec.ts`, pins the href);
+the recovery instructions, `install.md` and the release notes state that a management WireGuard network is down in safe mode and that a fallback to a revision from before a key rotation ends in safe mode (P7-M27-01, P7-M27-02: `TestTheDocumentsStateWhatSafeModeAndAKeyRotationDo`); the CI overview above names the job `docs`; the release notes contain the ARM64 section and name the Raspberry Pi targets, H1 and the interception proxy
+(`TestTheReleaseNotesNameWhatIsUnvalidatedOnARM64`, the TLS proxy's throughput target of §3.10 included), and its links are addresses of the documents at the tag, because
+the text of a release is shown on a page where a relative link leads nowhere (`TestTheLinksOfTheReleaseNotesAreAddressesAtTheirTag`); and `tools/ciconfig` checks that the CI job `docs` runs `make test-docs` and that `image.yml` uses
+the release notes of the tag (`TestTheCIRunsTheExamplesOfTheDocumentation`).
+
+### Acceptance map (plan M30 "Scope" and "Tests")
+
+| Plan M30 | Where |
+|---|---|
+| user guide | `docs/user-guide.md` |
+| API guide with examples | `docs/api-guide.md`; every `sh run` block runs in the job `docs` |
+| scenario cookbook | `docs/cookbook.md`; its scenarios are checked against the schema `Scenario`, the runnable ones run |
+| troubleshooting (preflight messages) | `docs/troubleshooting.md`, "The preflight checks"; every id of the code is in it (level 0) |
+| recovery instructions (safe mode, last known good, teardown; M27) | `docs/recovery.md` |
+| linked from the UI's safe-mode banner (P3-M12-05) | `AppShell.vue` links to `docs/recovery.md#safe-mode`; level 0 and Playwright tests above |
+| release notes name what is unvalidated on ARM64 until H1 has run (P5-M22-02, P5-AUDIT-25) | `docs/release-notes/v1.0.0.md`, "Not validated on ARM64 until the hardware lab has run"; level 0 test above |
+| Tests: documentation examples run in CI | `make test-docs`, the CI job `docs`, `TestTheDocumentationExamplesRunAgainstTheGateway` |
+
+### Decisions
+
+1. **The documents are served from the repository, not by the gateway.** The banner links to `docs/recovery.md` on GitHub (`main`), which a
+   lab gateway without internet access cannot open; the recovery instructions are short enough to print, and `install.md` repeats the essentials
+   (what safe mode is and how to leave it). Serving the documents from the web app would need a Markdown renderer in the build and a copy of the
+   documents in the image; the link is the simplest thing that satisfies P3-M12-05 (its task says "served with the app or in the docs"). Should the offline case
+   matter, the banner can carry the three commands itself.
+2. **The examples run against the simulated gateway, not the testbed.** As for the example suites of M18 (decision 11): they test the shapes
+   of requests and answers and the commands, not the kernel; a level 1 run of the documents would need namespaces and make the job slow for no
+   additional coverage of the documents.
+3. **Printed output is compared line by line with `…` as the only wildcard,** not as a whole: the real output has ids and times, and a whole-output
+   comparison would force every example to normalise them. A line that is shown must be printed; a line that is printed need not be shown. So an output block cannot show that something is absent; a document that says "nothing is left" ends its example with a command that fails when something is (`test "$(chaosctl overlay list --json | jq length)" = 0 && echo "no overlay left"`, in the cookbook).
+4. **The release notes are `docs/release-notes/<tag>.md`,** one file per release, published by `image.yml` as the notes of the GitHub release.

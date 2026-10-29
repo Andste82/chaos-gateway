@@ -16,8 +16,8 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   and P3-AUDIT-38 (a management hub in the overview topology, fixed) were decided by the maintainer on 2026-10-15, and
   the four choices the fixes made, listed there, were confirmed on 2026-10-15. What the implementation of a milestone could not settle is
   under [Phase 3 open items](#phase-3-open-items), right after the Phase 3 audit
-  result; the maintainer decided those items on 2026-10-14 and every one is closed except P3-M12-05 (the recovery
-  instructions the safe-mode banner links to), which waits for M27/M30. The choices the audit's fixes made follow the
+  result; the maintainer decided those items on 2026-10-14 and every one is closed (P3-M12-05, the recovery
+  instructions the safe-mode banner links to, was the last; closed with M30 on 2026-10-29). The choices the audit's fixes made follow the
   items ("Phase 3 audit: choices made in …").
 - **Phase 3.1** (M35a): merged to `main` on 2026-10-17 (PR #68, `0fb9176`; CI run 39057670486 on `0fb9176` green), audited on
   2026-10-17. The result is in [Phase 3.1 audit result](#phase-31-audit-result), right before the Phase 3.1 open items; its
@@ -708,7 +708,7 @@ among the test networks) was fixed with a row of its own. The fixes' new asserti
 (`web/e2e-testbed/faults.spec.ts`, in `0b95142`: the device row shows "↑↓ 30 ms", the "With faults" filter, the active
 fault on the device page), which depend on the gateway's new `DeviceView.effective`, passed in the `testbed-ui` job of
 CI run 38646886557 on `aeeeed3`. Of the Phase 3 open items
-only P3-M12-05 stays open; it waits for M27/M30.
+only P3-M12-05 stayed open until M30 wrote the recovery instructions (closed 2026-10-29).
 
 No fix was blocked on a maintainer decision; where a fix had to choose, it took the option closest to the plan, and each
 choice is recorded below under "Phase 3 audit: choices made in …". The maintainer confirmed these four on 2026-10-15:
@@ -850,8 +850,8 @@ Phase 3 (M12 to M14) is complete and merged to `main` (PR #56, 2026-10-15). The 
 and M14; each records the option that was implemented so the work was not blocked, and what the maintainer may want to
 decide. The reasons are the ones of "Why items stayed open". The maintainer decided every item that needed a decision on
 2026-10-14; a "Decision (2026-10-14)" line records what was decided, and the item's Status line says whether it is closed
-and how the decision was implemented. As of 2026-10-14 every Phase 3 item is closed except P3-M12-05, which waits for
-M27/M30.
+and how the decision was implemented. As of 2026-10-14 every Phase 3 item was closed except P3-M12-05, which waited for
+M27/M30 and was closed with M30 on 2026-10-29.
 
 ### P3-M12-01 The commit-confirm banner has no "Roll back now"
 
@@ -935,11 +935,16 @@ M27/M30.
 
 ### P3-M12-05 The safe-mode banner links to the plan, not to recovery instructions
 
-- Status: new
+- Status: closed (2026-10-29, M30): `docs/recovery.md` is the recovery instructions (safe mode, the last known good revision, the
+  teardown, the update that went wrong, backup and restore), and the link "How to recover" of the banner in
+  `web/src/components/layout/AppShell.vue` leads to `docs/recovery.md#safe-mode`. The tests that hold it:
+  `TestTheBannerOfSafeModeLinksToTheRecoveryInstructions` (`internal/docscheck`: the link points into the file and at a heading that
+  exists) and the href check in `web/e2e/states.spec.ts` ("safe mode: a full-width red banner ..."); the examples of the document run in
+  CI (`make test-docs`, the job `docs`)
 - Severity: low
 - Reason: deferred. Safe mode itself came with M27 (the API reports `safe_mode` and `safe_mode_reason`, which the banner
-  shows); there is no recovery document yet. The banner's link points to plan §3.9 "Updates and Recovery". What is left is
-  the link target, which M30 writes.
+  shows); there was no recovery document yet. The banner's link pointed to plan §3.9 "Updates and Recovery". What was left is
+  the link target, which M30 wrote.
 - Evidence: `web/src/components/layout/AppShell.vue`.
 - Task: when M27/M30 write the recovery instructions, point the link at them (served with the app or in the docs).
   M30's Scope in docs/plan.md §5 names the recovery instructions and the banner link (added by the Phase 3 audit).
@@ -3264,6 +3269,7 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is comple
 - Evidence: `internal/domain/safemode.go`, `internal/domain/safemode_test.go` (`Networks == nil`), `docs/development.md` "Recovery and stop (M27)", decision 4.
 - Task: decide whether a management-role WireGuard network stays up in safe mode.
 - Options: (a) no: safe mode is the management interface alone (what M27 does); `docs/install.md` and the recovery instructions of M30 say that a tunnel is down and the way in is the management interface; (b) yes: the safe configuration keeps the networks of the role `management` with their clients, without the `reachable` entries, and a failing apply of the tunnel does not fail the safe configuration (the tunnel is reported as degraded).
+- Note: the documents of M30 (`docs/install.md`, `docs/recovery.md`, `docs/release-notes/v1.0.0.md`) and `TestTheDocumentsStateWhatSafeModeAndAKeyRotationDo` assume option (a); a decision for (b) changes them.
 - Recommendation: (a) for V1: the management interface is the access that does not depend on a key, an interface that can fail to come up or a peer, which is what the last resort should rely on; the recovery instructions (M30) say it. (b) is worth doing if operators administer the gateway only over the tunnel.
 - Acceptance: for (a) the recovery instructions state that the tunnel is down in safe mode; for (b) a test of the compiler and the engine shows the management tunnel up in safe mode and a test network's client cut off.
 - Needs maintainer: yes
@@ -3277,6 +3283,7 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is comple
 - Evidence: `internal/wireguard/provision.go` (`PruneKeeping`, `keepKeysOfGone`), `internal/engine/owner.go` (`prune`), `internal/engine/recovery.go`, `docs/development.md` "Recovery and stop (M27)".
 - Task: decide whether the keys of a generation that a rotation replaced stay for the fallback.
 - Options: (a) no (what M27 does): a rotation retires the old key for good; the fallback to a pre-rotation revision ends in safe mode, and the way out is a new revision (a clone with the current keys); the recovery instructions (M30) say so; (b) yes, until the next commit: the generation before the last rotation stays as long as its revision is the fallback, and the recovery log names the key that came back.
+- Note: the documents of M30 (`docs/recovery.md`, `docs/release-notes/v1.0.0.md`) and `TestTheDocumentsStateWhatSafeModeAndAKeyRotationDo` assume option (a); a decision for (b) changes them.
 - Recommendation: (a): safe mode is the safe answer when the only revision to go back to needs a key the administrator retired on purpose; a clone of that revision with the current key applies in one step.
 - Acceptance: for (a) the recovery instructions state it; for (b) a test where R2 rotates a client key and fails at start falls back to R1 and applies it.
 - Needs maintainer: yes

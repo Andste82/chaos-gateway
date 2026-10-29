@@ -1,6 +1,7 @@
 # Installation
 
-How to install Chaos Gateway on a host, update it and take it away again. The host is Ubuntu 24.04 or 26.04, x86-64 or ARM64
+How to install Chaos Gateway on a host, update it and take it away again. After the installation read the [user guide](user-guide.md);
+when something goes wrong, [troubleshooting](troubleshooting.md) and [recovery](recovery.md). The host is Ubuntu 24.04 or 26.04, x86-64 or ARM64
 (a Raspberry Pi 4 or 5 included, not validated on hardware yet, plan H1), with at least one interface for the uplink and management and one
 interface per test network (plan §1.5, §3.8), and with `/usr/lib/systemd/network` (systemd ships it on Ubuntu; the executor mounts it
 read-only to read the distribution's systemd-networkd defaults). Everything below runs on that host. The gateway is one image,
@@ -395,7 +396,7 @@ It checks, before it stops anything, that the new image can read the configurati
 newer version wrote is refused with the version that is needed (exit 4), and the gateway keeps running. Then it waits, up to
 `--timeout` seconds (600), until `GET /api/v1/system/busy` reports no queued or running run, because an update ends active runs as
 `aborted`; when the time is up it stops (exit 3), and `--force` updates anyway. The question needs a token with the scope `read` (the web
-UI, Settings, Tokens): `--token-file FILE` or the variable `CHAOSGW_TOKEN`; the token is sent only to an API that shows the certificate
+UI has no screen for tokens: make one with `POST /api/v1/auth/tokens`, see the [API guide](api-guide.md#tokens-and-scopes)): `--token-file FILE` or the variable `CHAOSGW_TOKEN`; the token is sent only to an API that shows the certificate
 it published in `/var/lib/chaosgw/service/api.pem`, never to whatever else listens on the port. Where nothing listens, the gateway is down and has no run; an API that
 listens and does not answer in time may have one, so the update stops (`--force` goes on). Then all containers are replaced together (the executor protocol
 version rejects a set of two versions), and the script waits for their health checks and for the API's own health (exit 5 with the way
@@ -477,13 +478,11 @@ what it could not remove (it exits with 1), the directories stay, because a seco
 after the cause is gone.
 
 At the start the gateway applies the active revision. If that fails (it is tried twice) or its file is damaged, it applies the
-last revision that worked and makes that the active one; the log of the `api` container says
-`applying the last known good revision`, and the broken revision is marked `rolled_back`. If that fails too, or there is
-none, the gateway runs in **safe mode**: management access only, no forwarding for the test networks (a WireGuard tunnel of the role `management` is down too: the way in is the management interface). `GET /api/v1/state` reports `safe_mode` and
-`safe_mode_reason`, the web app shows a red banner, and everything that needs a forwarding gateway answers `503`. To leave it,
-clone a revision that works (`POST /api/v1/revisions/{id}/clone`), apply
-it and confirm it; the cause is in the reason and in the log of the `api` container. The recovery instructions of M30 replace
-this section.
+last revision that worked and makes that the active one; if that fails too, or there is none, it runs in **safe mode**: management
+access only, no forwarding for the test networks (a WireGuard network of the role `management` is down too: the way in is the management
+interface, not a tunnel), and everything that needs forwarding answers `503`. `GET /api/v1/state` reports
+`safe_mode` and `safe_mode_reason`, and the web app shows a red banner that links to the [recovery instructions](recovery.md), which
+say what to look at and how to leave safe mode, and also cover the teardown, a forgotten password and an update that went wrong.
 
 ## Uninstall
 

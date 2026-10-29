@@ -58,6 +58,18 @@ jobs:
       # 6 minutes of fuzzing on the executor's interface (plan M3, M29: six targets, a minute each); the nightly run goes longer
       - run: make fuzz
 
+  # The examples of the user documentation (M30): the shell examples of docs/*.md run against a gateway on the simulated kernel with the real
+  # engine, their printed output is compared with what the documents show (internal/api/docs_test.go). The lint of the blocks, the checks
+  # against the schemas of the spec and the links are level 0 tests (internal/docscheck, run by `make test`).
+  docs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make test-docs
+
   # Playwright end-to-end tests of the web app.
   e2e:
     runs-on: ubuntu-24.04

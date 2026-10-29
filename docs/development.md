@@ -8,7 +8,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | Path | Content |
 |---|---|
 | `api/` | `openapi.yaml`, the source of truth for the domain model and the REST API; examples and their validator |
-| `cmd/chaosgw`, `cmd/chaosctl` | the core binary and the CLI (`chaosgw exec` is the executor; `chaosgw tls` is the TLS responder (M21), which hands the connections of the case `intercept` to the proxy (M22); `cmd/chaosctl` is a `main` over `internal/ctl`) |
+| `cmd/chaosgw`, `cmd/chaosctl` | the core binary and the CLI (`chaosgw exec` is the executor, which removes everything it created when it stops, and `chaosgw teardown` does that on demand (M27); `chaosgw tls` is the TLS responder (M21), which hands the connections of the case `intercept` to the proxy (M22); `cmd/chaosctl` is a `main` over `internal/ctl`) |
 | `internal/ctl` | `chaosctl` (M18): the commands (Cobra), the API client with its token and certificate options, runs that are waited for with their lease, `wait device`, `with`; the commands of the application-layer kinds, `dns set`, `tls set` and `dhcp set` (M23b), and the interception, `intercept set`, `intercept flows` and `tls ca` (M23c); the probes, `probe list`, `probe add` and `probe remove` (M26a) |
 | `internal/clock` | injectable clock: real and fake, wall time apart from monotonic time |
 | `internal/preflight` | kernel version, the one shared kernel-module list, namespace capability |
@@ -20,12 +20,12 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/run` | the engine of scenario runs (M15): create, queue per target, preconditions, the timeline on the monotonic clock with `wait` steps, lease, abort, the records of runs on disk, events, JSON and JUnit reports; the checks of a scenario and the zero-hit warnings (M16) |
 | `internal/capture` | the packet capture engine (M17): the filter of a capture (a selector as a user space matcher and as a classic BPF program), the pcap and pcapng writers and reader, the files of a capture with ring buffer and size limit, and the session that reads AF_PACKET sockets (runs in the executor) |
 | `internal/capturemgr` | the management of captures (M17): the scope of a request resolved to interfaces and filters, the records, the quota and the free-space limit (and the report of both for the Captures screen, M23a), the stream to the executor, the download, and the TLS key log of a capture with the clients a scope covers (M22) |
-| `internal/store` | persistence: immutable revisions with checksum, status, commit-confirm, atomic writes, schema migrations |
+| `internal/store` | persistence: immutable revisions with checksum, status, commit-confirm, atomic writes, schema migrations; the revision to fall back to when the active one cannot be applied and its restoration (M27) |
 | `internal/linux` | parsers for `ip -j`, `tc -j`, `nft -j` and `ethtool -k` output (recorded outputs in `testdata/`) |
 | `internal/executor` | the privileged executor: closed set of typed operations, strict decoder, scope checks, command planning, serialized queue, Unix-socket protocol with version handshake and `SO_PEERCRED` check, client |
 | `internal/compiler` | the pure function from configuration + observed host + generation to the target state: bridges, addresses, sysctls, routes and rules, the nftables layout; golden tests |
-| `internal/apply` | reads the kernel state through the executor, plans the difference, applies it in one request and verifies it; `kernelsim` simulates the kernel's tools for tests |
-| `internal/engine` | the state owner, immutable snapshots, the apply loop, commit-confirm, rollback, preview and the event bus |
+| `internal/apply` | reads the kernel state through the executor, plans the difference, applies it in one request and verifies it; the stop cleanup, which plans the difference to nothing (`teardown.go`, M27); `kernelsim` simulates the kernel's tools for tests |
+| `internal/engine` | the state owner, immutable snapshots, the apply loop, commit-confirm, rollback, preview and the event bus; the recovery at start: the last known good revision and safe mode (`recovery.go`, M27) |
 | `internal/observer` | netlink events (links, addresses, routes, rules) debounced into triggers |
 | `internal/supervisor` | starts goroutines: recovers panics, reports health, critical goroutines end the process |
 | `internal/secrets` | the protected store for key material (mode 0600/0700, atomic writes); WireGuard keys by UUID |
@@ -905,6 +905,12 @@ two ports:    the management network lives behind the uplink interface; there is
   ends is `testdata/echo`, a static Go binary the test builds (`appliance.BuildEcho`), so it runs in
   the gateway's own image without anything to pull. Logs (cloud-init, journal, Docker, nftables,
   console, QEMU) are collected into the artifacts directory even when the test fails.
+- **The recovery test (M27, `recovery_test.go`).** The same VM and compose files plus `compose.api.yaml` and `compose.dns.yaml` (the holder and the DNS proxy: the stop has the pair `svc0`, the name `cgsvc` and a DNS redirect to remove; there is no Kea container, so no probe at level 2) and `compose.teardown.yaml`: two revisions are written into the store with `chaosgw apply --file --state-dir` (as the API's user,
+  with the API container stopped); stopping the containers must leave nothing of the gateway on the host (`nothingLeft`: table, rules and routes with the protocol 201, bridges, `svc0`, `pv<8 hex>` ends,
+  namespaces, rules in `DOCKER-USER`, the test NIC no longer a port); a dummy interface with the name of the bridge of revision 2's network makes that revision fail, so the API container applies revision 1
+  (log, `config.json`, the status of revision 2, traffic); with a dummy for revision 1 too there is nothing to fall back to and the API container runs in safe mode (log, a fresh SSH connection works, the client
+  reaches nothing), and after the dummy is gone and the container restarts the network works; last the executor is killed (`docker update --restart=no`, `docker kill`), the bridge stays, and
+  `docker compose -f compose.teardown.yaml run --rm teardown` and then `--purge` remove what it left.
 - **Running it.** It needs root (taps, bridges, namespaces; the harness uses `sudo -n`), QEMU, `/dev/kvm`
   (without it the tests skip; `CHAOSGW_APPLIANCE_ALLOW_TCG=1` runs them emulated and very slowly) and
   the image as `docker save | gzip` in `CHAOSGW_APPLIANCE_IMAGE_TAR`. The nightly workflow's job
@@ -6878,6 +6884,116 @@ dialog, a gateway without the feature, and a revision that waits for confirmatio
 | Tests: a `chaosctl` test lists, adds and removes one | `TestChaosctlOverlays/ManagesProbes` |
 | P6-M25-01: the empty state of the probes card points to the dialog | `e2e/probe-management.spec.ts` ("the empty state points to the dialog") |
 
+## Recovery and stop (M27)
+
+Plan §2.14, §3.8 ("Stop"), §3.9, §3.11, D35 and M27 (variant A of the stop cleanup, decided 2026-10-16, `docs/open-items.md` "Shutdown and host cleanup"). The kernel state is never the source of truth: whatever
+happened to the machine, the committed revision is compiled again and applied. M27 adds what is missing around that: a start that survives a revision that cannot be applied, a safe mode for when nothing can,
+and a stop that leaves nothing of the gateway on the host. There is no change of the spec: `GatewayState.safe_mode` and `safe_mode_reason`, the event type `safe_mode` and the status `rolled_back` of
+`last_apply` were in it already.
+
+### How it works
+
+- **The start** (`internal/engine/recovery.go`, `internal/store/recovery.go`). `Engine.Start` applies the active revision. That is a full apply against what the kernel holds, followed by the read-back that
+  verifies it (plan §2.14 "verify at start"), so an apply that a power loss or a killed executor interrupted is healed the same way as a clean start: the routes, rules, links and the table of the interrupted
+  revision are replaced by those of the committed one. When the apply fails it is tried once more after `retryDelay` (10 s, `Config.RetryDelay`; a failure that only a moment caused must not roll a configuration back),
+  and when that fails too, or when the revision's file is damaged (`store.ErrCorrupt`: a checksum, a JSON error, a missing status file; a newer schema still stops the start, plan §3.9 "Downgrade"), the engine applies
+  the last revision that worked: `Store.Fallback` is the last known good revision when it is another one than the active, else the newest revision that was confirmed and then replaced (`superseded`). When that
+  applies, `Store.Restore` makes it the active and the last known good revision and the failed one `rolled_back` (the pointer moves last, so a crash in between is repaired by the next start); the event
+  `revision_rolled_back` carries `reason: "boot: <why>"` and `restored`, `last_apply.result` says `rolled_back`, and the audit log records it. A revision that applies at start becomes the last known good one
+  (`Store.MarkGood`). A revision that did not apply at start and ended in safe mode, and the fallback that failed too, are marked (`Store.MarkBootFailed`, `boot_failed_at` in the status file): the newer revision that
+  is the way out supersedes the failed one with its confirmation still set, and without the mark a later failing start would fall back to a revision that is known not to apply (and stop there, never trying an older
+  one). `Fallback` skips a marked revision, `MarkGood` and `Restore` clear the mark.
+- **Safe mode.** When there is no revision to fall back to or that one fails too, the engine applies `domain.SafeModeConfiguration` of the failed configuration (the uplink, the management interface and its allowed sources
+  and port, the settings; no network, device, rule, fault, port forward, probe, profile, scenario or routing): the management network keeps reaching the UI and the API through gateway protection, and with no test
+  network there is no bridge, no route between networks and no masquerade (`TestTheSafeModeConfigurationCompilesToNoTestNetworkAtAll`); the management network keeps its normal path to the uplink (plan §2.14), and a
+  WireGuard network of the role `management` is dropped with the other networks, so the way in is the management interface (P7-M27-01). If nothing is readable at all (the only revision is damaged) there is nothing to compile, so the engine removes what the kernel holds of the gateway's with `apply.Teardown` (after a restart of the API alone the previous
+  revision's bridges, table and routes would go on forwarding; after a host start there is nothing to remove); a failure is logged and safe mode goes on. The snapshot
+  has `SafeMode` and `SafeModeReason`, `GET /state` reports `safe_mode` and `safe_mode_reason`, the event `safe_mode` (`active: true` with the reason, `active: false` at the end) reaches the UI, whose
+  banner (M12, `AppShell.vue`) shows the reason; its link target is the recovery instructions of M30 (P3-M12-05). In safe mode the operations that need a gateway that forwards (`createOverlay`, `renewOverlay`,
+  `createRun`, `runScenario`, `renewRun`, `calibrateProbe`, `startCapture`, `runDiagnostic`) answer `503 unavailable` with the reason (`safeModeHolds` in `internal/api/middleware.go`); reading, the revisions, the
+  removal of overlays and runs, the tokens and the setup work. The way out is a revision that works: `POST /revisions/{id}/clone` of an earlier one, `apply` (and `confirm`, when it changes what reaches the
+  control plane); the apply that commits ends the safe mode. A restart repeats the whole start. There is no periodic attempt to leave it: a revision that fails would flap the kernel every time.
+- **The keys of the revision to fall back to.** The prune of the WireGuard secrets after a commit (`owner.prune`, `wireguard.PruneKeeping`) keeps the keys of `Store.Fallback()` that a later revision dropped (the key of a
+  network that is gone, of a client or link peer that is gone), because the start applies that revision when the active one fails and its compile needs them. A key generation that a rotation replaced is not
+  kept: the commit of a rotation retires it (`TestRotatingAClientKeyKeepsTheOldKeysUntilTheCommitAndAFailedApplyStillRestores`), so a fallback to a revision from before the rotation fails on the missing key and ends in
+  safe mode (`docs/open-items.md`, P7-M27-02).
+- **Degraded networks** are not new: a test interface that is missing at the start or goes while the gateway runs makes the compiler report `port_missing`, the network is degraded (event `network_degraded`,
+  `GET /state` `degraded_networks`), the rest keeps working and no safe mode is entered; it is applied again when the interface comes back. M27 adds the tests (below).
+- **The stop** (`cmd/chaosgw/exec.go`, `internal/apply/teardown.go`). The shutdown order of plan §3.11 is the API's first: the listener stops, `Server.Shutdown` aborts the runs (their overlays are removed
+  through the engine) and removes every overlay that is left, so the last apply of the process is one without overlays, the audit log gets `service.stop`, the observers (`obsCtx` in `serveAPI`, cancelled after
+  `Server.Shutdown` returns; the signal stops only the listener) and the engine and the executor connection close, as plan §3.11 orders. Compose stops
+  the `api` container before `exec` (it depends on it). Then the executor, on `SIGTERM`: the connections are closed, `Executor.StopProbeClients` stops the DHCP clients of the probes first, `apply.Teardown`
+  removes everything Chaos Gateway created, and the exit code is 1 when something of it is left (the cleanup is bounded by 25 s, the stop grace period of the compose files is 30 s).
+  `apply.Teardown` reads the kernel and plans the difference to nothing with the planner of every apply (`BuildTeardown` is `buildPlan` of an empty target): the routes and rules of the own tables 100 to 109 and
+  the protocol tag, the service pair `svc0`/`svc1` and the name of the service namespace (`ServiceNS delete` runs `ip netns delete <name>` now: the namespace itself is the holder's and ends with it), the probes
+  (`ProbeNS delete`: the client, the pair by the name `pv<8 hex>` because a deleted bridge does not delete its ports, the namespace `cgp-<8 hex>`), the WireGuard interfaces, the bridges after their ports are
+  released, the tc trees on every interface that was assigned, the table `inet chaosgw` (`add` and `delete` in one transaction, which also works when it is not there) and the duplication table, the rules in
+  `DOCKER-USER`, the IFB device, the protocols of the BIRD instance, and last the scope itself (nothing is assigned afterwards). It then reads the state again and fails with the list when `Leftovers` finds
+  anything (`internal/apply/teardown.go`). It can be repeated and finishes what a killed executor left.
+- **`chaosgw teardown`** (`cmd/chaosgw/teardown.go`) is the same on demand, `docker compose -f compose.teardown.yaml run --rm teardown` (`--socket`, `--state`, `--bird-dir`, `--service-ns`). It refuses
+  while an executor answers on the socket (two writers of the kernel would break the serialization), and with `--purge` it also empties the volumes (`dataDirs`) and names the ones it does not see, once the kernel is clean: a teardown that fails (it lists what is still there) leaves the volumes and says so,
+  because the state file in them names the interfaces assigned to the executor that a second run needs, and the emptying cannot be undone (`TestPurgeLeavesTheVolumesWhenTheKernelCleanupFails`). The executor's
+  container mounts only what it needs (the secrets read-only, no revisions or audit log), so the shipped deployment has `deploy/compose.teardown.yaml`: one service under the profile `teardown` (`up` never starts
+  it), the executor's profile (privileged, the host's network stack, `/run/netns`) with every volume that holds data or state (ten) mounted writable; its flags are in the `entrypoint`, because `compose run teardown --purge` replaces the
+  `command`. `TestTheTeardownServiceMountsEveryVolumePurgeEmptiesWritable` pins that every directory of `dataDirs` is mounted writable, from a volume that the other compose files declare and at the path they mount it at; the CI job `mounts` renders the file with
+  `docker compose config`, runs the service and checks that its volumes and the shared `/run/netns` do not leak into the host's mount table and that `down -v` works (issue #57).
+- **What the stop does not undo.** The addresses and routes of the uplink and the management interface (the host's), the networkd rule and the netplan entry of a test interface (out of scope until the host
+  setup or the executor writes them, `docs/open-items.md` "Shutdown and host cleanup"), the global `ip_forward` (Docker needs it), the loaded modules, the offloads switched off on a port (a driver setting
+  the planner does not read back) and the sysctls of the host's own interfaces.
+
+### Decisions
+
+1. **The stop cleanup is the planner's diff to nothing,** not a second list of what to delete: whatever an apply can remove, the stop removes, and the same tests cover both. The ownership is the executor's own
+   (the interfaces assigned to it, kept in its state file, and the fixed names of its objects); an interface that was never assigned is never touched.
+2. **Two attempts at start, then the last known good revision,** not an immediate roll back: a transient failure would otherwise move the pointer of the store to an older configuration for good.
+3. **A damaged revision is a failed start, not a refused one,** except a newer schema, which is the downgrade refusal of plan §3.9.
+4. **Safe mode applies a target of its own** (revision 0 in the generation id, the store's active id in the snapshot's `Revision` so that `If-Match` and the revisions list stay consistent) instead of leaving the
+   kernel as it is, so that a start after a crash does not keep the interrupted revision's forwarding.
+5. **Safe mode is left by a revision, not by a timer.**
+6. **The writes of the API held back in safe mode** are the ones that need forwarding; everything that repairs stays open, so the admin can look and fix with the same UI.
+7. **`Leftovers` is part of the cleanup,** so that an exit code of 1 and a message name what is still there (the log of the container is what the operator reads after a stop).
+
+### Tests
+
+Level 0 (run here): `internal/apply/teardown_test.go` (probes with their clients, the service namespace and its name, faults and DOCKER-USER, WireGuard, what is not the gateway's, repeated and after a partial cleanup),
+`cmd/chaosgw/teardown_test.go` (the executor's stop on `SIGTERM`, `chaosgw teardown` refusing while an executor serves and repeating, `--purge` and its refusal to empty the volumes while the kernel is not clean, the audit record of the API's stop),
+`internal/store/recovery_test.go`, `internal/engine/recovery_test.go` (the fallback, the retry of a transient failure, safe mode, a damaged revision, the interrupted apply, the degraded network at start
+and while running, a panic in the state owner and the restart, the last known good pointer moved by a start, a revision that failed at start not being the fallback of a later one), `internal/api/recovery_test.go` (safe mode over HTTP,
+a revision in safe mode that is rolled back or whose window runs out, the events of the recovery on the stream with their messages, the stop of the API), `internal/domain/safemode_test.go`, `internal/compiler/safemode_test.go`, and the simulated kernel
+(`kernelsim`) deletes tables. Level 1 (the list `M27_LEVEL1`, `internal/engine/integration_recovery_test.go`): the executor killed in the middle of an apply, twice (an `apply.Exec` wrapper that cuts a request in front of the nftables
+transaction, and the executor as a process of its own that is killed with SIGKILL while it runs the transaction), an unplugged test interface, and the stop cleanup on
+the real kernel with a probe and a fault, and with a service namespace and a DNS redirect. Level 2 (`internal/appliance/recovery_test.go`, nightly, needs KVM): the last known good revision, safe mode, the stop and `teardown` on an Ubuntu host with a
+test interface; the break is a dummy interface with the name of a network's bridge. Revision 1 is made by the setup of the API (`POST /setup`, a login that confirms it and creates a token), so the test reads `GET /state` (`safe_mode`,
+`safe_mode_reason`, the pointers) in safe mode and after it, and a fault is active when the stack stops, so that the tc tree is there to be removed. Not run on the development machine: level 1 (no network namespaces here) and level 2 (no KVM); both compile and vet
+(`go vet -tags testbed ./...`, `go vet -tags appliance ./internal/appliance`).
+
+What the tests do not do, stated: the executor process of the level 1 kill test is the test binary run again in the gateway's namespace (`TestExecutorProcessHelper`), serving with the same `executor.Executor` and `executor.Server` as `chaosgw exec`
+(the testbed's VM has no toolchain to build the binary), not the `chaosgw` binary itself. The kill falls in the `nft -j -f -` of an apply (the watcher stops that child with SIGSTOP and then kills the executor, so the request cannot end first);
+level 2 kills the executor's container (`docker kill`) in a settled state and runs `teardown` after it. The probes' namespaces and DHCP clients of the stop are level 1 only: the level 2 stack has no Kea container, and the Kea stack
+at level 2 is the test of M28.
+
+### Acceptance map (plan M27 "Scope" and "Tests")
+
+| Plan M27 | Test |
+|---|---|
+| Scope: last-known-good at start | `TestABrokenRevisionAtStartLeadsToTheLastKnownGoodRevision`, `TestADamagedActiveRevisionLeadsToTheLastKnownGoodRevisionWithoutApplyingIt`, `TestATransientFailureAtStartIsTriedAgainBeforeAnythingIsRolledBack`, store: `TestRestoreMakesTheFallbackActiveAndTheFailedRevisionRolledBack`; the pointer: `TestARevisionThatAppliesAtStartBecomesTheLastKnownGoodOne`; a revision that failed is not the fallback of a later start: `TestARevisionThatFailedAtStartIsNotTheFallbackOfALaterStart`, store `TestARevisionThatFailedAtStartIsNotTheFallbackUntilItAppliesAgain` |
+| Scope: safe mode, reported by the API and shown by the banner | `TestWhenTheLastKnownGoodRevisionFailsToo_TheGatewayRunsInSafeMode`, `TestAFirstRevisionThatFailsAtStartHasNothingToFallBackToAndRunsInSafeMode`, `TestADamagedFirstRevisionRunsInSafeModeAndTouchesNothing`, `TestSafeModeIsReportedAndHoldsBackWhatNeedsAForwardingGatewayUntilARevisionWorks`, `TestARevisionThatIsNotConfirmedInSafeModeLeavesTheGatewayInSafeMode`, `TestTheEventsOfTheRecoveryAreStreamedWithTheirMessages` (the live update of the banner); level 2 `TestRecoveryAndStopOnCleanUbuntuHosts` reads `safe_mode` and `safe_mode_reason`; the banner: `states.spec.ts` "safe mode: a full-width red banner …" |
+| Scope: recompile after an interrupted apply, verify at start | `TestAnInterruptedApplyIsRecoveredByRecompilingTheCommittedRevision`, level 1 `TestKillingTheExecutorInTheMiddleOfAnApplyIsRecoveredOnTheRealKernel` and `TestKillingTheExecutorProcessInTheMiddleOfAnApplyIsRecoveredOnTheRealKernel` (a SIGKILL of the executor process in the transaction) |
+| Scope: overlay removal on stop | `TestTheStopOfTheAPIAbortsTheRunsAndRemovesEveryOverlay`, `TestTheAPIRemovesItsOverlaysWhenItStopsAndRecordsTheStop` (the process wiring: the engine outlives the signal) |
+| Scope: stop cleanup (variant A) and `chaosgw teardown` | `TestTeardownRemovesEverythingTheGatewayMadeAndTheProbesWithIt`, `TestTeardownDeletesTheProbesWhoseClientsWereStoppedBeforeIt`, `TestTheStopCleanupStopsTheDHCPClientsOfTheProbesBeforeItRunsAnyCommand` (the order), `TestTeardownRemovesTheTCTreesAndTheRulesInDockerUser`, `TestTeardownRemovesTheWireGuardInterfaces`, `TestTeardownLeavesWhatTheGatewayDidNotMake`, `TestTeardownTwiceFindsNothingToDoAndAKilledGatewayIsFinished`, `TestExecRemovesEverythingItCreatedWhenItStops`, `TestTeardownRemovesWhatAKilledGatewayLeftAndRefusesWhileAnExecutorServes`, `TestPurgeEmptiesTheVolumesThatAreMountedAndNamesTheOthers`, `TestTheTeardownServiceMountsEveryVolumePurgeEmptiesWritable` |
+| Scope: degraded networks on missing interfaces | `TestAMissingTestInterfaceAtStartDegradesTheNetworkAndIsNoSafeMode`, `TestUnpluggingATestInterfaceDegradesItsNetworkWithoutSafeMode`, level 1 `TestUnpluggingATestInterfaceDegradesItsNetworkWithoutSafeModeOnTheRealKernel` |
+| Tests: a broken revision at start leads to last-known-good (level 2) | `TestRecoveryAndStopOnCleanUbuntuHosts/<release>/three-ports` |
+| Tests: stopping the containers leaves no fault active and follows the shutdown order; after a stop no table, rule, route, bridge, veth, namespace, `pv` end, `cgp` namespace or probe DHCP client, and the DNS is not redirected | level 1 `TestTheStopCleanupLeavesNothingOfTheGatewayOnTheRealKernel`; level 2 `TestRecoveryAndStopOnCleanUbuntuHosts` (`nothingLeft`); level 0 the tests of the stop above |
+| Tests: level 2 on a host with a test interface | `TestRecoveryAndStopOnCleanUbuntuHosts` (the test NIC `lan0`) |
+| Tests: a panic in the state owner restarts the process and recompiles from the committed revision | `TestAPanicInTheStateOwnerEndsTheEngineAndTheNextStartRecompilesTheCommittedRevision` (the process ends on `Engine.Done`, `serveAPI` returns an error and the container restarts) |
+| Tests: a newer schema is a refused start, not a fallback (plan §3.9, downgrade) | `TestARevisionOfANewerSchemaRefusesTheStartInsteadOfFallingBack` |
+| Tests: the service namespace, its name and the DNS redirect are gone after the stop | level 1 `TestTheStopCleanupRemovesTheServiceNamespaceAndTheDNSRedirectOnTheRealKernel`; level 2 (`TestRecoveryAndStopOnCleanUbuntuHosts`: `svc0`, `cgsvc` and the redirect exist before the stop) |
+| Scope: the revision to fall back to finds its WireGuard keys | `TestTheLastKnownGoodRevisionKeepsItsWireGuardKeysWhenALaterRevisionDropsTheNetwork`, wireguard: `TestPruneKeepingTheFallbackKeepsTheKeysOfWhatIsGoneAndNotTheRotatedOnes` |
+| Scope: safe mode without a readable revision does not leave the previous revision forwarding | `TestSafeModeWithoutAReadableRevisionRemovesWhatTheKernelStillHolds` |
+| Tests: every table of the own range (100 to 109) is empty after the stop | `TestTeardownEmptiesTheRoutingTablesOfTheOwnRange`; level 1 `TestTheStopCleanupLeavesNothingOfTheGatewayOnTheRealKernel` (`ownTablesEmpty`, also for a gateway that was killed with an MTU fault active) |
+| Tests: shutdown order of plan §3.11, observers after the last apply | `TestTheAPIRemovesItsOverlaysWhenItStopsAndRecordsTheStop` (the observers still read while the last apply is held) |
+| Open item "Shutdown and host cleanup" | implemented (stop cleanup, teardown, purge of every volume) |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -6913,10 +7029,10 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
+Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$M27_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
 tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of packet captures (M17: the AF_PACKET sockets
 need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of the DNS faults and hostname selectors (M20, with the executor's netlink connection), those of the TLS responder (M21), those of the interception proxy (M22, with the real mitmproxy, which the level 0 job installs too and requires), those of the DHCP test actions (M23, udhcpc and the real Kea), those of the probes and the calibration (M25, the real Kea, the real executor and the real netem), the one of the metrics (M26), those of Kea's packet socket after a link flap
-(issue #64), the tests against the real Kea (I64-05) and those of the observed state of a device (the acceptance of
+(issue #64), the tests against the real Kea (I64-05) and those of the recovery and the stop (M27), those of the observed state of a device (the acceptance of
 issue #79, issue #92) must each pass, so one that is renamed, skips or is no
 longer built fails the job. `tools/ciconfig` checks that every job passes every list of the file and that the list quoted here names them all
 (`TestEveryTestbedRunNamesTheLevel1Lists`, `TestTheDevelopmentGuideQuotesEveryLevel1List`, P5-AUDIT-42).

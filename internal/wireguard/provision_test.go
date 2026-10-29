@@ -322,6 +322,49 @@ func TestInterfaceKeysAndPrune(t *testing.T) {
 	}
 }
 
+// The revision the start falls back to keeps the keys of what a later revision dropped, but not the generation a rotation replaced.
+func TestPruneKeepingTheFallbackKeepsTheKeysOfWhatIsGoneAndNotTheRotatedOnes(t *testing.T) {
+	sec := store(t)
+	cfg, _ := Provision(example(t), sec)
+	fallback, err := clone(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hubID, hub, linkID, _ := networks(t, cfg)
+	cid, _ := firstClient(t, cfg)
+	// the later revision drops the link and rotates the client
+	delete(*cfg.Networks, linkID)
+	cl := (*hub.Clients)[cid]
+	gen := 1
+	cl.Key.Generation = &gen
+	(*hub.Clients)[cid] = cl
+	n := (*cfg.Networks)[hubID]
+	if err := n.FromWireGuardNetwork(hub); err != nil {
+		t.Fatal(err)
+	}
+	(*cfg.Networks)[hubID] = n
+	active := out2(t, cfg, sec)
+
+	if err := PruneKeeping(sec, fallback, active); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{hubID, linkID, KeyID(cid, 1)} {
+		if _, err := sec.WireGuard(id); err != nil {
+			t.Errorf("the key %s is gone: %v", id, err)
+		}
+	}
+	if _, err := sec.WireGuard(cid); err == nil {
+		t.Error("the generation the rotation replaced is kept for the fallback")
+	}
+	// without a fallback the dropped link goes
+	if err := Prune(sec, active); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sec.WireGuard(linkID); err == nil {
+		t.Error("the secrets of the dropped link are kept without a fallback")
+	}
+}
+
 func out2(t *testing.T, cfg *model.Configuration, sec *secrets.Store) *model.Configuration {
 	t.Helper()
 	out, err := Provision(cfg, sec)

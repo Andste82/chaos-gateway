@@ -61,7 +61,7 @@ var knownTypes = func() map[string]bool {
 	for _, t := range []model.EventType{
 		model.EventTypeApplied, model.EventTypeApplyFailed, model.EventTypeConfirmPending, model.EventTypeRevisionCreated,
 		model.EventTypeRevisionApplied, model.EventTypeRevisionConfirmed, model.EventTypeRevisionRolledBack,
-		model.EventTypeNetworkDegraded, model.EventTypeNetworkRestored, model.EventTypeUplinkChanged,
+		model.EventTypeNetworkDegraded, model.EventTypeNetworkRestored, model.EventTypeUplinkChanged, model.EventTypeSafeMode,
 		model.EventTypeWireguardPeerOnline, model.EventTypeWireguardPeerOffline, model.EventTypeRoutingSessionChanged,
 		model.EventTypeRoutingRoutesChanged, model.EventTypeObservedChanged,
 		model.EventTypeDeviceDiscovered, model.EventTypeDeviceOnline, model.EventTypeDeviceOffline, model.EventTypeDeviceIdentityChanged, model.EventTypeDhcpLease, model.EventTypeDhcpLeasesDeleted,
@@ -140,6 +140,9 @@ func describe(ev engine.Event) string {
 	case "revision_confirmed":
 		return "revision " + str("revision") + " confirmed"
 	case "revision_rolled_back":
+		if r := str("restored"); r != "" && strings.HasPrefix(str("reason"), "boot") {
+			return "revision " + str("revision") + " could not be applied at start: revision " + r + ", the last known good one, is active again"
+		}
 		return "revision " + str("revision") + " rolled back"
 	case "confirm_pending":
 		return "revision " + str("revision") + " waits for confirmation"
@@ -223,6 +226,11 @@ func describe(ev engine.Event) string {
 		return "HTTP rule (" + strings.Join(acts, ", ") + ") acted on a request of " + who + " to " + str("host") + str("path")
 	case "dns_set_epoch":
 		return "the DNS-derived set of " + str("pattern") + " was replaced: it starts empty"
+	case "safe_mode":
+		if active, _ := ev.Data["active"].(bool); !active {
+			return "safe mode ended: a revision was applied"
+		}
+		return "safe mode: " + str("reason")
 	case "network_degraded":
 		return "network degraded: " + str("reason")
 	case "network_restored":

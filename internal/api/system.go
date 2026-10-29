@@ -127,6 +127,7 @@ type gatewayState struct {
 	PendingConfirm   *pendingConfirm `json:"pending_confirm,omitempty"`
 	RunsActive       int             `json:"runs_active"`
 	SafeMode         bool            `json:"safe_mode"`
+	SafeModeReason   string          `json:"safe_mode_reason,omitempty"`
 }
 
 // runsActive is the number of runs that are running now.
@@ -146,6 +147,8 @@ func (s *Server) GetState(c *gin.Context) {
 		OverlaysActive: len(snap.Overlays),
 		RunsActive:     s.runsActive(),
 		CounterEpoch:   snap.CounterEpoch,
+		SafeMode:       snap.SafeMode,
+		SafeModeReason: snap.SafeModeReason,
 	}
 	if p := snap.Pending; p != nil {
 		st.PendingConfirm = &pendingConfirm{Deadline: p.Deadline.UTC(), Revision: p.Revision}

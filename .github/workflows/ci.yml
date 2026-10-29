@@ -98,7 +98,7 @@ jobs:
           if [ -e /dev/kvm ]; then kvm=(--device /dev/kvm); fi
           # The engine package alone needs more than the default 20 minutes since M8b (about 50 minutes under KVM since M10): its measurement
           # tests of the fault engine send thousands of probes through delays of 100 to 600 ms each.
-          docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-vm ARGS="-test-timeout 100m -vm-timeout 3h -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1"
+          docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-vm ARGS="-test-timeout 100m -vm-timeout 3h -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$M27_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1"
       # The measurement record (plan §4.3, P2-AUDIT-07): one JSON line per check of every accuracy assertion. It is
       # kept for 90 days; `go run ./tools/measurements <dirs of downloaded artifacts>` compares the runs.
       - name: Summarize the measurement record
@@ -142,7 +142,7 @@ jobs:
         run: grep -E '^[A-Z0-9_]+=' .github/level1-tests.env >> "$GITHUB_ENV"
       # The engine package alone needs more than the default 20 minutes since M10 (about 25 native):
       # its measurement tests send thousands of probes through delays of 100 to 600 ms each.
-      - run: docker run --rm --privileged -v /lib/modules:/lib/modules:ro -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-privileged ARGS="-test-timeout 60m -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1"
+      - run: docker run --rm --privileged -v /lib/modules:/lib/modules:ro -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-privileged ARGS="-test-timeout 60m -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$M27_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1"
       # The measurement record (plan §4.3, P2-AUDIT-07): one JSON line per check of every accuracy assertion. It is
       # kept for 90 days; `go run ./tools/measurements <dirs of downloaded artifacts>` compares the runs.
       - name: Summarize the measurement record
@@ -323,5 +323,22 @@ jobs:
           docker exec ci-mounts-exec ls /host/usr/lib/systemd/network || { echo "/host/usr/lib/systemd/network is not readable in the executor container"; fail=1; }
           docker rm -f ci-mounts-exec >/dev/null
           if [ -n "$leaked" ]; then echo "mounts of the executor container in the host's mount table:"; echo "$leaked"; fail=1; fi
+          $compose down -v || { echo "docker compose down -v failed"; fail=1; }
+          exit ${fail:-0}
+      - name: the teardown container is valid, and its volumes and the shared /run/netns do not leak into the host's mounts (M27)
+        working-directory: deploy
+        run: |
+          compose="docker compose -p ci-mounts-td -f compose.teardown.yaml"
+          $compose config -q || { echo "compose.teardown.yaml does not render"; exit 1; }
+          # the container mounts every volume writable and /run/netns with rshared propagation, like issue #57's executor
+          $compose run -d --name ci-mounts-td --entrypoint sleep teardown infinity
+          sleep 2
+          leaked=$(findmnt -rn -o TARGET | grep '/var/lib/docker/volumes/ci-mounts-td_' || true)
+          for d in state secrets api service tlsca captures exec; do
+            docker exec ci-mounts-td test -w /var/lib/chaosgw/$d || { echo "/var/lib/chaosgw/$d is not writable in the teardown container"; fail=1; }
+          done
+          docker exec ci-mounts-td test -w /var/lib/kea || { echo "/var/lib/kea is not writable in the teardown container"; fail=1; }
+          docker rm -f ci-mounts-td >/dev/null
+          if [ -n "$leaked" ]; then echo "mounts of the teardown container in the host's mount table:"; echo "$leaked"; fail=1; fi
           $compose down -v || { echo "docker compose down -v failed"; fail=1; }
           exit ${fail:-0}

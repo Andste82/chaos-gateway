@@ -73,6 +73,9 @@ type statusFile struct {
 	Status        string     `json:"status"`
 	AppliedAt     *time.Time `json:"applied_at,omitempty"`
 	ConfirmedAt   *time.Time `json:"confirmed_at,omitempty"`
+	// BootFailedAt is set when the revision could not be applied at start and the gateway ended in safe mode (MarkBootFailed):
+	// the fallback does not return it again.
+	BootFailedAt *time.Time `json:"boot_failed_at,omitempty"`
 }
 
 // Store is the persistence of the configuration. It is safe for concurrent use inside one
@@ -671,8 +674,8 @@ type Corrupt struct {
 	Err      error
 }
 
-// Verify reads every revision and reports the ones that cannot be trusted. Recovery
-// (last known good, safe mode) is M27; this finds the problem.
+// Verify reads every revision and reports the ones that cannot be trusted. The recovery from
+// them at start (Fallback, Restore; safe mode in the engine) is recovery.go and M27.
 func (s *Store) Verify() ([]Corrupt, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

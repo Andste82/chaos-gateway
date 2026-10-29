@@ -2,8 +2,19 @@ package api
 
 import (
 	"context"
+	"sort"
 	"time"
 )
+
+// SafeModeHolds are the ids of the operations that safe mode refuses (plan §3.9).
+func SafeModeHolds() []string {
+	var ids []string
+	for id := range safeModeHolds {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
 
 // SetStreamTimings shortens the write timeout and the keepalive of the event stream for tests and
 // returns a function that restores them.

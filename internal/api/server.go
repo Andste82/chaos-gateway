@@ -277,6 +277,16 @@ func pathMatches(pattern, actual string) bool {
 	return true
 }
 
+// Shutdown is the API process's part of the stop order (plan §3.11, §2.1.1): the runs end as aborted (their overlays are
+// removed through the engine), then every overlay that is left is removed, so that the last apply of the process is one
+// without overlays. The executor removes everything else when it stops (plan §3.8). Call it after the listener stopped
+// accepting requests and before Close and the engine's. It returns when the removal is verified or the context ends.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.closeRunsWithin(ctx)
+	_, err := s.cfg.Engine.ResetOverlays(ctx, nil, actorOf(nil))
+	return err
+}
+
 // Close releases what the server holds.
 func (s *Server) Close() error {
 	s.closeRuns()

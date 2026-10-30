@@ -403,7 +403,7 @@ func waitHealthy(t *testing.T, ctx context.Context, vm *appliance.VM, compose, s
 	deadline := time.Now().Add(3 * time.Minute)
 	var last string
 	for time.Now().Before(deadline) {
-		out, _ := vm.Must(ctx, compose+" ps -q "+service+" | xargs -r sudo docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}'")
+		out, _ := vm.Must(ctx, compose+" ps -a -q "+service+" | xargs -r sudo docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}'")
 		last = strings.TrimSpace(out)
 		if last == "running healthy" {
 			return

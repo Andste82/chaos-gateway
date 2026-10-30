@@ -261,7 +261,7 @@ func deployment(t *testing.T, rel appliance.Release, two bool, imageTar string) 
 		waitRunning(t, ctx, vm, compose, s)
 	}
 	started := func(service string) string {
-		return strings.TrimSpace(must("sudo docker inspect -f '{{.State.StartedAt}}' $(" + compose + " ps -q " + service + ")"))
+		return strings.TrimSpace(must("sudo docker inspect -f '{{.State.StartedAt}}' $(" + compose + " ps -a -q " + service + ")"))
 	}
 	for _, s := range []string{"api", "svcns", "kea", "bird"} {
 		if started("exec") > started(s) {
@@ -279,7 +279,7 @@ func deployment(t *testing.T, rel appliance.Release, two bool, imageTar string) 
 		"exec": hostBnd[1], "api": "0000000000000000", "svcns": "0000000000000000", "tls": "0000000000000000",
 		"dns": "0000000000000400", "kea": "000000000000240b", "bird": "0000000000003400",
 	} {
-		id := strings.TrimSpace(must(compose + " ps -q " + service))
+		id := strings.TrimSpace(must(compose + " ps -a -q " + service))
 		privileged := strings.TrimSpace(must("sudo docker inspect -f '{{.HostConfig.Privileged}} {{.HostConfig.ReadonlyRootfs}}' " + id))
 		if wantPriv := map[bool]string{true: "true true", false: "false true"}[service == "exec"]; privileged != wantPriv {
 			t.Errorf("%s: privileged and read-only root are %q, want %q", service, privileged, wantPriv)

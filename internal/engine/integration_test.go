@@ -74,6 +74,10 @@ func newRealRunner(t *testing.T, wrapRunner func(executor.Runner) executor.Runne
 }
 
 // newRealConfig is newRealRunner with a change to the engine's configuration (for example a service namespace).
+// realExecutorOptions are given to the in-process executor that newRealConfig makes; a test that restarts the executor sets them
+// (withExecutorState) so that the next executor knows what the first one assigned, as the state file of `chaosgw exec` does.
+var realExecutorOptions []executor.Option
+
 func newRealConfig(t *testing.T, wrapRunner func(executor.Runner) executor.Runner, wrap func(apply.Exec) apply.Exec, tweak func(*engine.Config), opts ...bool) *real {
 	t.Helper()
 	var runner executor.Runner = executor.NewExecRunner()
@@ -81,7 +85,7 @@ func newRealConfig(t *testing.T, wrapRunner func(executor.Runner) executor.Runne
 		runner = wrapRunner(runner)
 	}
 	top := testbed.NewDefault(t, testbed.WithPlainGateway(false), testbed.WithGatewayBridges(false))
-	ex, err := executor.New(runner)
+	ex, err := executor.New(runner, realExecutorOptions...)
 	if err != nil {
 		t.Fatal(err)
 	}

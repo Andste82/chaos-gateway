@@ -399,6 +399,10 @@ jobs:
             docker exec --privileged ci-mounts-td test -w /var/lib/chaosgw/$d || { echo "/var/lib/chaosgw/$d is not writable in the teardown container"; fail=1; }
           done
           docker exec --privileged ci-mounts-td test -w /var/lib/kea || { echo "/var/lib/kea is not writable in the teardown container"; fail=1; }
+          if [ "${fail:-0}" = 1 ]; then
+            # what the container is: the user, its capabilities, the owners of the directories, and a real write
+            docker exec --privileged ci-mounts-td sh -c 'id; grep -E "^(Cap|NoNewPrivs|Seccomp)" /proc/self/status; ls -ldn /var/lib/chaosgw/* /var/lib/kea; touch /var/lib/chaosgw/state/probe && echo "touch works" && rm /var/lib/chaosgw/state/probe; grep chaosgw /proc/self/mountinfo' || true
+          fi
           docker rm -f ci-mounts-td >/dev/null
           if [ -n "$leaked" ]; then echo "mounts of the teardown container in the host's mount table:"; echo "$leaked"; fail=1; fi
           $compose down -v || { echo "docker compose down -v failed"; fail=1; }

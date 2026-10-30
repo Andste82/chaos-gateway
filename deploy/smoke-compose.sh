@@ -46,7 +46,7 @@ trap cleanup EXIT
 
 # state returns the runtime state of a service: "running healthy", "running", "exited" ...
 state() { # service
-	id=$($compose ps -q "$1" 2>/dev/null | head -n 1)
+	id=$($compose ps -a -q "$1" 2>/dev/null | head -n 1)
 	[ -n "$id" ] || { echo "none"; return; }
 	docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$id" | sed 's/ $//'
 }
@@ -81,16 +81,16 @@ done
 echo "ok   every container of the gateway is up: $healthy $running"
 
 # the executor was healthy before the others were created: it started first
-exec_started=$(docker inspect -f '{{.State.StartedAt}}' "$($compose ps -q exec)")
+exec_started=$(docker inspect -f '{{.State.StartedAt}}' "$($compose ps -a -q exec)")
 for s in api svcns kea bird; do
-	other=$(docker inspect -f '{{.State.StartedAt}}' "$($compose ps -q "$s")")
+	other=$(docker inspect -f '{{.State.StartedAt}}' "$($compose ps -a -q "$s")")
 	[ "$(printf '%s\n%s\n' "$exec_started" "$other" | sort | head -n 1)" = "$exec_started" ] || fail "$s started ($other) before the executor ($exec_started)"
 done
 echo "ok   the executor started first"
 
 # ---- privileges, from the container runtime
 for s in $healthy $running; do
-	id=$($compose ps -q "$s")
+	id=$($compose ps -a -q "$s")
 	privileged=$(docker inspect -f '{{.HostConfig.Privileged}}' "$id")
 	if [ "$s" = exec ]; then
 		[ "$privileged" = true ] || fail "the executor is not privileged"

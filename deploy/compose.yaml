@@ -221,9 +221,8 @@ services:
     read_only: true
     cap_drop: [ALL]
     cap_add: [NET_RAW, NET_BIND_SERVICE, CHOWN, FOWNER, DAC_OVERRIDE]
-    # like every other container (P7-M29-02, decided 2026-10-31: option (b)); the CI job `deployment` and the nightly level 2 run
-    # show that Kea starts with it. If its package needs file capabilities, this is the line to take out, together with the
-    # exceptions in the review test, the compose test and the level 2 deployment test, and the row of the container table.
+    # like every other container (P7-M29-02, closed 2026-10-31): the CI job `deployment` and the nightly level 2 run show that Kea
+    # starts and hands out leases with it, and that the hook posts its events.
     security_opt:
       - no-new-privileges:true
     tmpfs:

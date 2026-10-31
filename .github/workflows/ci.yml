@@ -396,9 +396,10 @@ jobs:
           sleep 2
           leaked=$(findmnt -rn -o TARGET | grep '/var/lib/docker/volumes/ci-mounts-td_' || true)
           for d in state secrets api service tlsca captures exec; do
-            docker exec --privileged ci-mounts-td test -w /var/lib/chaosgw/$d || { echo "/var/lib/chaosgw/$d is not writable in the teardown container"; fail=1; }
+            # a write, not test -w: the coreutils of Ubuntu 26.04 (uutils) read the mode bits and say no to root in a directory of user 65532
+            docker exec ci-mounts-td sh -c "touch /var/lib/chaosgw/$d/.write-check && rm /var/lib/chaosgw/$d/.write-check" || { echo "/var/lib/chaosgw/$d is not writable in the teardown container"; fail=1; }
           done
-          docker exec --privileged ci-mounts-td test -w /var/lib/kea || { echo "/var/lib/kea is not writable in the teardown container"; fail=1; }
+          docker exec ci-mounts-td sh -c "touch /var/lib/kea/.write-check && rm /var/lib/kea/.write-check" || { echo "/var/lib/kea is not writable in the teardown container"; fail=1; }
           if [ "${fail:-0}" = 1 ]; then
             # what the container is: the user, its capabilities, the owners of the directories, and a real write
             docker exec --privileged ci-mounts-td sh -c 'id; grep -E "^(Cap|NoNewPrivs|Seccomp)" /proc/self/status; ls -ldn /var/lib/chaosgw/* /var/lib/kea; touch /var/lib/chaosgw/state/probe && echo "touch works" && rm /var/lib/chaosgw/state/probe; grep chaosgw /proc/self/mountinfo' || true

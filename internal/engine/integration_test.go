@@ -55,6 +55,8 @@ type real struct {
 	e    *engine.Engine
 	base *model.Configuration
 	exec apply.Exec
+	// reader, when set, is what verifyKernel reads the kernel through (kernelReader)
+	reader apply.Exec
 }
 
 // realClock makes the engine use the real clock: the netlink debounce needs it, the confirmation

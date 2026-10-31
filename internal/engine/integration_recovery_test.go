@@ -339,6 +339,8 @@ func TestKillingTheExecutorProcessInTheMiddleOfAnApplyIsRecoveredOnTheRealKernel
 	if out := r.top.GW.Must("ip", "route", "show", "table", "100"); strings.Contains(out, gateway) {
 		t.Errorf("the route of the interrupted apply is still there:\n%s", out)
 	}
+	// the interfaces the gateway owns are known to the executor process, not to the executor of the test
+	r.reader = redial()
 	r.verifyKernel()
 }
 
@@ -486,8 +488,8 @@ func TestTheStopCleanupLeavesNothingOfTheGatewayOnTheRealKernel(t *testing.T) {
 	if ns := gw.Must("ip", "netns", "list"); strings.Contains(ns, "cgp-") {
 		t.Errorf("a namespace of a probe is still there:\n%s", ns)
 	}
-	if strings.Contains(gw.Must("tc", "qdisc", "show"), "netem") {
-		t.Error("a qdisc of a fault is still there")
+	if qdiscs := gw.Must("tc", "qdisc", "show"); strings.Contains(qdiscs, "netem") {
+		t.Errorf("a qdisc of a fault is still there:\n%s\n%s", qdiscs, gw.Must("ip", "-br", "link", "show"))
 	}
 
 	// compose up: the next start rebuilds everything from the last confirmed revision, the probe gets its lease again
@@ -514,8 +516,8 @@ func TestTheStopCleanupLeavesNothingOfTheGatewayOnTheRealKernel(t *testing.T) {
 	// mirror table of a path MTU fault with the rest
 	b.e = e
 	b.put("target: {device: " + d.Name + "}\nfault: {family: mtu, mtu: {size: 1280, mode: icmp}}")
-	if out := strings.TrimSpace(gw.Must("ip", "route", "show", "table", "103")); out == "" {
-		t.Fatal("the mirror table holds no route while the MTU fault is active")
+	if out, err := gw.Run(context.Background(), "ip", "route", "show", "table", "103"); err != nil || strings.TrimSpace(out) == "" {
+		t.Fatalf("the mirror table holds no route while the MTU fault is active: %v", err)
 	}
 	e.Close()
 	b.ex.StopProbeClients()

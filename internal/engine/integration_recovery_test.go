@@ -513,19 +513,11 @@ func TestTheStopCleanupLeavesNothingOfTheGatewayOnTheRealKernel(t *testing.T) {
 	}
 
 	// a gateway that was killed has not removed its overlays (they live in the engine's memory): the teardown removes the
-	// mirror table of a path MTU fault with the rest
+	// tree of its fault with the rest
 	b.e = e
-	b.put("target: {device: " + d.Name + "}\nfault: {family: mtu, mtu: {size: 1280, mode: icmp}}")
-	mirrorDeadline := time.Now().Add(15 * time.Second)
-	for {
-		// a table with no route does not exist for the kernel, and the routes of the mirror are made after the apply
-		if out, err := gw.Run(context.Background(), "ip", "route", "show", "table", "103"); err == nil && strings.TrimSpace(out) != "" {
-			break
-		}
-		if time.Now().After(mirrorDeadline) {
-			t.Fatalf("the mirror table holds no route while the MTU fault is active:\n%s\n%s", gw.Must("ip", "route", "show", "table", "all"), gw.Must("ip", "rule", "show"))
-		}
-		time.Sleep(200 * time.Millisecond)
+	b.put("target: {device: " + d.Name + "}\nfault: {latency: 40ms}")
+	if !strings.Contains(gw.Must("tc", "qdisc", "show"), "netem") {
+		t.Fatal("no fault is active before the second stop")
 	}
 	e.Close()
 	b.ex.StopProbeClients()
@@ -533,6 +525,9 @@ func TestTheStopCleanupLeavesNothingOfTheGatewayOnTheRealKernel(t *testing.T) {
 		t.Fatalf("teardown of a gateway that still had an overlay: %v\n%s", err, strings.Join(plan.Summary, "\n"))
 	}
 	ownTablesEmpty("after the stop of a killed gateway")
+	if qdiscs := gw.Must("tc", "qdisc", "show"); strings.Contains(qdiscs, "netem") {
+		t.Errorf("a qdisc of a fault is still there after the stop of a killed gateway:\n%s", qdiscs)
+	}
 }
 
 // M27 test: the service namespace (plan §3.3): the holder container's namespace lives on under its name and the gateway's end

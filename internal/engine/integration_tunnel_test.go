@@ -375,11 +375,15 @@ func TestATunnelBlackoutCutsTheTunnelInTheDirectionItIsWrittenForAndNothingElse(
 			t.Fatalf("the tunnel did not come back\n%s\n%s", l.wgShow(), l.top.RC.Must("wg", "show"))
 		}
 	}
-	// and carries the flows again as if nothing had happened
+	// and carries the flows again as if nothing had happened; a path without a fault loses nothing, but a datagram may be lost by
+	// chance on a real kernel (1 in 300 was, CI run 41223066872), so the assertion is a statistical one: repeated once (plan §4.3)
 	for _, fl := range []flow{l.toClient, l.bToClient, l.clientToA} {
-		if r := fl.run(t, quietRun()); r.Delivered == 0 || r.Replied == 0 || r.UpLoss() != 0 || r.DownLoss() != 0 {
-			t.Errorf("%s after the blackout: %s", fl.name, r)
-		}
+		testbed.Statistically(t, fl.name+" after the blackout", func() error {
+			if r := fl.run(t, quietRun()); r.Delivered == 0 || r.Replied == 0 || r.UpLoss() != 0 || r.DownLoss() != 0 {
+				return fmt.Errorf("%s after the blackout: %s", fl.name, r)
+			}
+			return nil
+		})
 	}
 }
 

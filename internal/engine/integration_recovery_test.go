@@ -516,8 +516,16 @@ func TestTheStopCleanupLeavesNothingOfTheGatewayOnTheRealKernel(t *testing.T) {
 	// mirror table of a path MTU fault with the rest
 	b.e = e
 	b.put("target: {device: " + d.Name + "}\nfault: {family: mtu, mtu: {size: 1280, mode: icmp}}")
-	if out, err := gw.Run(context.Background(), "ip", "route", "show", "table", "103"); err != nil || strings.TrimSpace(out) == "" {
-		t.Fatalf("the mirror table holds no route while the MTU fault is active: %v", err)
+	mirrorDeadline := time.Now().Add(15 * time.Second)
+	for {
+		// a table with no route does not exist for the kernel, and the routes of the mirror are made after the apply
+		if out, err := gw.Run(context.Background(), "ip", "route", "show", "table", "103"); err == nil && strings.TrimSpace(out) != "" {
+			break
+		}
+		if time.Now().After(mirrorDeadline) {
+			t.Fatalf("the mirror table holds no route while the MTU fault is active:\n%s\n%s", gw.Must("ip", "route", "show", "table", "all"), gw.Must("ip", "rule", "show"))
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 	e.Close()
 	b.ex.StopProbeClients()

@@ -253,6 +253,14 @@ func recovery(t *testing.T, rel appliance.Release, imageTar string) {
 		t.Logf("%s:\n%s", when, output("sh -c 'ip -4 route show table all; ip -4 rule show; ip -br link; ip -4 -br addr'"))
 	}
 	routing("the routing before the offline apply of revision 2")
+	// what `apply --dry-run` plans for the configuration the gateway runs (nothing, if the plan is steady) and for revision 2
+	if err := vm.Put(ctx, "/opt/chaosgw/gateway1.yaml", 0o644, strings.NewReader(cfg1)); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"gateway1.yaml", "gateway2.yaml"} {
+		t.Logf("dry run of %s:\n%s", f, output("sudo docker run --rm --user 65532:65532 --network host -v chaosgw_chaosgw-run:/run/chaosgw -v /opt/chaosgw/"+f+":/gateway.yaml:ro "+tag+
+			" apply --file /gateway.yaml --dry-run --socket /run/chaosgw/exec.sock --executor-uid 0"))
+	}
 	r2, err := vm.Run(ctx, "sudo docker run --rm --user 65532:65532 --network host -v chaosgw_chaosgw-run:/run/chaosgw -v /var/lib/chaosgw/state:/var/lib/chaosgw/state "+
 		"-v /opt/chaosgw/gateway2.yaml:/gateway.yaml:ro "+tag+
 		" apply --file /gateway.yaml --socket /run/chaosgw/exec.sock --state-dir /var/lib/chaosgw/state --executor-uid 0 2>&1", nil)

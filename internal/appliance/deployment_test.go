@@ -392,6 +392,10 @@ func deployment(t *testing.T, rel appliance.Release, two bool, imageTar string) 
 	st, leases := api.call("GET", "/networks/0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21/leases", nil)
 	if st != 200 || !strings.Contains(fmt.Sprint(leases), ip) {
 		t.Errorf("GET /networks/{id}/leases: %d %v", st, leases)
+		_, devices := api.call("GET", "/devices", nil)
+		t.Logf("GET /devices: %v\nthe log of Kea:\n%s\nthe log of the API:\n%s\nthe lease file:\n%s", devices,
+			output(compose+" logs --no-color --tail 40 kea"), output(compose+" logs --no-color --tail 40 api | grep -i 'lease\\|kea\\|dhcp'"),
+			output("sudo sh -c 'ls -l /var/lib/chaosgw/kea; cat /var/lib/chaosgw/kea/*.csv'"))
 	}
 	if logs := output(compose + " logs --no-color kea"); strings.Contains(logs, "chaosgw kea-hook:") {
 		t.Errorf("the hook of Kea reports a failure:\n%s", logs)

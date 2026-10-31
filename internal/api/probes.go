@@ -332,7 +332,12 @@ func (s *Server) CalibrateProbe(c *gin.Context, probeID model.Ref) {
 	}
 	if err != nil {
 		s.write(c, newProblem(model.ErrorCodeUnavailable, "the probe cannot reach the echo server %s:%d: %v", host, port, err))
-		s.recordAborted(c, p, profile, req, err)
+		why := err
+		if ctx.Err() != nil {
+			// the caller is gone or the time is up: the audit says so, whichever way the run noticed it
+			why = fmt.Errorf("the run was cancelled: %w", ctx.Err())
+		}
+		s.recordAborted(c, p, profile, req, why)
 		return
 	}
 	m.Sent, m.Received, m.RTTUs = run.Sent, run.Received, run.RTTUs
@@ -345,7 +350,7 @@ func (s *Server) CalibrateProbe(c *gin.Context, probeID model.Ref) {
 		} else if ctx.Err() != nil {
 			// the caller is gone or the time is up: what was measured so far is no verdict
 			s.write(c, newProblem(model.ErrorCodeUnavailable, "the calibration was cancelled: %v", ctx.Err()))
-			s.recordAborted(c, p, profile, req, ctx.Err())
+			s.recordAborted(c, p, profile, req, fmt.Errorf("the run was cancelled: %w", ctx.Err()))
 			return
 		} else {
 			note = strings.TrimSpace(note + " The throughput could not be measured: " + err.Error() + ".")

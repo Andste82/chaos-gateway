@@ -85,9 +85,10 @@ lint: $(WEBDEPS) ## golangci-lint and the TypeScript type check
 
 # ---- tests ------------------------------------------------------------------------------------
 
-# internal/api alone needs nearly ten minutes under -race on a small machine, which is the default timeout of go test
+# internal/api alone needs 23 to 25 minutes under -race on six cores (nearly ten on a small machine in the early phases), so the
+# timeout of go test is 40 minutes
 test: test-web ## level 0: Go unit tests (no root) and the web unit tests
-	$(GO) test $(RACE) -count=1 -timeout 20m ./...
+	$(GO) test $(RACE) -count=1 -timeout 40m ./...
 
 # Fuzz targets, one `go test -fuzz` run each (Go runs one target per invocation). FUZZTIME is per
 # target: the default 100s makes the three targets of the executor decoder and connection handling

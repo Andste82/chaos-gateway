@@ -185,9 +185,10 @@ func planTC(t *compiler.Target, s *State, removed []string, mem map[string]strin
 		p.stale = append(p.stale, st)
 		if contains(removed, dev) {
 			// the interface leaves Chaos Gateway's control in this apply: nobody can delete it later
-			// (the executor's scope no longer covers it). A bridge or WireGuard interface that is
-			// deleted takes its tree along.
-			if ok && l.Kind() != "bridge" && l.Kind() != "wireguard" && l.Kind() != "veth" && l.Kind() != "ifb" {
+			// (the executor's scope no longer covers it). A bridge, a WireGuard interface, the IFB device or the service
+			// pair that is deleted takes its tree along; any other interface, a veth of the testbed included, is only
+			// released and keeps the tree unless it is deleted here.
+			if ok && l.Kind() != "bridge" && l.Kind() != "wireguard" && l.Kind() != "ifb" && (l.Kind() != "veth" || dev != compiler.ServiceHostIf) {
 				p.immediate[st.Key()] = true
 			} else {
 				p.stale = p.stale[:len(p.stale)-1]

@@ -20,7 +20,10 @@ import (
 // teardownState reads the state as the teardown does.
 func (e *env) teardownState() *apply.State {
 	e.t.Helper()
-	s, err := apply.ReadState(context.Background(), e.exec(), "", apply.Want{BirdInstance: compiler.BirdInstance, ServiceNS: "cgsvc", ServicePeerIf: compiler.ServicePeerIf})
+	s, err := apply.ReadState(context.Background(), e.exec(), "", apply.Want{BirdInstance: compiler.BirdInstance, ServiceNS: "cgsvc", ServicePeerIf: compiler.ServicePeerIf,
+		// every interface of the testbed: a tree is only read where it is asked for or where the interface is assigned, and after a
+		// teardown nothing is assigned
+		TCDevs: []string{"br-iot", "br-lab", "lan0", "lan1", "mgmt0", "wan0"}})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -229,6 +232,23 @@ func TestTeardownRemovesTheTCTreesAndTheRulesInDockerUser(t *testing.T) {
 	}
 	if !after.DockerUser.ChainExists {
 		t.Error("the chain of Docker was deleted")
+	}
+}
+
+// The classes of a fault whose overlay was removed stay for the retirer (make-before-break), and the engine that applied them is
+// gone when the stop reaches the teardown. The tree with those classes is a tree of the gateway all the same, and the teardown
+// deletes it (the real kernel test found the htb root and the netem leaves of such a fault on the uplink after the teardown).
+func TestTeardownRemovesTheTreeWithTheClassesOfARemovedFault(t *testing.T) {
+	x := newTCEnv(t)
+	x.k.ServiceNamespace("cgsvc")
+	x.applyRetiring(x.compileWith(x.overlay(dev150)))
+	x.applyRetiring(x.compileWith())
+	if before := x.teardownState(); len(before.TC) == 0 {
+		t.Fatalf("the removed fault left no tree behind, so the test checks nothing:\n%s", x.dumpTC())
+	}
+	x.teardown()
+	if after := x.teardownState(); len(after.TC) != 0 {
+		t.Errorf("tc trees after the teardown: %v\n%s", after.TC, x.dumpTC())
 	}
 }
 

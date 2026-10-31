@@ -42,6 +42,9 @@ func Teardown(ctx context.Context, ex Exec, ns, serviceNS string) (*Plan, error)
 	if _, err := ex.Do(ctx, p.Ops...); err != nil && !errors.As(err, &birdDown) {
 		return p, &Error{Stage: "execute", Err: err}
 	}
+	// the tc trees are read on the interfaces the gateway owned: they are released now, and a tree is only read on an interface
+	// that is assigned or named, so the check would not see one that the plan missed
+	want.TCDevs = union(s.Assigned, []string{compiler.IFBDev})
 	after, err := ReadState(ctx, ex, ns, want)
 	if err != nil {
 		return p, &Error{Stage: "verify", Err: err}

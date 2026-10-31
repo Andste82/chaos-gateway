@@ -515,7 +515,12 @@ func TestTheStopCleanupLeavesNothingOfTheGatewayOnTheRealKernel(t *testing.T) {
 	// a gateway that was killed has not removed its overlays (they live in the engine's memory): the teardown removes the
 	// tree of its fault with the rest
 	b.e = e
-	b.put("target: {device: " + d.Name + "}\nfault: {latency: 40ms}")
+	// the new engine has to find the device again before an overlay can name it
+	b.follow()
+	d2 := b.waitDevice(compiler.ProbeMAC(probeAID), 90*time.Second, func(d *engine.DeviceState) bool {
+		return len(d.Addresses) > 0 && d.Lease != nil
+	})
+	b.put("target: {device: " + d2.Name + "}\nfault: {latency: 40ms}")
 	if !strings.Contains(gw.Must("tc", "qdisc", "show"), "netem") {
 		t.Fatal("no fault is active before the second stop")
 	}

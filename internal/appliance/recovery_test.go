@@ -263,11 +263,13 @@ func recovery(t *testing.T, rel appliance.Release, imageTar string) {
 	}
 	// every change of a route or a rule while the apply runs, with the time: the order in which the kernel lost table 101 and rule 925
 	output("sudo sh -c 'nohup ip -ts monitor route rule >/tmp/monitor.txt 2>&1 </dev/null & echo $! >/tmp/monitor.pid'")
+	must(compose + " exec -T exec sh -c 'touch /run/chaosgw/trace' || true") // TEMPORARY DEBUG: the commands of the executor
 	time.Sleep(time.Second)
 	r2, err := vm.Run(ctx, "sudo docker run --rm --user 65532:65532 --network host -v chaosgw_chaosgw-run:/run/chaosgw -v /var/lib/chaosgw/state:/var/lib/chaosgw/state "+
 		"-v /opt/chaosgw/gateway2.yaml:/gateway.yaml:ro "+tag+
 		" apply --file /gateway.yaml --socket /run/chaosgw/exec.sock --state-dir /var/lib/chaosgw/state --executor-uid 0 2>&1", nil)
 	time.Sleep(time.Second)
+	t.Logf("the commands of the executor:\n%s", output(compose+" logs --no-color --tail 300 exec | grep TRACE | cut -c1-900"))
 	t.Logf("the changes of routes and rules during the apply:\n%s", output("sudo sh -c 'kill $(cat /tmp/monitor.pid); cat /tmp/monitor.txt'"))
 	if err != nil || r2.Exit != 0 {
 		routing("the routing after the failed offline apply of revision 2")

@@ -155,6 +155,9 @@ func (r *ExecRunner) Run(ctx context.Context, c Command) (Result, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if _, statErr := os.Stat("/run/chaosgw/trace"); statErr == nil { // TEMPORARY DEBUG
+		fmt.Fprintf(os.Stderr, "TRACE %s %q stdin=%q\n", time.Now().Format("15:04:05.000000"), argv, c.Stdin)
+	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Env = []string{"LC_ALL=C", "PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
 	cmd.Stdin = strings.NewReader(c.Stdin)

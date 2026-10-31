@@ -247,9 +247,20 @@ func recovery(t *testing.T, rel appliance.Release, imageTar string) {
 		t.Fatal(err)
 	}
 	must(compose + " stop api")
-	out := must("sudo docker run --rm --user 65532:65532 --network host -v chaosgw_chaosgw-run:/run/chaosgw -v /var/lib/chaosgw/state:/var/lib/chaosgw/state " +
-		"-v /opt/chaosgw/gateway2.yaml:/gateway.yaml:ro " + tag +
-		" apply --file /gateway.yaml --socket /run/chaosgw/exec.sock --state-dir /var/lib/chaosgw/state --executor-uid 0 2>&1")
+	// the routing the gateway made, before and after the offline apply: when the apply cannot verify what it made, this says what the kernel holds
+	routing := func(when string) {
+		t.Helper()
+		t.Logf("%s:\n%s", when, output("sh -c 'ip -4 route show table all; ip -4 rule show; ip -br link; ip -4 -br addr'"))
+	}
+	routing("the routing before the offline apply of revision 2")
+	r2, err := vm.Run(ctx, "sudo docker run --rm --user 65532:65532 --network host -v chaosgw_chaosgw-run:/run/chaosgw -v /var/lib/chaosgw/state:/var/lib/chaosgw/state "+
+		"-v /opt/chaosgw/gateway2.yaml:/gateway.yaml:ro "+tag+
+		" apply --file /gateway.yaml --socket /run/chaosgw/exec.sock --state-dir /var/lib/chaosgw/state --executor-uid 0 2>&1", nil)
+	if err != nil || r2.Exit != 0 {
+		routing("the routing after the failed offline apply of revision 2")
+		t.Fatalf("the offline apply of revision 2: %v, exit %d\n%s", err, r2.Exit, r2.Stdout)
+	}
+	out := r2.Stdout
 	t.Logf("apply 2: %s", strings.TrimSpace(out))
 	stateDir := "/var/lib/chaosgw/state" // a bind mount of the host since M28 (plan §3.6)
 	if out := must("sudo cat " + stateDir + "/config.json"); !regexp.MustCompile(`"active": 2`).MatchString(out) {

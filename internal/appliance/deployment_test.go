@@ -401,12 +401,12 @@ func deployment(t *testing.T, rel appliance.Release, two bool, imageTar string) 
 	// certificate from the mount of /var/lib/chaosgw/service, and the API accepts it (a 401 or a certificate error is a failed hook)
 	const viaHTTPMAC = "02:00:00:00:99:01"
 	must(compose + " exec -T -e CHAOSGW_KEA_EVENTS_SOCKET=/run/chaosgw-kea-events/missing.sock -e KEA_LEASE4_ADDRESS=10.10.0.177 -e KEA_LEASE4_HWADDR=" + viaHTTPMAC +
-		" -e KEA_SUBNET_ID=1 -e KEA_LEASE4_VALID_LIFETIME=60 kea /usr/local/bin/chaosgw-kea-hook lease4_select 2>&1")
+		" -e KEA_SUBNET_ID=1 -e KEA_LEASE4_VALID_LIFETIME=60 kea /usr/share/kea/scripts/chaosgw-kea-hook lease4_select 2>&1")
 	waitFor(t, 30*time.Second, "the lease event the hook posted over HTTP with the service token", func() bool {
 		return strings.Contains(output("cat "+events), viaHTTPMAC)
 	})
 	// and with a token that is wrong the same call fails, so the check above is the token's
-	if r, err := vm.Run(ctx, compose+" exec -T -e CHAOSGW_KEA_EVENTS_SOCKET=/run/chaosgw-kea-events/missing.sock -e CHAOSGW_SERVICE_TOKEN_FILE=/etc/hostname -e KEA_LEASE4_ADDRESS=10.10.0.178 -e KEA_LEASE4_HWADDR=02:00:00:00:99:02 -e KEA_SUBNET_ID=1 kea /usr/local/bin/chaosgw-kea-hook lease4_select 2>&1", nil); err != nil || r.Exit == 0 || !strings.Contains(r.Stdout, "chaosgw kea-hook: the API answered 401") {
+	if r, err := vm.Run(ctx, compose+" exec -T -e CHAOSGW_KEA_EVENTS_SOCKET=/run/chaosgw-kea-events/missing.sock -e CHAOSGW_SERVICE_TOKEN_FILE=/etc/hostname -e KEA_LEASE4_ADDRESS=10.10.0.178 -e KEA_LEASE4_HWADDR=02:00:00:00:99:02 -e KEA_SUBNET_ID=1 kea /usr/share/kea/scripts/chaosgw-kea-hook lease4_select 2>&1", nil); err != nil || r.Exit == 0 || !strings.Contains(r.Stdout, "chaosgw kea-hook: the API answered 401") {
 		t.Errorf("the hook with a token the API does not know: %v exit %d\n%s", err, r.Exit, r.Stdout)
 	}
 	// the control socket belongs to the API's group, so the API can talk to Kea and nobody else (M6a-10)

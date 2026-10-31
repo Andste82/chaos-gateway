@@ -205,9 +205,11 @@ func ctlExplainsTheTrafficOfADevice(t *testing.T, g *gw, clk *clock.Fake) {
 
 // An overlay with a lease is renewed with `overlay renew`; the lease that is not renewed ends the overlay.
 func ctlRenewsTheLeaseOfAnOverlayItDoesNotKeepAlive(t *testing.T, g *gw, clk *clock.Fake) {
-	id := strings.TrimSpace(g.ctl("fault", "set", "--device", "esp32-42", "--latency", "50ms", "--lease", "1s").out)
-	for i := 0; i < 5; i++ {
-		time.Sleep(400 * time.Millisecond)
+	// the lease is on the clock of the engine, the renewals are on the real one, and `fault set` takes seconds on a loaded machine
+	// under -race: the lease has to outlast it, and the renewals together are twice the lease
+	id := strings.TrimSpace(g.ctl("fault", "set", "--device", "esp32-42", "--latency", "50ms", "--lease", "3s").out)
+	for i := 0; i < 12; i++ {
+		time.Sleep(500 * time.Millisecond)
 		if r := g.ctl("overlay", "renew", id); r.code != 0 {
 			t.Fatalf("renewal %d: %+v", i, r)
 		}

@@ -254,12 +254,8 @@ func TestNoContainerWidensItsSandbox(t *testing.T) {
 				t.Errorf("%s adds %s", name, c)
 			}
 		}
-		// Kea is the one container without no-new-privileges (decision 7, P7-M29-02): its package may use file capabilities
-		if !slices.Contains(s.SecurityOpt, "no-new-privileges:true") && name != "kea" {
-			t.Errorf("%s does not set no-new-privileges; only kea is excepted (P7-M29-02)", name)
-		}
-		if name == "kea" && slices.Contains(s.SecurityOpt, "no-new-privileges:true") {
-			t.Errorf("kea sets no-new-privileges: remove the exception from this test, the container table and the level 2 deployment test (P7-M29-02)")
+		if !slices.Contains(s.SecurityOpt, "no-new-privileges:true") {
+			t.Errorf("%s does not set no-new-privileges (decision 7, P7-M29-02: Kea sets it too)", name)
 		}
 		if s.Restart == "" && name != "teardown" {
 			t.Errorf("%s has no restart policy", name)

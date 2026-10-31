@@ -7147,7 +7147,7 @@ The review went through `deploy/compose.yaml`, container by container, for the p
 |---|---|---|---|---|---|
 | `exec` | root | privileged, host network and PID, `no-new-privileges` | read-only; tmpfs `/tmp`, `/run` | its two data directories and the captures (rw), the secrets, `/lib/modules`, `/etc`, `/usr/lib/systemd/network` (ro), `/run/netns` (rw, `rshared`) | root on the host if the process is taken over: it is small, listens on a Unix socket only, runs no shell and nothing but typed operations (below) |
 | `api` | 65532 | `cap_drop: ALL`, `no-new-privileges`, host network | read-only; tmpfs `/tmp` | its data directories (rw), `/run/systemd/resolve` (ro) | in the host network namespace to listen on the management network; the port is above 1024 |
-| `kea` | 0:65532 | `NET_RAW`, `NET_BIND_SERVICE`, `CHOWN`, `FOWNER`, `DAC_OVERRIDE`; **no** `no-new-privileges` | read-only | its leases, the service directory (ro) | `no-new-privileges` is not set (the container is root and the capabilities are the ones it needs; the level 2 test `deployment_test.go` excepts it too); to be tried on a level 2 run, because Kea's package may use file capabilities |
+| `kea` | 0:65532 | `NET_RAW`, `NET_BIND_SERVICE`, `CHOWN`, `FOWNER`, `DAC_OVERRIDE`, `no-new-privileges` | read-only | its leases, the service directory (ro) | the container is root and the capabilities are the ones it needs; `no-new-privileges` was added on 2026-10-31 (P7-M29-02, option (b)), and the CI job `deployment` and the nightly level 2 run show that Kea's package starts with it (if it needs file capabilities, the option goes and the exception comes back in the review test, the compose test and the level 2 test) |
 | `bird` | root | `NET_ADMIN`, `NET_RAW`, `NET_BIND_SERVICE`, `no-new-privileges`, host network | read-only | none | `NET_ADMIN` in the host's network namespace is wide; BIRD needs it to write routes. It runs a configuration that only the executor writes and checks (`bird -p`, `include` refused) |
 | `svcns` | 65532 | none, `network_mode: none`, host PID | read-only | none | sees the host's processes (no capability to signal them); it needs the host PID to tell the executor which namespace is its own |
 | `dns`, `tls` | 65532 | `cap_drop: ALL` (+ `NET_BIND_SERVICE` for `dns`), joined to `svcns` | read-only | the service directory (ro), for `tls` the CAs (ro) | the keys of the test CAs are readable by `tls` and `tls-proxy`: they sign with them |
@@ -7216,7 +7216,7 @@ the capture path (`OpenRoot`, ownership of the files), the protocol (`server.go`
 
 ### Preparation for the external review
 
-The external review itself is a human activity (who, when, how long: P7-M29-01 in `docs/open-items.md`). What is ready to hand over:
+The external review itself is a human activity. It is not part of V1: it moves to M38 (After V1), decided 2026-10-31 (P7-M29-01 in `docs/open-items.md`), and the release notes say that the interface has not been reviewed from outside. What is ready to hand over:
 
 - this section (threat model, accepted risks, the table of mitigations and the tests that hold them);
 - the source of the interface: `internal/executor/{op,validate,plan,scope,server,proto,runner,exec,capture,probe,dnssets,netlinkset,nftdup,tcgrammar,hostpreflight}.go` (about 6,500 lines without the tests) and the compose file of the container (`deploy/compose.executor.yaml`);
@@ -7231,7 +7231,7 @@ The external review itself is a human activity (who, when, how long: P7-M29-01 i
 4. **A damaged `ui.pem` is no failed start** (M27's rule that the gateway comes up): the gateway's own certificate is presented and the log says why.
 5. **No screen for the certificate in the web UI**: there is no design for a Settings screen (§2.17), and the operation is rare; `chaosctl certificate` and the API cover it.
 6. **The scopes stay as they were**; the review pinned them in a test so that a new operation has to be put into a class on purpose.
-7. **`no-new-privileges` stays off for Kea** until a level 2 run shows it works with Kea's package; the exception is pinned in `TestNoContainerWidensItsSandbox` and the level 2 deployment test; whether it stays is P7-M29-02 in `docs/open-items.md`.
+7. **`no-new-privileges` is set on Kea too** (decided 2026-10-31, P7-M29-02, option (b)); it was off until a run could show that Kea's package starts with it. The CI job `deployment` and the nightly level 2 run are that proof: if Kea does not start, the option is taken out of `deploy/compose.kea.yaml` again, and the exception returns to `TestNoContainerWidensItsSandbox`, the compose test and the level 2 deployment test, with the reason in the table.
 8. **No limits on memory and processes** of the containers before there are measurements (H1).
 
 ### Tests
@@ -7253,7 +7253,7 @@ Level 2: the existing deployment tests follow the image's new default user (`--u
 | Scope: secret-free exports | `TestNoSecretIsInAResponseAnEventAnAuditEntryOrALog`, `TestAnExportWithoutSecretsHoldsNoKeyInAnyFormat`, `TestExportWithSecretsNeedsFullAndIsAudited` |
 | Scope: rate limiting on login | the M5 tests named above |
 | Scope: container hardening review (capabilities, read-only root file systems) | the table above; `TestEveryContainerNamesItsUserAndTheImageDefaultsToTheUnprivilegedOne`, `TestTheContainersMountFromTheHostOnlyWhatTheReviewAllows`, `TestNoContainerWidensItsSandbox`, `TestOnlyTheExecutorIsPrivilegedAndTheCapabilitiesAreThoseOfThePlan` |
-| Scope: external review of the executor interface | the threat model, the fuzz targets and the package above; the review itself is P7-M29-01 in `docs/open-items.md` |
+| Scope: external review of the executor interface | moved to M38 (decided 2026-10-31, P7-M29-01): the threat model, the fuzz targets and the package above are what is ready to hand over |
 | Tests: test networks and test-role WireGuard clients cannot reach the UI/API (regression of M4) | level 1 `TestTheUIAndTheAPIAreReachedFromTheManagementNetworkOnlyOnTheRealKernel` (the real server), `TestRolesDecideWhoReachesTheControlPlane` (M4b) |
 | Tests: tokens with insufficient scope are rejected | `TestEveryOperationRefusesACallerWithoutTheScopeItNeeds` |
 | Tests: exports contain no secrets | `TestNoSecretIsInAResponseAnEventAnAuditEntryOrALog` |

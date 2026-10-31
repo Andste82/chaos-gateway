@@ -294,7 +294,7 @@ func deployment(t *testing.T, rel appliance.Release, two bool, imageTar string) 
 		if m := regexp.MustCompile(`CapBnd:\s+(\w+)`).FindStringSubmatch(status); m == nil || m[1] != want {
 			t.Errorf("%s: the bounding set of capabilities of its main process is %v, want %s\n%s", service, m, want, status)
 		}
-		if service != "exec" && service != "kea" && !regexp.MustCompile(`NoNewPrivs:\s+1`).MatchString(status) {
+		if service != "exec" && !regexp.MustCompile(`NoNewPrivs:\s+1`).MatchString(status) {
 			t.Errorf("%s: no-new-privileges is not set on its main process:\n%s", service, status)
 		}
 	}

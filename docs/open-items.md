@@ -3224,7 +3224,7 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is comple
 
 ### P7-M29-01 Who reviews the executor's interface from outside, when, and for how long
 
-- Status: new
+- Status: closed (2026-10-31): decided by the maintainer, option (c): the external review of the executor interface is not part of V1 and moves to M38 (After V1); the plan (M29 Scope, M38), `docs/development.md` and the release notes say so
 - Severity: major
 - Reason: needs-decision. The plan's M29 Scope ends with the "external review of the executor interface". A review by someone who did not write the code is a human activity: it needs a reviewer, a date and a scope, and it is a gate of the release (M30). What can be prepared is done and checked in: the threat model, the accepted risks, the table of mitigations with the test that holds each, the six fuzz targets (`make fuzz`, nightly with 45 minutes each), the source list and the command lines to run the tests, all in `docs/development.md` "Security hardening (M29)" ("Preparation for the external review"). No code can decide who reviews or whether V1 may ship without the review.
 - Evidence: `docs/plan.md` M29 Scope, `docs/development.md` "Security hardening (M29)", "Preparation for the external review" (the hand-over package), `Makefile` (`fuzz`), `.github/workflows/nightly.yml` (job `fuzz`).
@@ -3232,12 +3232,12 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is comple
 - Options: (a) a person from outside the project reviews before the V1 release, for a fixed time (about two days for the 6,500 lines of the interface plus the fuzz runs), and its findings are fixed or recorded before the tag; (b) the release goes out with the self-review and the fuzz runs, the external review follows within a named period after V1, and the release notes say the interface has not been reviewed from outside yet; (c) the review is dropped from V1 and moves to M38 (After V1) with the other deferred items.
 - Recommendation: (a) if a reviewer is available before the release: the interface is the one place where a taken-over API process becomes root on the host, and two days of a second pair of eyes are cheap beside that. (b) if no reviewer is found: the release notes must say so (M30).
 - Acceptance: the plan's M29 text names the reviewer and the date (for (a)) or the period after V1 (for (b)); for (a) the findings are in `docs/open-items.md` and closed before the tag.
-- Needs maintainer: yes
+- Needs maintainer: no
 - Effort: S for the decision, M for the review itself
 
 ### P7-M29-02 Kea runs without `no-new-privileges`
 
-- Status: new
+- Status: decided (2026-10-31): option (b) by the maintainer; `no-new-privileges: true` is set on Kea in `deploy/compose.kea.yaml` and `deploy/compose.yaml`, the exception is out of `TestNoContainerWidensItsSandbox`, the compose test, the level 2 deployment test and the container table; it stays open until the CI job `deployment` and the nightly level 2 DHCP test show that Kea starts with it (if it does not, take the option out again and restore the exception with the reason)
 - Severity: minor
 - Reason: needs-decision. The review of the containers (M29) found one container that does not set `no-new-privileges`: `kea` (user 0:65532 with the capabilities `NET_RAW`, `NET_BIND_SERVICE`, `CHOWN`, `FOWNER`, `DAC_OVERRIDE`). Kea's Debian package may start its binaries through file capabilities, which `no-new-privileges` would break, and nothing here could start the container to try (no Docker on the development machine). The exception is pinned in `TestNoContainerWidensItsSandbox` (no other container may lack the option) and in the level 2 deployment test, so it does not widen by accident.
 - Evidence: `docs/development.md` "Security hardening (M29)" (the container table, decision 7), `deploy/compose.kea.yaml`, `internal/executor/hardening_review_test.go`.
@@ -3245,12 +3245,12 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is comple
 - Options: (a) accept the exception for V1: the container has a read-only root file system and five capabilities (raw sockets for DHCP in the host network namespace), and the tests keep the exception from growing; (b) try `no-new-privileges: true` on the nightly level 2 run, and if the DHCP test passes keep it, remove the exception from the review test, the level 2 test and the table; if it fails keep (a) and note why in the table.
 - Recommendation: (b): it costs one nightly run, and (a) stays the fallback if Kea's package needs the file capabilities.
 - Acceptance: for (a) the table in `docs/development.md` names the reason as accepted; for (b) the compose file sets the option, the tests no longer except `kea`, and the level 2 DHCP test passes.
-- Needs maintainer: yes
+- Needs maintainer: no
 - Effort: S
 
 ### P7-M28-01 The arm64 image is tested by an emulated level 2 smoke test and `smoke-image.sh`, not by the namespace testbed in emulation (level 1b)
 
-- Status: new
+- Status: closed (2026-10-31): decided by the maintainer, option (a): the emulated level 2 smoke test and `smoke-image.sh` are the functional test of the arm64 image; the plan (M28 Tests, section 4.1 and 4.5) says so, and the testbed on arm64 runs with H1
 - Severity: minor
 - Reason: needs-decision. The plan's M28 Tests say that the arm64 image "passes the functional smoke test in emulated level 1b", and the table of §4.5 puts the arm64 image there (decision M1-02: "with M28"). What was built is the image smoke test `deploy/smoke-image.sh` under `qemu-user` (the binaries start and have the architecture asked for, the tools run at the pinned versions, Kea accepts its configuration, the schema check runs as the unprivileged user; the executor is not started, so there is no handshake check) and the weekly job `appliance-arm64`: the level 2 smoke test on an emulated aarch64 Ubuntu 24.04 machine, the three-port topology only, with a budget of five hours. The level 1 testbed (`make test-privileged`) on arm64 under emulation is not built: it needs a privileged arm64 container with network namespaces under `qemu-user` or a VM, and the kernel features it uses (nftables, `tc`, WireGuard) are those of the emulating host. The emulated level 2 test proves that the image and the deployment work on the architecture; it does not run the testbed there.
 - Evidence: `docs/plan.md` M28 Tests and §4.5, `deploy/smoke-image.sh`, `.github/workflows/weekly.yml` (`appliance-arm64`), `docs/development.md` "Container deployment (M28)".
@@ -3258,12 +3258,12 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is comple
 - Options: (a) accept the emulated level 2 smoke test and `smoke-image.sh`, and amend the M28 Tests and the table of §4.5 to say so; the testbed on arm64 runs on real hardware with H1; (b) build the testbed on arm64 in emulation (a weekly job with a privileged `linux/arm64` container under QEMU, which takes much longer than the budget of the weekly job and is slow enough to make timing tests unusable, so only the functional tests could run).
 - Recommendation: (a): the functional smoke test of the plan is what the emulated level 2 test does, and the testbed's logic does not depend on the architecture; the Raspberry Pi targets are validated with H1 anyway.
 - Acceptance: for (a) the plan's M28 Tests and §4.5 name the emulated level 2 smoke test; for (b) a weekly job runs the functional testbed tests on arm64.
-- Needs maintainer: yes
+- Needs maintainer: no
 - Effort: S for (a), L for (b)
 
 ### P7-M27-01 Safe mode drops the management-role WireGuard networks, so a gateway administered over a tunnel loses its access
 
-- Status: new
+- Status: closed (2026-10-31): decided by the maintainer, option (a): safe mode is the management interface alone; the documents of M30 already say so
 - Severity: minor
 - Reason: needs-decision. Plan §3.9 says safe mode keeps "management access only". `domain.SafeModeConfiguration` keeps the uplink, the management interface (with its allowed sources and the UI port) and the settings, and drops every network, so a WireGuard network with the role `management` (a management access path in plan §2.14) is gone: the tunnel is down in safe mode and the gateway is reachable through the management interface only. Keeping the tunnel is not a copy: its clients' `reachable` lists name test networks that safe mode does not have, its keys are generated secrets, and a failing WireGuard apply in the configuration of last resort would end safe mode in a failed start.
 - Evidence: `internal/domain/safemode.go`, `internal/domain/safemode_test.go` (`Networks == nil`), `docs/development.md` "Recovery and stop (M27)", decision 4.
@@ -3272,12 +3272,12 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is comple
 - Note: the documents of M30 (`docs/install.md`, `docs/recovery.md`, `docs/release-notes/v1.0.0.md`) and `TestTheDocumentsStateWhatSafeModeAndAKeyRotationDo` assume option (a); a decision for (b) changes them.
 - Recommendation: (a) for V1: the management interface is the access that does not depend on a key, an interface that can fail to come up or a peer, which is what the last resort should rely on; the recovery instructions (M30) say it. (b) is worth doing if operators administer the gateway only over the tunnel.
 - Acceptance: for (a) the recovery instructions state that the tunnel is down in safe mode; for (b) a test of the compiler and the engine shows the management tunnel up in safe mode and a test network's client cut off.
-- Needs maintainer: yes
+- Needs maintainer: no
 - Effort: S for (a), M for (b)
 
 ### P7-M27-02 A fallback to a revision from before a key rotation cannot be applied, because the rotation retired the key
 
-- Status: new
+- Status: closed (2026-10-31): decided by the maintainer, option (a): a rotation retires the old key for good and a fallback across it ends in safe mode; the documents of M30 already say so
 - Severity: minor
 - Reason: needs-decision. The commit of a revision that raises the key generation of a WireGuard client or link peer retires the old generation's keys (`wireguard.Prune`, pinned by `TestRotatingAClientKeyKeepsTheOldKeysUntilTheCommitAndAFailedApplyStillRestores`). The start applies the last known good revision when the active one fails (M27). `wireguard.PruneKeeping` keeps the keys that a later revision dropped altogether (a network, a client or a peer that is gone), so a fallback to a revision from before such a deletion works. A fallback to a revision from before a rotation does not: the compile finds no key for the client, and the gateway enters safe mode although that revision once worked. Keeping the retired generation would let a compromised key that was rotated away come back with the fallback, which is what a rotation is for.
 - Evidence: `internal/wireguard/provision.go` (`PruneKeeping`, `keepKeysOfGone`), `internal/engine/owner.go` (`prune`), `internal/engine/recovery.go`, `docs/development.md` "Recovery and stop (M27)".
@@ -3286,7 +3286,7 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is comple
 - Note: the documents of M30 (`docs/recovery.md`, `docs/release-notes/v1.0.0.md`) and `TestTheDocumentsStateWhatSafeModeAndAKeyRotationDo` assume option (a); a decision for (b) changes them.
 - Recommendation: (a): safe mode is the safe answer when the only revision to go back to needs a key the administrator retired on purpose; a clone of that revision with the current key applies in one step.
 - Acceptance: for (a) the recovery instructions state it; for (b) a test where R2 rotates a client key and fails at start falls back to R1 and applies it.
-- Needs maintainer: yes
+- Needs maintainer: no
 - Effort: S for (a), S to M for (b)
 
 ### P7-M27-03 The level 2 recovery test does not read `safe_mode` from `GET /state`

@@ -123,7 +123,7 @@ func equalService(a, b service) bool {
 
 // The containers and privileges of plan §3.8: the executor is the only privileged container of the gateway (the teardown service
 // is the executor's profile for the cleanup), every other one drops all capabilities and adds back what the table names, runs
-// with a read-only root file system and, but for Kea, with no-new-privileges.
+// with a read-only root file system and with no-new-privileges.
 func TestOnlyTheExecutorIsPrivilegedAndTheCapabilitiesAreThoseOfThePlan(t *testing.T) {
 	f := load(t, "compose.yaml")
 	wantCaps := map[string][]string{
@@ -158,7 +158,7 @@ func TestOnlyTheExecutorIsPrivilegedAndTheCapabilitiesAreThoseOfThePlan(t *testi
 		if !slices.Equal(got, want) {
 			t.Errorf("%s: cap_add %v, want %v", name, got, want)
 		}
-		if name != "kea" && !slices.Contains(s.SecurityOpt, "no-new-privileges:true") {
+		if !slices.Contains(s.SecurityOpt, "no-new-privileges:true") {
 			t.Errorf("%s: no-new-privileges is missing", name)
 		}
 		if name != "bird" && name != "kea" && !strings.HasPrefix(s.User, "65532:") {

@@ -524,6 +524,19 @@ func TestTheStopCleanupLeavesNothingOfTheGatewayOnTheRealKernel(t *testing.T) {
 	if !strings.Contains(gw.Must("tc", "qdisc", "show"), "netem") {
 		t.Fatal("no fault is active before the second stop")
 	}
+	// and a path MTU fault, whose mirror table (103) the teardown has to empty as well; the routes of the mirror are made after the apply
+	b.put("target: {device: " + d2.Name + "}\nfault: {family: mtu, mtu: {size: 1280, mode: icmp}}")
+	mirrorDeadline := time.Now().Add(15 * time.Second)
+	for {
+		// a table with no route does not exist for the kernel
+		if out, err := gw.Run(context.Background(), "ip", "route", "show", "table", "103"); err == nil && strings.TrimSpace(out) != "" {
+			break
+		}
+		if time.Now().After(mirrorDeadline) {
+			t.Fatalf("the mirror table holds no route while the MTU fault is active:\n%s\n%s", gw.Must("ip", "route", "show", "table", "all"), gw.Must("ip", "rule", "show"))
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 	e.Close()
 	b.ex.StopProbeClients()
 	if plan, err := apply.Teardown(ctx, apply.Local{E: b.ex}, gw.Name, "cgsvc-m27"); err != nil {

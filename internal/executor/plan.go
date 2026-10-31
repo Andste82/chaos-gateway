@@ -23,6 +23,7 @@ const (
 	ToolBird      Tool = "bird"
 	ToolBirdc     Tool = "birdc"
 	ToolConntrack Tool = "conntrack"
+	ToolModprobe  Tool = "modprobe"
 )
 
 // Command is one invocation: a tool, an argument array (never a shell string), optional standard
@@ -528,8 +529,12 @@ func planServiceNS(o *ServiceNS) []Step {
 	hostIP := strings.SplitN(o.HostCIDR, "/", 2)[0]
 	exists := ip("link", "show", "dev", o.HostIf)
 	if o.Action == "delete" {
-		// `type veth` makes ip refuse any other kind of device
-		return []Step{{Probe: &exists, RunIfProbeOK: true, Cmd: ip("link", "delete", "dev", o.HostIf, "type", "veth")}}
+		// `type veth` makes ip refuse any other kind of device. The name goes too (M27): the namespace itself belongs to
+		// the holder container and ends with it, but the name under /run/netns is the gateway's and would lead into it
+		return []Step{
+			{Probe: &exists, RunIfProbeOK: true, Cmd: ip("link", "delete", "dev", o.HostIf, "type", "veth")},
+			{Idempotent: true, Cmd: Command{Tool: ToolIP, Args: []string{"netns", "delete", o.Name}}},
+		}
 	}
 	nsThere := inside("link", "show", "dev", "lo")
 	var steps []Step

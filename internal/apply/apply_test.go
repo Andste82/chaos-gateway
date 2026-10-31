@@ -23,6 +23,8 @@ type env struct {
 	seq uint64
 	// sockets counts how often the DHCP client of a probe opened its socket (newProbeEnv)
 	sockets atomic.Int32
+	// closed counts how often such a socket was closed, which is how the client stops
+	closed atomic.Int32
 }
 
 func newTestbedKernel() *kernelsim.Kernel {

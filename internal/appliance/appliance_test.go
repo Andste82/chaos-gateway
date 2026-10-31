@@ -27,11 +27,24 @@ import (
 //	CHAOSGW_APPLIANCE_CACHE       where cloud images are kept, default a directory below the user cache
 //	CHAOSGW_APPLIANCE_ARTIFACTS   where the logs of every run go, default the test's temporary directory
 //	CHAOSGW_APPLIANCE_ALLOW_TCG   run without /dev/kvm (very slow)
+//	CHAOSGW_APPLIANCE_ARCH        amd64 (default) or arm64: the machine and the image of the test (M28, plan §4.4); an arm64 machine is
+//	                              always emulated, the image tar must be the arm64 image; only TestSmokeOnCleanUbuntuHosts runs on
+//	                              arm64, the other tests skip with a message
+//	CHAOSGW_APPLIANCE_TOPOLOGIES  the topologies of TestSmokeOnCleanUbuntuHosts, "three,two" (default), "three" or "two"
 func env(name, def string) string {
 	if v := os.Getenv(name); v != "" {
 		return v
 	}
 	return def
+}
+
+// amd64Only skips a test that boots amd64 machines and loads the amd64 image when the run is asked for arm64: both would fail with
+// an exec format error, which says nothing about the product.
+func amd64Only(t *testing.T) {
+	t.Helper()
+	if arch := env("CHAOSGW_APPLIANCE_ARCH", "amd64"); arch != "amd64" {
+		t.Skipf("CHAOSGW_APPLIANCE_ARCH=%s: this test boots amd64 machines; only TestSmokeOnCleanUbuntuHosts runs on %s (-run selects it)", arch, arch)
+	}
 }
 
 func TestSmokeOnCleanUbuntuHosts(t *testing.T) {
@@ -42,12 +55,24 @@ func TestSmokeOnCleanUbuntuHosts(t *testing.T) {
 	if !appliance.HasKVM() && os.Getenv("CHAOSGW_APPLIANCE_ALLOW_TCG") == "" {
 		t.Skip("no /dev/kvm: level 2 needs a KVM-capable machine (plan Q1); CHAOSGW_APPLIANCE_ALLOW_TCG=1 runs it emulated")
 	}
+	releases, err := appliance.ReleasesFor(env("CHAOSGW_APPLIANCE_ARCH", "amd64"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, rel := range strings.Split(env("CHAOSGW_APPLIANCE_RELEASES", "24.04,26.04"), ",") {
-		r, ok := appliance.Releases[strings.TrimSpace(rel)]
+		r, ok := releases[strings.TrimSpace(rel)]
 		if !ok {
 			t.Fatalf("unknown release %q", rel)
 		}
-		for _, two := range []bool{false, true} {
+		for _, topology := range strings.Split(env("CHAOSGW_APPLIANCE_TOPOLOGIES", "three,two"), ",") {
+			two := false
+			switch strings.TrimSpace(topology) {
+			case "three":
+			case "two":
+				two = true
+			default:
+				t.Fatalf("unknown topology %q (three or two)", topology)
+			}
 			name := r.Name + "/three-ports"
 			if two {
 				name = r.Name + "/two-ports"
@@ -89,7 +114,7 @@ http.server.HTTPServer(("203.0.113.10", 8080), H).serve_forever()
 `
 
 func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), appliance.SmokeBudget(rel.Arch))
 	defer cancel()
 	tag := env("CHAOSGW_APPLIANCE_IMAGE_TAG", "chaos-gateway:appliance")
 	artifacts := filepath.Join(env("CHAOSGW_APPLIANCE_ARTIFACTS", t.TempDir()), strings.ReplaceAll(t.Name(), "/", "-"))
@@ -131,7 +156,7 @@ func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
 	bg(t, h, argv...)
 
 	// the gateway VM
-	vm, err := appliance.Boot(ctx, h, dir, img, seed, top.NICs(), appliance.GatewayMgmt, key)
+	vm, err := appliance.BootArch(ctx, h, dir, img, seed, top.NICs(), appliance.GatewayMgmt, key, rel.Arch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,11 +168,7 @@ func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
 		}
 		vm.Close()
 	})
-	bootWait := 6 * time.Minute
-	if !appliance.HasKVM() {
-		bootWait = 25 * time.Minute
-	}
-	if err := vm.WaitSSH(ctx, bootWait); err != nil {
+	if err := vm.WaitSSH(ctx, appliance.BootWait(rel.Arch, appliance.HasKVM())); err != nil {
 		t.Fatal(err)
 	}
 	must := func(cmd string) string {
@@ -224,7 +245,7 @@ func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
 	if err := vm.Put(ctx, "/opt/chaosgw/gateway.yaml", 0o644, strings.NewReader(appliance.GatewayConfig(two))); err != nil {
 		t.Fatal(err)
 	}
-	out := must("sudo docker run --rm --network host -v chaosgw_chaosgw-run:/run/chaosgw -v /opt/chaosgw/gateway.yaml:/gateway.yaml:ro " + tag +
+	out := must("sudo docker run --rm --user 0:0 --network host -v chaosgw_chaosgw-run:/run/chaosgw -v /opt/chaosgw/gateway.yaml:/gateway.yaml:ro " + tag +
 		" apply --file /gateway.yaml --socket /run/chaosgw/exec.sock 2>&1")
 	t.Logf("apply: %s", strings.TrimSpace(out))
 	// the compiler leaves a forward it would refuse out with a warning, and the apply goes on: not here
@@ -271,7 +292,7 @@ func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
 		t.Error("the client namespace could open TCP 22 on the gateway's LAN address")
 	}
 
-	portForwards(t, ctx, h, vm, names, two, tag, compose, dir)
+	portForwards(t, ctx, h, vm, names, two, tag, compose, dir, rel.Arch)
 }
 
 // portForwards is the level 2 test of M35a: the configuration's forward on the uplink (and, with three
@@ -280,13 +301,13 @@ func smoke(t *testing.T, rel appliance.Release, two bool, imageTar string) {
 // in nftables and Docker's in iptables-nft, and Docker's FORWARD policy is DROP: the forward passes it
 // through the DOCKER-USER accept rule of the test network's bridge, the published port through Docker's
 // own rules, and the gateway's forward chain lets the uplink → docker0 path alone.
-func portForwards(t *testing.T, ctx context.Context, h appliance.Host, vm *appliance.VM, names appliance.Names, two bool, tag, compose, dir string) {
+func portForwards(t *testing.T, ctx context.Context, h appliance.Host, vm *appliance.VM, names appliance.Names, two bool, tag, compose, dir, vmArch string) {
 	t.Helper()
 	hostBin, err := appliance.BuildEcho(ctx, dir, runtime.GOARCH)
 	if err != nil {
 		t.Fatal(err)
 	}
-	vmBin, err := appliance.BuildEcho(ctx, dir, "amd64") // the cloud images are amd64
+	vmBin, err := appliance.BuildEcho(ctx, dir, vmArch) // the architecture of the machine
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +319,7 @@ func portForwards(t *testing.T, ctx context.Context, h appliance.Host, vm *appli
 	if err := vm.PutFile(ctx, vmBin, "/opt/chaosgw/echo", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := vm.Must(ctx, fmt.Sprintf("sudo docker run -d --name chaosgw-published -p %d:%d -v /opt/chaosgw/echo:/echo:ro --entrypoint /echo %s -tag published -listen :%d",
+	if out, err := vm.Must(ctx, fmt.Sprintf("sudo docker run -d --user 0:0 --name chaosgw-published -p %d:%d -v /opt/chaosgw/echo:/echo:ro --entrypoint /echo %s -tag published -listen :%d",
 		appliance.PublishedPort, appliance.ContainerPort, tag, appliance.ContainerPort)); err != nil {
 		t.Fatalf("starting the container that publishes a port: %v\n%s", err, out)
 	}
@@ -382,7 +403,7 @@ func waitHealthy(t *testing.T, ctx context.Context, vm *appliance.VM, compose, s
 	deadline := time.Now().Add(3 * time.Minute)
 	var last string
 	for time.Now().Before(deadline) {
-		out, _ := vm.Must(ctx, compose+" ps -q "+service+" | xargs -r sudo docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}'")
+		out, _ := vm.Must(ctx, compose+" ps -a -q "+service+" | xargs -r sudo docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}'")
 		last = strings.TrimSpace(out)
 		if last == "running healthy" {
 			return

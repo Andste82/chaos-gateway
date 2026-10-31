@@ -8,15 +8,18 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/Andste82/chaos-gateway/internal/executor"
+	"github.com/Andste82/chaos-gateway/internal/preflight"
 	"github.com/Andste82/chaos-gateway/internal/secrets"
 )
 
@@ -44,6 +47,7 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	birdDir := fs.String("bird-dir", "", "directory shared with the BIRD container (<instance>.conf and .ctl); without it dynamic routing is refused")
 	capturesDir := fs.String("captures-dir", "", "volume of the packet captures, shared with the API container (one directory per capture, made by the API); without it captures are refused")
 	captureMinFree := fs.Float64("capture-min-free", executor.DefaultMinFreePercent, "percent of free space of the capture volume below which captures stop and new ones are refused")
+	serviceNS := fs.String("service-ns", compiler.ServiceNSDefault, "name of the service namespace under /run/netns (chaosgw api --service-ns): the stop cleanup removes the name")
 	hostRoot := fs.String("host-root", "/", "where the host's file system is mounted: its netplan, NetworkManager and systemd-networkd configuration is read from there (the preflight's check of the test interfaces)")
 	health := fs.Bool("health", false, "check a running executor (handshake and generation) and exit")
 	var allow uidList
@@ -70,7 +74,8 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	}
 	syscall.Umask(0o077)
 
-	opts := []executor.Option{executor.WithLogger(log), executor.WithStateFile(*state), executor.WithHostRoot(os.DirFS(*hostRoot))}
+	opts := []executor.Option{executor.WithLogger(log), executor.WithStateFile(*state), executor.WithHostRoot(os.DirFS(*hostRoot)),
+		executor.WithPreflight(preflightDirs(allow, *state, *secretsDir, *capturesDir))}
 	if *birdDir != "" {
 		opts = append(opts, executor.WithBirdDir(*birdDir))
 	}
@@ -82,12 +87,13 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 		// content): the keys are looked up when an operation needs one, not at start
 		opts = append(opts, executor.WithKeys(lazyKeys(*secretsDir)))
 	}
-	ex, err := executor.New(executor.NewExecRunner(), opts...)
+	ex, err := executor.New(newExecRunner(), opts...)
 	if err != nil {
 		fmt.Fprintf(stderr, "chaosgw exec: %v\n", err)
 		return 1
 	}
 	defer ex.Close()
+	logPreflight(ex.HostPreflight(context.Background()), log)
 	if err := ex.EnsureBirdConfig(compiler.BirdInstance); err != nil {
 		fmt.Fprintf(stderr, "chaosgw exec: %v\n", err)
 		return 1
@@ -105,8 +111,74 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "chaosgw exec: %v\n", err)
 		return 1
 	}
+	// the stop (plan §3.8, D35, variant A): the API container stopped first and removed the overlays; everything the
+	// gateway created in the kernel goes now, so that a stopped gateway leaves nothing that changes the host's or the
+	// devices' traffic. The connections are closed, so nothing queues behind this.
+	log.Info("executor stopping: removing everything it created in the kernel")
+	if err := stopCleanup(ex, *serviceNS, log); err != nil {
+		fmt.Fprintf(stderr, "chaosgw exec: the stop cleanup failed: %v\n", err)
+		return 1
+	}
 	log.Info("executor stopped")
 	return 0
+}
+
+// preflightDirs are the directories of the persistence layout (plan §3.6) the executor's container mounts, for the preflight: the
+// compose files bind-mount them from the host, and the API container's user (the first uid allowed on the socket) has to be able
+// to write the ones it fills, the capture directories above all. The secrets must not be open to others.
+func preflightDirs(allow uidList, stateFile, secretsDir, capturesDir string) []preflight.DataDir {
+	uid := -1
+	if len(allow) > 0 {
+		uid = int(allow[0])
+	}
+	dirs := []preflight.DataDir{{Path: filepath.Dir(stateFile), What: "the interfaces assigned to the executor", UID: -1}}
+	if secretsDir != "" {
+		dirs = append(dirs, preflight.DataDir{Path: secretsDir, What: "the secrets", UID: uid, MaxMode: 0o700})
+	}
+	if capturesDir != "" {
+		dirs = append(dirs, preflight.DataDir{Path: capturesDir, What: "the packet captures", UID: uid})
+	}
+	return dirs
+}
+
+// logPreflight writes the checks of the host into the container log, where the administrator who runs `docker compose logs
+// exec` finds them; a failed check is an error line with its fix. The executor serves anyway: the API shows the same checks.
+func logPreflight(st executor.HostPreflightState, log *slog.Logger) {
+	for _, c := range st.Checks {
+		switch c.Status {
+		case "ok":
+			log.Info("preflight", "check", c.ID, "message", c.Message)
+		case "warn":
+			log.Warn("preflight", "check", c.ID, "message", c.Message, "fix", c.Fix)
+		default:
+			log.Error("preflight", "check", c.ID, "message", c.Message, "fix", c.Fix)
+		}
+	}
+}
+
+// newExecRunner is the runner of the executor's commands; the tests of the command replace it with a simulated kernel.
+var newExecRunner = func() executor.Runner { return executor.NewExecRunner() }
+
+// stopCleanupTimeout bounds the cleanup of a stop: the container runtime kills the executor after its stop grace period
+// (30 s in the shipped compose files), and what a kill leaves behind is what `chaosgw teardown` removes.
+const stopCleanupTimeout = 25 * time.Second
+
+// stopCleanup stops the DHCP clients of the probes first, then removes everything Chaos Gateway created in the kernel
+// (apply.Teardown) and checks that nothing of it is left.
+func stopCleanup(ex *executor.Executor, serviceNS string, log *slog.Logger) error {
+	ctx, cancel := context.WithTimeout(context.Background(), stopCleanupTimeout)
+	defer cancel()
+	ex.StopProbeClients()
+	for _, name := range ex.RemoveCheckNamespaces(ctx) {
+		log.Info("stop cleanup", "step", "removed the namespace "+name+" of an interrupted host check")
+	}
+	plan, err := apply.Teardown(ctx, apply.Local{E: ex}, "", serviceNS)
+	if plan != nil {
+		for _, line := range plan.Summary {
+			log.Info("stop cleanup", "step", line)
+		}
+	}
+	return err
 }
 
 func execHealth(socket string, stdout, stderr io.Writer) int {

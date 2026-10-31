@@ -86,6 +86,9 @@ type Config struct {
 	ProcDir string
 	// MetricsReadTimeout bounds each source the metrics endpoint reads (the counters, the links, the health); zero takes 3 s.
 	MetricsReadTimeout time.Duration
+	// Certificates holds the certificates of the HTTPS listeners (M29); nil for a deployment that has none (the operations of
+	// /system/certificate answer `unavailable`).
+	Certificates *Certificates
 	// Diagnostics sets up the diagnostics of M24; the zero value is the production setup (tests name their own servers).
 	Diagnostics DiagnosticsConfig
 }
@@ -110,6 +113,8 @@ type Server struct {
 	// osConfigErr is the last failure to read the host's network configuration, so that a screen that
 	// polls GET /system/interfaces logs a failure once, not at every request (P3-M12-07)
 	osConfigErr lastError
+	// hostPreflightErr is the same for the executor's checks of the host
+	hostPreflightErr lastError
 	// setupOSConfig caches that read for the unauthenticated GET /setup (Phase 3 audit, as health)
 	setupOSConfig osConfigCache
 	// unsubEvents ends the background subscriber that audits system-originated changes (M5-05).
@@ -275,6 +280,16 @@ func pathMatches(pattern, actual string) bool {
 		}
 	}
 	return true
+}
+
+// Shutdown is the API process's part of the stop order (plan §3.11, §2.1.1): the runs end as aborted (their overlays are
+// removed through the engine), then every overlay that is left is removed, so that the last apply of the process is one
+// without overlays. The executor removes everything else when it stops (plan §3.8). Call it after the listener stopped
+// accepting requests and before Close and the engine's. It returns when the removal is verified or the context ends.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.closeRunsWithin(ctx)
+	_, err := s.cfg.Engine.ResetOverlays(ctx, nil, actorOf(nil))
+	return err
 }
 
 // Close releases what the server holds.

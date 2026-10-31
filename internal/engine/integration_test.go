@@ -55,6 +55,8 @@ type real struct {
 	e    *engine.Engine
 	base *model.Configuration
 	exec apply.Exec
+	// reader, when set, is what verifyKernel reads the kernel through (kernelReader)
+	reader apply.Exec
 }
 
 // realClock makes the engine use the real clock: the netlink debounce needs it, the confirmation
@@ -70,12 +72,22 @@ func newReal(t *testing.T, wrap func(apply.Exec) apply.Exec, opts ...bool) *real
 // real nft and ip commands: a test can hold or time a command there while the kernel stays real.
 func newRealRunner(t *testing.T, wrapRunner func(executor.Runner) executor.Runner, wrap func(apply.Exec) apply.Exec, opts ...bool) *real {
 	t.Helper()
+	return newRealConfig(t, wrapRunner, wrap, nil, opts...)
+}
+
+// newRealConfig is newRealRunner with a change to the engine's configuration (for example a service namespace).
+// realExecutorOptions are given to the in-process executor that newRealConfig makes; a test that restarts the executor sets them
+// (withExecutorState) so that the next executor knows what the first one assigned, as the state file of `chaosgw exec` does.
+var realExecutorOptions []executor.Option
+
+func newRealConfig(t *testing.T, wrapRunner func(executor.Runner) executor.Runner, wrap func(apply.Exec) apply.Exec, tweak func(*engine.Config), opts ...bool) *real {
+	t.Helper()
 	var runner executor.Runner = executor.NewExecRunner()
 	if wrapRunner != nil {
 		runner = wrapRunner(runner)
 	}
 	top := testbed.NewDefault(t, testbed.WithPlainGateway(false), testbed.WithGatewayBridges(false))
-	ex, err := executor.New(runner)
+	ex, err := executor.New(runner, realExecutorOptions...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +114,11 @@ func newRealRunner(t *testing.T, wrapRunner func(executor.Runner) executor.Runne
 	if len(opts) > 0 && opts[0] {
 		clk = &clock.Real{}
 	}
-	e, err := engine.New(engine.Config{Store: st, Exec: x, Namespace: top.GW.Name, Clock: clk})
+	ecfg := engine.Config{Store: st, Exec: x, Namespace: top.GW.Name, Clock: clk}
+	if tweak != nil {
+		tweak(&ecfg)
+	}
+	e, err := engine.New(ecfg)
 	if err != nil {
 		t.Fatal(err)
 	}

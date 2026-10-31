@@ -3,6 +3,7 @@
 # Test levels (docs/development.md, plan §4.5):
 #   make test             level 0: unit tests, no root, every commit
 #   make test-examples    the example suites for pytest and Jest (clients/examples) against a simulated gateway
+#   make test-docs        the examples of the user documentation (docs/) run against a simulated gateway
 #   make test-testbed     levels 1/1b: the namespace testbed, directly or in a VM, chosen automatically
 #   make test-vm          level 1b: always in a QEMU VM (the unprivileged devcontainer)
 #   make test-privileged  level 1: directly (needs a privileged container or a VM)
@@ -23,7 +24,7 @@ LDFLAGS := -s -w -X $(PKG)/internal/version.Version=$(VERSION) -X $(PKG)/interna
 RACE := $(shell command -v gcc >/dev/null 2>&1 && echo -race)
 
 .PHONY: help tools generate generate-go generate-web generate-python \
-        check-spec check-generated check-clients lint test fuzz test-web test-examples test-testbed test-vm test-appliance \
+        check-spec check-generated check-clients check-compose compose lint test fuzz test-web test-examples test-docs test-testbed test-vm test-appliance \
         test-privileged vm-up vm-down vm-status vm-test vm-exec test-arm64 test-e2e build build-web dev image image-local clean
 
 help: ## list the targets
@@ -68,10 +69,16 @@ generate-python: $(PYTOOLS) ## Python client (not committed)
 check-spec: $(PYTOOLS) ## the spec validates and the examples match their schemas
 	$(VENV)/bin/python api/examples/validate.py
 
-check-generated: generate-go ## the committed generated Go code is current and everything compiles
+check-generated: generate-go check-compose ## the committed generated Go code and deploy/compose.yaml are current and everything compiles
 	git ls-files --error-unmatch internal/model/model.gen.go internal/apiserver/server.gen.go >/dev/null
 	git diff --exit-code -- internal/model internal/apiserver
 	$(GO) build ./...
+
+compose: ## make deploy/compose.yaml from the compose files of the containers (tools/composegen)
+	$(GO) run ./tools/composegen
+
+check-compose: ## deploy/compose.yaml is what the compose files of the containers give
+	$(GO) run ./tools/composegen -check
 
 check-clients: generate-web generate-python ## the generated TypeScript and Python clients compile
 	cd web && npx vue-tsc --noEmit -p tsconfig.json
@@ -89,17 +96,20 @@ lint: $(WEBDEPS) ## golangci-lint and the TypeScript type check
 test: test-web ## level 0: Go unit tests (no root) and the web unit tests
 	$(GO) test $(RACE) -count=1 -timeout 20m ./...
 
-# Fuzz targets, one `go test -fuzz` run each (Go runs one target per invocation). FUZZTIME is per
-# target: the default 100s makes the three targets of the executor decoder and connection handling
-# 5 minutes in CI; the nightly workflow uses a longer time.
-FUZZTIME ?= 100s
-FUZZ_TARGETS := FuzzDecode FuzzFrame FuzzConn
+# Fuzz targets, one `go test -fuzz` run each (Go runs one target per invocation), as package:target. The executor's interface is
+# the boundary between the unprivileged API and the privileged container (docs/development.md, "Security hardening (M29)"): the
+# decoder, the request handling, the connection with its handshake, the capture request and the capture filter. FUZZTIME is per target:
+# the default 60s makes the six targets 6 minutes in CI; the nightly workflow uses a longer time. Every target runs even when one
+# fails (a crasher in the first must not hide the others); the exit status is 1 if any failed.
+FUZZTIME ?= 60s
+FUZZ_TARGETS := ./internal/executor:FuzzDecode ./internal/executor:FuzzFrame ./internal/executor:FuzzConn ./internal/executor:FuzzCaptureOpen ./internal/executor:FuzzCaptureOpenFiles ./internal/capture:FuzzFilter
 
-fuzz: ## fuzz the executor's operation decoder and request handling (FUZZTIME per target)
-	@for t in $(FUZZ_TARGETS); do \
-	  echo "== $$t ($(FUZZTIME))"; \
-	  $(GO) test -run '^$$' -fuzz "^$$t$$" -fuzztime $(FUZZTIME) ./internal/executor || exit 1; \
-	done
+fuzz: ## fuzz the executor's interface: operation decoder, request handling, connection, capture request and filter (FUZZTIME per target)
+	@rc=0; for t in $(FUZZ_TARGETS); do \
+	  pkg=$${t%%:*}; name=$${t##*:}; \
+	  echo "== $$pkg $$name ($(FUZZTIME))"; \
+	  $(GO) test -run '^$$' -fuzz "^$$name$$" -fuzztime $(FUZZTIME) $$pkg || rc=1; \
+	done; exit $$rc
 
 test-web: $(WEBDEPS)
 	cd web && npm test
@@ -115,11 +125,19 @@ test-examples: generate-web generate-python ## the example suites for pytest and
 	EXAMPLES_PYTHON=$(CURDIR)/$(VENV)/bin/python EXAMPLES_PYTEST_DIR=$(CURDIR)/$(EXAMPLES)/pytest EXAMPLES_JEST_DIR=$(CURDIR)/$(EXAMPLES)/jest \
 	  $(GO) test -tags examples -count=1 -timeout 15m -v -run TestTheExampleSuitesPassAgainstTheGateway ./internal/api
 
+# The examples of the documentation (M30): the `sh run` blocks of the documents in internal/docscheck run against a gateway on the
+# simulated kernel, with chaosctl built by the test, curl and jq; their printed output is compared with what the documents show.
+# CHAOSGW_DOCS=docs/api-guide.md runs one document. The level 0 checks of the documents (the lint of the blocks, the schemas, the
+# links) are part of `make test`.
+test-docs: ## the examples of the user documentation, run against a simulated gateway (needs curl and jq)
+	@command -v curl >/dev/null && command -v jq >/dev/null || { echo "test-docs needs curl and jq"; exit 1; }
+	$(GO) test -tags examples -count=1 -timeout 15m -v -run TestTheDocumentationExamplesRunAgainstTheGateway ./internal/api
+
 test-testbed: ## the namespace testbed: directly where possible, else in a VM
 	$(GO) run ./tools/testvm run $(ARGS)
 
-test-appliance: ## level 2: the gateway in a VM from the Ubuntu cloud images (needs root, QEMU, /dev/kvm and CHAOSGW_APPLIANCE_IMAGE_TAR)
-	$(GO) test -tags appliance -count=1 -timeout 80m -v -run TestSmokeOnCleanUbuntuHosts ./internal/appliance
+test-appliance: ## level 2: the gateway in a VM from the Ubuntu cloud images (needs root, QEMU, /dev/kvm, udhcpc and CHAOSGW_APPLIANCE_IMAGE_TAR)
+	$(GO) test -tags appliance -count=1 -timeout 200m -v -run 'TestSmokeOnCleanUbuntuHosts|TestRecoveryAndStopOnCleanUbuntuHosts|TestContainerDeploymentOnCleanUbuntuHosts' ./internal/appliance
 
 test-vm: ## the namespace testbed in a QEMU VM (level 1b)
 	$(GO) run ./tools/testvm run -mode vm $(ARGS)

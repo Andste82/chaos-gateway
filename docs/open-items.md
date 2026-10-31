@@ -16,8 +16,8 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   and P3-AUDIT-38 (a management hub in the overview topology, fixed) were decided by the maintainer on 2026-10-15, and
   the four choices the fixes made, listed there, were confirmed on 2026-10-15. What the implementation of a milestone could not settle is
   under [Phase 3 open items](#phase-3-open-items), right after the Phase 3 audit
-  result; the maintainer decided those items on 2026-10-14 and every one is closed except P3-M12-05 (the recovery
-  instructions the safe-mode banner links to), which waits for M27/M30. The choices the audit's fixes made follow the
+  result; the maintainer decided those items on 2026-10-14 and every one is closed (P3-M12-05, the recovery
+  instructions the safe-mode banner links to, was the last; closed with M30 on 2026-10-29). The choices the audit's fixes made follow the
   items ("Phase 3 audit: choices made in …").
 - **Phase 3.1** (M35a): merged to `main` on 2026-10-17 (PR #68, `0fb9176`; CI run 39057670486 on `0fb9176` green), audited on
   2026-10-17. The result is in [Phase 3.1 audit result](#phase-31-audit-result), right before the Phase 3.1 open items; its
@@ -129,9 +129,9 @@ The most common causes are:
 | Item | Question | Recommendation | Decision (2026-10-04) |
 |---|---|---|---|
 | M1-01 | Where do KVM-dependent tests run (Q1)? | Hosted GitHub runners with `/dev/kvm` now, a self-hosted runner when H1 hardware exists | hosted runners only |
-| M1-02 | Arm64 level 1b now or with M28? | With M28, amend §4.4 | with M28 |
+| M1-02 | Arm64 level 1b now or with M28? | With M28, amend §4.4 | with M28 (done as an emulated level 2 smoke test and `deploy/smoke-image.sh`; the namespace testbed on arm64 is P7-M28-01) |
 | M2-03 | Configured address vs. DHCP lease: who wins? | Configuration wins (current) | configuration wins |
-| M2-08 | Persistence layout: named volumes or §3.6 bind mounts? | Bind mounts in M28; amend §3.6 now for the status files | bind mounts in M28 |
+| M2-08 | Persistence layout: named volumes or §3.6 bind mounts? | Bind mounts in M28; amend §3.6 now for the status files | bind mounts in M28 (done) |
 | M3-01 | Restrict ops on OS-owned interfaces (uplink)? | Yes, an `os_owned` class | `os_owned` |
 | M3-04 | Persist the executor generation? | No, document it as per-process | document |
 | M4-02 | Management matrix endpoint: spec or code? | The spec follows the code | spec follows code |
@@ -395,37 +395,37 @@ These are open but scheduled in a later milestone of docs/plan.md §5; they are 
 
 | Item | Milestone |
 |---|---|
-| M1: container image has no non-root user (`deploy/Dockerfile`) | M29 |
+| ~~M1: container image has no non-root user (`deploy/Dockerfile`)~~ — done in M29: the image has `USER 65532:65532`, every compose file names its user (`TestEveryContainerNamesItsUserAndTheImageDefaultsToTheUnprivilegedOne`) | M29 |
 | ~~M2: overlay `expires_at` / `lease_expires_at` not set by `NewOverlay`~~ — set since M8a (`internal/overlay/store.go`, P2-AUDIT-16) | M8a |
 | ~~M3: DNS set updates spawn `nft` per call, no persistent netlink connection~~ — done in M20: the executor operation `nft_dns_elements` writes them on a persistent netlink connection (google/nftables) beside the plans | M20 (plan §3.4) |
 | M4: verify matches rules by comment hash only (expressions not compared) | M38 drift detection (partial) |
 | M4: Docker started after the last apply is not noticed (`DOCKER-USER`) | M38 drift detection (partial) |
 | M4c: received-prefix list in routing view | M14 |
-| M5: certificate loaded once at start, SANs fixed (`/system/certificate`) | M29 |
+| ~~M5: certificate loaded once at start, SANs fixed (`/system/certificate`)~~ — done in M29: `GET`, `PUT` and `DELETE /system/certificate` replace the certificate for new connections without a restart, the installed certificate has the names its owner chose (`api.Certificates`, `TestTheCertificateIsReplacedForNewConnectionsAndCanBeReset`) | M29 |
 | ~~M5: `lockout_protected` never produced~~ — decided 2026-10-11 (P2-M9-08): the anti-lockout rule cannot be overridden and lockout-relevant configuration changes take commit-confirm, which is enough; the code stays reserved | decided |
 | ~~M5: `capacity_exceeded` never produced~~ — produced for classes, fault ids, map cells and rules since M8a; the preview refuses with it (M10 test) | M8a, M10 |
 | ~~M5: `target_busy` never produced~~ — produced since M15: 409 on `POST /runs?queue=false` for a target with a run | M15 |
 | M5: IPv6 management addresses never bound | M32 |
 | ~~M5: `counter_epoch` always 0~~ — done in M8b (P2-M8b-05 for what it means) | M8b |
 | ~~M5: capabilities list `step_types` empty~~ — filled since M15 (profile, fault, rule, wireguard, wait, remove, restore; the types of M17, M20, M21 and M23 are added by those milestones) | M15 |
-| M5b: netplan hints are static text | M28 |
-| M5b: only the executor is deployed, x86-64 only | M28 |
+| ~~M5b: netplan hints are static text~~ — done in M28: the final host setup names the file and line of the entry and the fix, and exits 1 until the entry is gone (`TestHostSetup*`; level 2 `TestContainerDeploymentOnCleanUbuntuHosts`: the hint, the removal, ready) | M28 |
+| ~~M5b: only the executor is deployed, x86-64 only~~ — done in M28: `deploy/compose.yaml` runs every container (`tools/composegen`, `tools/deployscripts`), the image is built for amd64 and arm64 (`deploy/smoke-image.sh`, the weekly emulated level 2 smoke test); the image smoke tests, the compose smoke test and the level 2 tests are written and run in the CI jobs `arm64`, `deployment`, the nightly and the weekly workflow (not run on the development machine: no Docker, no KVM); the arm64 testbed is P7-M28-01 | M28 |
 | M0: S8 on real hardware (HTB with 500 classes, 50/250 faults, offloads, loss) | H1 |
 | M0: S1 testbed on Raspberry Pi | H1 |
 | M0: DNS proxy at least 1000 queries/s on Pi | H1 |
 | M0: scenario step timing on real hardware | H1, M15 |
-| M0: S7 coexistence with netplan, NetworkManager, systemd-networkd | M28 (no explicit test named: add one to the M28 tests) |
+| ~~M0: S7 coexistence with netplan, NetworkManager, systemd-networkd~~ — test written in M28 (`TestContainerDeploymentOnCleanUbuntuHosts`: `netplan apply`, a restart of `systemd-networkd`, NetworkManager installed and running leave the bridge, its address, the table and the traffic alone); it runs in the nightly workflow (not run on the development machine: no KVM) | M28 |
 | ~~M0: S4 TLS 1.2 vs 1.3, connection reuse, control from the core~~ — done in M21 for the certificate and handshake cases (both versions in the tests of the responder and of the real kernel; only new connections are selected, an established one stays with its server unless `cut_existing`; the responder is controlled by the API's configuration and decisions) and in M22 for the interception (`TestDevicesOfTLS12AndTLS13AreInterceptedAndTheirSecretsReachTheGateway`, `TestConnectionReuseAcrossRequestsIsOneHandoverAndManyExchanges`; the proxy is controlled by the API's configuration, its rules and the responder's control interface) | M22 |
 | M0: IPv6 never spiked | M32 |
 | ~~M0: persistent nft session for DNS-derived sets (DNS over TCP is done in M6b)~~ — done in M20 | M20 |
-| M0: `image.yml` has never run (ghcr push, release tags) | M28 |
+| ~~M0: `image.yml` has never run (ghcr push, release tags)~~ — done in M28 as written: it builds the two architectures, runs the image smoke test, pushes the release tags (`:latest` and the major and minor tags only for a release without a pre-release part) and attaches the deployment files to the release; its first run is the first tag (a pre-release tag such as `v0.0.0-rc.1` tries it without moving `:latest`), which needs a runner with the registry and cannot happen on the development machine | M28 |
 | M0: persistent faults for DNS, TLS, DHCP and profile activations (D31) | M39 |
 | M0: three-way merge, NFLOG capture, extra diagnostics, drift detection, .deb (D28) | M38 |
 | Stubs: ~~`chaosgw tls`~~ — done in M21; ~~`chaosctl` beyond `version`~~ — done in M18 (`chaosctl explain` with P4-AUDIT-47) | M21 |
-| Image holds only `chaosgw`/`chaosctl` and executor tools; full image with Kea, tcpdump, mitmproxy | M28 |
+| ~~Image holds only `chaosgw`/`chaosctl` and executor tools; full image with Kea, tcpdump, mitmproxy~~ — done in M28 (tcpdump added; `tools/ciconfig/deploy_test.go` pins the files of the image) | M28 |
 | ~~Identity maps (address → device), classification and faults not compiled yet~~ — done in M7, M8a, M8b | M7, M8a, M8b |
 | ~~Reader pool and operation time stamps (M3 deferral)~~ — done in M8a | M8a |
-| Overlay removal on stop | M27 |
+| ~~Overlay removal on stop~~ — done in M27 (`Server.Shutdown`, run by `serveAPI` before the engine ends) | M27 |
 | ~~M6b: DNS faults, hostname selectors, redirect of hardcoded resolvers, DoT blocking, `/internal/dns/resolutions`~~ — done in M20 | M20 |
 | ~~M6b: classification sets the service mark (bit 20) that table 102 routes on~~ — done in M21 (`compiler/tls.go`: the chain `tls_redirect` writes it right after the classification, with the real redirect-interaction test) | M21 (confirmed 2026-10-11, P2-M7-01) |
 | ~~M6b: TLS responder joins the service namespace~~ — done in M21 (`deploy/compose.tls.yaml`) | M21 |
@@ -708,7 +708,7 @@ among the test networks) was fixed with a row of its own. The fixes' new asserti
 (`web/e2e-testbed/faults.spec.ts`, in `0b95142`: the device row shows "↑↓ 30 ms", the "With faults" filter, the active
 fault on the device page), which depend on the gateway's new `DeviceView.effective`, passed in the `testbed-ui` job of
 CI run 38646886557 on `aeeeed3`. Of the Phase 3 open items
-only P3-M12-05 stays open; it waits for M27/M30.
+only P3-M12-05 stayed open until M30 wrote the recovery instructions (closed 2026-10-29).
 
 No fix was blocked on a maintainer decision; where a fix had to choose, it took the option closest to the plan, and each
 choice is recorded below under "Phase 3 audit: choices made in …". The maintainer confirmed these four on 2026-10-15:
@@ -850,8 +850,8 @@ Phase 3 (M12 to M14) is complete and merged to `main` (PR #56, 2026-10-15). The 
 and M14; each records the option that was implemented so the work was not blocked, and what the maintainer may want to
 decide. The reasons are the ones of "Why items stayed open". The maintainer decided every item that needed a decision on
 2026-10-14; a "Decision (2026-10-14)" line records what was decided, and the item's Status line says whether it is closed
-and how the decision was implemented. As of 2026-10-14 every Phase 3 item is closed except P3-M12-05, which waits for
-M27/M30.
+and how the decision was implemented. As of 2026-10-14 every Phase 3 item was closed except P3-M12-05, which waited for
+M27/M30 and was closed with M30 on 2026-10-29.
 
 ### P3-M12-01 The commit-confirm banner has no "Roll back now"
 
@@ -935,10 +935,16 @@ M27/M30.
 
 ### P3-M12-05 The safe-mode banner links to the plan, not to recovery instructions
 
-- Status: new
+- Status: closed (2026-10-29, M30): `docs/recovery.md` is the recovery instructions (safe mode, the last known good revision, the
+  teardown, the update that went wrong, backup and restore), and the link "How to recover" of the banner in
+  `web/src/components/layout/AppShell.vue` leads to `docs/recovery.md#safe-mode`. The tests that hold it:
+  `TestTheBannerOfSafeModeLinksToTheRecoveryInstructions` (`internal/docscheck`: the link points into the file and at a heading that
+  exists) and the href check in `web/e2e/states.spec.ts` ("safe mode: a full-width red banner ..."); the examples of the document run in
+  CI (`make test-docs`, the job `docs`)
 - Severity: low
-- Reason: deferred. Safe mode itself comes with M27 (the API reports `safe_mode` and `safe_mode_reason`, which the banner
-  shows); there is no recovery document yet. The banner's link points to plan §3.9 "Updates and Recovery".
+- Reason: deferred. Safe mode itself came with M27 (the API reports `safe_mode` and `safe_mode_reason`, which the banner
+  shows); there was no recovery document yet. The banner's link pointed to plan §3.9 "Updates and Recovery". What was left is
+  the link target, which M30 wrote.
 - Evidence: `web/src/components/layout/AppShell.vue`.
 - Task: when M27/M30 write the recovery instructions, point the link at them (served with the app or in the docs).
   M30's Scope in docs/plan.md §5 names the recovery instructions and the banner link (added by the Phase 3 audit).
@@ -1480,10 +1486,11 @@ plan:
   the test interface. Both are host changes made by hand during the install test. The host setup now writes and removes
   the networkd rule (`host-setup.sh --test-interface`, `--remove-test-interface`, issue #64); whether the executor should
   do it is I64-03. The netplan entry stays the operator's to remove.
-- Open: `chaosgw teardown` (M27) does not exist yet; the cleanup above is what it has to do. Until then the cleanup
-  is manual (see `docs/install.md`, Uninstall).
-- Status: decided; **not implemented.** The executor still keeps the kernel state on stop, so until the change lands the
-  plan describes the target and `docs/install.md` plus the manual cleanup apply.
+- Implemented in M27: the executor removes all of it on `SIGTERM` (`cmd/chaosgw/exec.go`, `apply.Teardown`), `chaosgw teardown`
+  does the same for a gateway that was killed, and `--purge` empties the volumes through the `teardown` service of
+  `deploy/compose.teardown.yaml`, which mounts every volume writable (`docs/install.md`, "Stop, restart and recovery").
+- Status: **implemented** (M27). What stays out of scope is the host's: the networkd rule and the netplan entry of a test
+  interface (I64-03).
 - Needs maintainer: no (decided 2026-10-16).
 
 ## Phase 3.1 audit result
@@ -3212,3 +3219,98 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is comple
 - Acceptance: the V1 scope summary of `docs/plan.md` names M26a (for (a)), lists it among the optional milestones (for (b)) or among those that ship after V1 (for (c)); for (c) the UI also loses *Add probe*.
 - Needs maintainer: yes
 - Effort: S
+
+## Phase 7 open items
+
+### P7-M29-01 Who reviews the executor's interface from outside, when, and for how long
+
+- Status: closed (2026-10-31): decided by the maintainer, option (c): the external review of the executor interface is not part of V1 and moves to M38 (After V1); the plan (M29 Scope, M38), `docs/development.md` and the release notes say so
+- Severity: major
+- Reason: needs-decision. The plan's M29 Scope ends with the "external review of the executor interface". A review by someone who did not write the code is a human activity: it needs a reviewer, a date and a scope, and it is a gate of the release (M30). What can be prepared is done and checked in: the threat model, the accepted risks, the table of mitigations with the test that holds each, the six fuzz targets (`make fuzz`, nightly with 45 minutes each), the source list and the command lines to run the tests, all in `docs/development.md` "Security hardening (M29)" ("Preparation for the external review"). No code can decide who reviews or whether V1 may ship without the review.
+- Evidence: `docs/plan.md` M29 Scope, `docs/development.md` "Security hardening (M29)", "Preparation for the external review" (the hand-over package), `Makefile` (`fuzz`), `.github/workflows/nightly.yml` (job `fuzz`).
+- Task: decide who performs the review of the executor interface (the Unix socket protocol, the operation decoder and planner, the capture path, the privileged container), when it takes place, how long it may take, and whether V1 is released without it.
+- Options: (a) a person from outside the project reviews before the V1 release, for a fixed time (about two days for the 6,500 lines of the interface plus the fuzz runs), and its findings are fixed or recorded before the tag; (b) the release goes out with the self-review and the fuzz runs, the external review follows within a named period after V1, and the release notes say the interface has not been reviewed from outside yet; (c) the review is dropped from V1 and moves to M38 (After V1) with the other deferred items.
+- Recommendation: (a) if a reviewer is available before the release: the interface is the one place where a taken-over API process becomes root on the host, and two days of a second pair of eyes are cheap beside that. (b) if no reviewer is found: the release notes must say so (M30).
+- Acceptance: the plan's M29 text names the reviewer and the date (for (a)) or the period after V1 (for (b)); for (a) the findings are in `docs/open-items.md` and closed before the tag.
+- Needs maintainer: no
+- Effort: S for the decision, M for the review itself
+
+### P7-M29-02 Kea runs without `no-new-privileges`
+
+- Status: decided (2026-10-31): option (b) by the maintainer; `no-new-privileges: true` is set on Kea in `deploy/compose.kea.yaml` and `deploy/compose.yaml`, the exception is out of `TestNoContainerWidensItsSandbox`, the compose test, the level 2 deployment test and the container table; the CI job `deployment` passed with the option on 2026-10-31 (PR #127, run 41205381960: every container, Kea included, came up), and it stays open until the nightly level 2 DHCP test shows that Kea leases with it (if it does not, take the option out again and restore the exception with the reason)
+- Severity: minor
+- Reason: needs-decision. The review of the containers (M29) found one container that does not set `no-new-privileges`: `kea` (user 0:65532 with the capabilities `NET_RAW`, `NET_BIND_SERVICE`, `CHOWN`, `FOWNER`, `DAC_OVERRIDE`). Kea's Debian package may start its binaries through file capabilities, which `no-new-privileges` would break, and nothing here could start the container to try (no Docker on the development machine). The exception is pinned in `TestNoContainerWidensItsSandbox` (no other container may lack the option) and in the level 2 deployment test, so it does not widen by accident.
+- Evidence: `docs/development.md` "Security hardening (M29)" (the container table, decision 7), `deploy/compose.kea.yaml`, `internal/executor/hardening_review_test.go`.
+- Task: decide whether the exception stays for V1 or `no-new-privileges` is required once a level 2 run shows Kea works with it.
+- Options: (a) accept the exception for V1: the container has a read-only root file system and five capabilities (raw sockets for DHCP in the host network namespace), and the tests keep the exception from growing; (b) try `no-new-privileges: true` on the nightly level 2 run, and if the DHCP test passes keep it, remove the exception from the review test, the level 2 test and the table; if it fails keep (a) and note why in the table.
+- Recommendation: (b): it costs one nightly run, and (a) stays the fallback if Kea's package needs the file capabilities.
+- Acceptance: for (a) the table in `docs/development.md` names the reason as accepted; for (b) the compose file sets the option, the tests no longer except `kea`, and the level 2 DHCP test passes.
+- Needs maintainer: no
+- Effort: S
+
+### P7-M28-01 The arm64 image is tested by an emulated level 2 smoke test and `smoke-image.sh`, not by the namespace testbed in emulation (level 1b)
+
+- Status: closed (2026-10-31): decided by the maintainer, option (a): the emulated level 2 smoke test and `smoke-image.sh` are the functional test of the arm64 image; the plan (M28 Tests, section 4.1 and 4.5) says so, and the testbed on arm64 runs with H1
+- Severity: minor
+- Reason: needs-decision. The plan's M28 Tests say that the arm64 image "passes the functional smoke test in emulated level 1b", and the table of §4.5 puts the arm64 image there (decision M1-02: "with M28"). What was built is the image smoke test `deploy/smoke-image.sh` under `qemu-user` (the binaries start and have the architecture asked for, the tools run at the pinned versions, Kea accepts its configuration, the schema check runs as the unprivileged user; the executor is not started, so there is no handshake check) and the weekly job `appliance-arm64`: the level 2 smoke test on an emulated aarch64 Ubuntu 24.04 machine, the three-port topology only, with a budget of five hours. The level 1 testbed (`make test-privileged`) on arm64 under emulation is not built: it needs a privileged arm64 container with network namespaces under `qemu-user` or a VM, and the kernel features it uses (nftables, `tc`, WireGuard) are those of the emulating host. The emulated level 2 test proves that the image and the deployment work on the architecture; it does not run the testbed there.
+- Evidence: `docs/plan.md` M28 Tests and §4.5, `deploy/smoke-image.sh`, `.github/workflows/weekly.yml` (`appliance-arm64`), `docs/development.md` "Container deployment (M28)".
+- Task: decide whether the emulated level 2 smoke test replaces the emulated level 1b in the plan or the testbed runs on arm64 too.
+- Options: (a) accept the emulated level 2 smoke test and `smoke-image.sh`, and amend the M28 Tests and the table of §4.5 to say so; the testbed on arm64 runs on real hardware with H1; (b) build the testbed on arm64 in emulation (a weekly job with a privileged `linux/arm64` container under QEMU, which takes much longer than the budget of the weekly job and is slow enough to make timing tests unusable, so only the functional tests could run).
+- Recommendation: (a): the functional smoke test of the plan is what the emulated level 2 test does, and the testbed's logic does not depend on the architecture; the Raspberry Pi targets are validated with H1 anyway.
+- Acceptance: for (a) the plan's M28 Tests and §4.5 name the emulated level 2 smoke test; for (b) a weekly job runs the functional testbed tests on arm64.
+- Needs maintainer: no
+- Effort: S for (a), L for (b)
+
+### P7-M27-01 Safe mode drops the management-role WireGuard networks, so a gateway administered over a tunnel loses its access
+
+- Status: closed (2026-10-31): decided by the maintainer, option (a): safe mode is the management interface alone; the documents of M30 already say so
+- Severity: minor
+- Reason: needs-decision. Plan §3.9 says safe mode keeps "management access only". `domain.SafeModeConfiguration` keeps the uplink, the management interface (with its allowed sources and the UI port) and the settings, and drops every network, so a WireGuard network with the role `management` (a management access path in plan §2.14) is gone: the tunnel is down in safe mode and the gateway is reachable through the management interface only. Keeping the tunnel is not a copy: its clients' `reachable` lists name test networks that safe mode does not have, its keys are generated secrets, and a failing WireGuard apply in the configuration of last resort would end safe mode in a failed start.
+- Evidence: `internal/domain/safemode.go`, `internal/domain/safemode_test.go` (`Networks == nil`), `docs/development.md` "Recovery and stop (M27)", decision 4.
+- Task: decide whether a management-role WireGuard network stays up in safe mode.
+- Options: (a) no: safe mode is the management interface alone (what M27 does); `docs/install.md` and the recovery instructions of M30 say that a tunnel is down and the way in is the management interface; (b) yes: the safe configuration keeps the networks of the role `management` with their clients, without the `reachable` entries, and a failing apply of the tunnel does not fail the safe configuration (the tunnel is reported as degraded).
+- Note: the documents of M30 (`docs/install.md`, `docs/recovery.md`, `docs/release-notes/v1.0.0.md`) and `TestTheDocumentsStateWhatSafeModeAndAKeyRotationDo` assume option (a); a decision for (b) changes them.
+- Recommendation: (a) for V1: the management interface is the access that does not depend on a key, an interface that can fail to come up or a peer, which is what the last resort should rely on; the recovery instructions (M30) say it. (b) is worth doing if operators administer the gateway only over the tunnel.
+- Acceptance: for (a) the recovery instructions state that the tunnel is down in safe mode; for (b) a test of the compiler and the engine shows the management tunnel up in safe mode and a test network's client cut off.
+- Needs maintainer: no
+- Effort: S for (a), M for (b)
+
+### P7-M27-02 A fallback to a revision from before a key rotation cannot be applied, because the rotation retired the key
+
+- Status: closed (2026-10-31): decided by the maintainer, option (a): a rotation retires the old key for good and a fallback across it ends in safe mode; the documents of M30 already say so
+- Severity: minor
+- Reason: needs-decision. The commit of a revision that raises the key generation of a WireGuard client or link peer retires the old generation's keys (`wireguard.Prune`, pinned by `TestRotatingAClientKeyKeepsTheOldKeysUntilTheCommitAndAFailedApplyStillRestores`). The start applies the last known good revision when the active one fails (M27). `wireguard.PruneKeeping` keeps the keys that a later revision dropped altogether (a network, a client or a peer that is gone), so a fallback to a revision from before such a deletion works. A fallback to a revision from before a rotation does not: the compile finds no key for the client, and the gateway enters safe mode although that revision once worked. Keeping the retired generation would let a compromised key that was rotated away come back with the fallback, which is what a rotation is for.
+- Evidence: `internal/wireguard/provision.go` (`PruneKeeping`, `keepKeysOfGone`), `internal/engine/owner.go` (`prune`), `internal/engine/recovery.go`, `docs/development.md` "Recovery and stop (M27)".
+- Task: decide whether the keys of a generation that a rotation replaced stay for the fallback.
+- Options: (a) no (what M27 does): a rotation retires the old key for good; the fallback to a pre-rotation revision ends in safe mode, and the way out is a new revision (a clone with the current keys); the recovery instructions (M30) say so; (b) yes, until the next commit: the generation before the last rotation stays as long as its revision is the fallback, and the recovery log names the key that came back.
+- Note: the documents of M30 (`docs/recovery.md`, `docs/release-notes/v1.0.0.md`) and `TestTheDocumentsStateWhatSafeModeAndAKeyRotationDo` assume option (a); a decision for (b) changes them.
+- Recommendation: (a): safe mode is the safe answer when the only revision to go back to needs a key the administrator retired on purpose; a clone of that revision with the current key applies in one step.
+- Acceptance: for (a) the recovery instructions state it; for (b) a test where R2 rotates a client key and fails at start falls back to R1 and applies it.
+- Needs maintainer: no
+- Effort: S for (a), S to M for (b)
+
+### P7-M27-03 The level 2 recovery test does not read `safe_mode` from `GET /state`
+
+- Status: closed (2026-10-29): not a decision, only work, done in review: `TestRecoveryAndStopOnCleanUbuntuHosts` makes revision 1 with `POST /setup`, confirms it in a session, creates a token and reads `GET /state` (option (b)); written, not run yet (no KVM here), it runs in the nightly job
+- Severity: minor
+- Reason: the review found that this was no decision (the plan puts "Boot, recovery, safe mode" at level 2 and the Scope has the API report it). Plan §4 puts "Boot, recovery, safe mode, upgrades" at level 2 and the M27 Scope has the API report `safe_mode` and `safe_mode_reason`. `TestRecoveryAndStopOnCleanUbuntuHosts` sees safe mode in the log line, over SSH, in the forwarding that stopped and in the table of the safe configuration, but it never calls `GET /state`: it makes its revisions with `chaosgw apply --file` while the API is stopped, so no administrator exists and the service token has the scope `service` only. The report is checked at level 0 over HTTP (`TestSafeModeIsReportedAndHoldsBackWhatNeedsAForwardingGatewayUntilARevisionWorks`). The test cannot run here (no KVM), so a change of its flow would be unverified until the nightly run.
+- Evidence: `internal/appliance/recovery_test.go`, `internal/api/recovery_test.go`, `internal/api/system.go` (`GetState`).
+- Task: decide whether the level 2 test reads the API.
+- Options: (a) leave it: the REST report is level 0, the real kernel's safe mode is level 2; (b) make the first revision with `POST /setup` (the API running, the setup token from its log, then login and confirm), so that the test has a session and asserts `safe_mode`, a non-empty `safe_mode_reason` and `safe_mode: false` after the restart; the revision numbers of the flow shift by one.
+- Recommendation: (b) once a level 2 run is available to prove the changed flow (the nightly job, or the first CI run with KVM), because the report is the contract the UI banner relies on; until then (a).
+- Acceptance: for (b) the level 2 test asserts the three values.
+- Needs maintainer: no
+- Effort: S
+
+### P7-M27-04 No test kills a real executor process in the middle of an apply
+
+- Status: closed (2026-10-29): not a decision, only work, done in review: option (c) in another form, `TestKillingTheExecutorProcessInTheMiddleOfAnApplyIsRecoveredOnTheRealKernel` runs the executor as a process of its own in the gateway's namespace and kills it with SIGKILL while it runs the nftables transaction of an apply; it is the test binary run again (the VM of the testbed has no toolchain to build the `chaosgw` binary), serving with the same executor and server code; it passed in CI on 2026-10-31 (PR #127, run 41205381960: the container and the VM job), it is in `M27_LEVEL1`
+- Severity: minor
+- Reason: the review found that this was no decision (the plan's clause is "killing the executor mid-apply is recovered"). The M27 test clause is "killing the executor mid-apply is recovered". Level 1 (`TestKillingTheExecutorInTheMiddleOfAnApplyIsRecoveredOnTheRealKernel`) uses an `apply.Exec` wrapper that runs the operations in front of the nftables transaction and fails every later request, on the real kernel with the real tools: the kill falls between the operations of one request. The testbed runs the executor in the test process, so a SIGKILL would end the test. Level 2 kills the executor's container with `docker kill` but in a settled state, then runs `teardown`. The recovery does not depend on where the process ended (the next start compiles and applies the committed revision against what the kernel holds, `TestAnInterruptedApplyIsRecoveredByRecompilingTheCommittedRevision`), but a cut inside an operation (half of an `ip -batch`, a half-written executor state file) is not exercised.
+- Evidence: `internal/engine/integration_recovery_test.go` (`killedExec`), `internal/appliance/recovery_test.go`, `docs/development.md` "Recovery and stop (M27)", "Tests".
+- Task: decide whether a real kill is worth a test.
+- Options: (a) leave it: the recovery is state-independent and the operation-granularity cut covers the engine's side; (b) add a level 2 step that kills the executor container with `docker kill` while a large apply runs (the API applies a revision with many bridges or faults; the kill is timed on a marker such as the first new bridge), restarts the stack and asserts the kernel equals the committed revision; (c) a level 1 variant that runs `chaosgw exec` as a subprocess over its socket and SIGKILLs it.
+- Recommendation: (b) when a level 2 run is available: it uses the shipped containers and needs no new harness; (c) needs the binary and a root harness in the testbed for one test.
+- Acceptance: the chosen test kills the process while a request is running and finds the committed revision in the kernel afterwards.
+- Needs maintainer: no
+- Effort: M

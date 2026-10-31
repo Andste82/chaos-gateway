@@ -23,7 +23,24 @@ type VMConfig struct {
 	SerialLog string
 	// KVM selects hardware acceleration; without it QEMU emulates (slow, but functional).
 	KVM bool
+	// Arch is the architecture of the machine, "amd64" (the default) or "arm64": an arm64 machine is always emulated on the x86-64
+	// runners (KVM only helps when the host is ARM64 itself), starts from the UEFI firmware of the package qemu-efi-aarch64 and is
+	// the functional level 2 test of the arm64 image (plan §4.4).
+	Arch string
+	// Firmware is the UEFI firmware of an arm64 machine; the default is that of the package qemu-efi-aarch64.
+	Firmware string
 }
+
+// QEMUBinary is the emulator of an architecture.
+func QEMUBinary(arch string) string {
+	if arch == "arm64" {
+		return "qemu-system-aarch64"
+	}
+	return "qemu-system-x86_64"
+}
+
+// AAVMF is where the package qemu-efi-aarch64 puts the UEFI firmware of ARM64 virtual machines.
+const AAVMF = "/usr/share/AAVMF/AAVMF_CODE.fd"
 
 // HasKVM reports whether /dev/kvm can be used.
 func HasKVM() bool {
@@ -45,6 +62,13 @@ func QEMUArgs(c VMConfig) []string {
 		cpus = 2
 	}
 	args := []string{"-machine", "q35", "-m", strconv.Itoa(mem), "-smp", strconv.Itoa(cpus), "-nographic"}
+	if c.Arch == "arm64" {
+		fw := c.Firmware
+		if fw == "" {
+			fw = AAVMF
+		}
+		args = []string{"-machine", "virt", "-bios", fw, "-m", strconv.Itoa(mem), "-smp", strconv.Itoa(cpus), "-nographic"}
+	}
 	if c.KVM {
 		args = append(args, "-accel", "kvm", "-cpu", "host")
 	} else {

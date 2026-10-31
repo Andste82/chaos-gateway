@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
@@ -338,6 +339,48 @@ func TestQEMUArgs(t *testing.T) {
 	}
 }
 
+// M28 (plan §4.4): the arm64 appliance machine is a `virt` machine with the UEFI firmware, emulated, with the same NICs and drives.
+func TestTheARM64MachineIsAnEmulatedVirtMachineWithUEFI(t *testing.T) {
+	nics := []NIC{{Tap: "ap-t0", MAC: MACs.Uplink}, {Tap: "ap-t1", MAC: MACs.LAN}}
+	args := strings.Join(QEMUArgs(VMConfig{Disk: "/d.qcow2", Seed: "/s.iso", NICs: nics, SerialLog: "/s.log", Arch: "arm64"}), " ")
+	for _, want := range []string{"-machine virt", "-bios " + AAVMF, "-accel tcg", "-cpu max", "file=/d.qcow2,if=virtio,format=qcow2", "virtio-net-pci,netdev=net1,mac=" + MACs.LAN, "-nographic"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("missing %q in\n%s", want, args)
+		}
+	}
+	if strings.Contains(args, "q35") {
+		t.Errorf("an arm64 machine is no q35 machine:\n%s", args)
+	}
+	if fw := strings.Join(QEMUArgs(VMConfig{Disk: "/d", Seed: "/s", SerialLog: "/l", Arch: "arm64", Firmware: "/fw.fd"}), " "); !strings.Contains(fw, "-bios /fw.fd") {
+		t.Errorf("the firmware of the config is not used: %s", fw)
+	}
+	if QEMUBinary("arm64") != "qemu-system-aarch64" || QEMUBinary("amd64") != "qemu-system-x86_64" || QEMUBinary("") != "qemu-system-x86_64" {
+		t.Error("the emulator of an architecture")
+	}
+}
+
+func TestTheReleasesOfARM64AreTheSameReleasesAsTheirOwnImages(t *testing.T) {
+	for _, arch := range []string{"", "amd64", "arm64"} {
+		rs, err := ReleasesFor(arch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"24.04", "26.04"} {
+			r, ok := rs[name]
+			want := arch
+			if want == "" {
+				want = "amd64"
+			}
+			if !ok || r.Arch != want || r.File != "ubuntu-"+name+"-server-cloudimg-"+want+".img" || !strings.HasSuffix(r.BaseURL, "/"+name+"/release/") {
+				t.Errorf("%s %s: %+v", arch, name, r)
+			}
+		}
+	}
+	if _, err := ReleasesFor("riscv64"); err == nil {
+		t.Error("an unknown architecture is accepted")
+	}
+}
+
 func TestThePlanBuildsTheThreePortTopologyAndTearsItDownInReverse(t *testing.T) {
 	top := Topology{Prefix: "ap1"}
 	if err := top.Validate(); err != nil {
@@ -431,5 +474,20 @@ func TestHostCommandsGetSudoOnlyWhenNotRoot(t *testing.T) {
 func TestShellQuoting(t *testing.T) {
 	if got := shq(`it's a "path"`); got != `'it'\''s a "path"'` {
 		t.Errorf("%s", got)
+	}
+}
+
+// The emulated arm64 machine boots for up to 45 minutes (M28): the budget of the whole run must be longer than the wait for the boot,
+// or the run ends by its context before the boot has timed out, and it must fit into the test timeout of the weekly job.
+func TestTheBudgetOfAnEmulatedRunCoversItsBootAndFitsTheWeeklyJob(t *testing.T) {
+	for _, arch := range []string{"amd64", "arm64"} {
+		for _, kvm := range []bool{true, false} {
+			if boot, budget := BootWait(arch, kvm), SmokeBudget(arch); budget < boot+15*time.Minute {
+				t.Errorf("%s (kvm %v): the budget %v leaves less than 15 minutes after the boot wait %v", arch, kvm, budget, boot)
+			}
+		}
+	}
+	if b := SmokeBudget("arm64"); b >= 320*time.Minute {
+		t.Errorf("the arm64 budget %v does not fit the 320 minutes of the weekly job", b)
 	}
 }

@@ -161,9 +161,15 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 	if err != nil {
 		return err
 	}
+	// the engine and the observers outlive the signal: the stop order (plan §3.11) removes the overlays through the engine after
+	// the listener is closed and stops the observers after the last apply (stopObservers); the deferred Close ends the engine
+	// afterwards
+	engCtx := context.WithoutCancel(ctx)
+	obsCtx, stopObservers := context.WithCancel(engCtx)
+	defer stopObservers()
 	// the executor may start after us: wait for it
 	for {
-		err = eng.Start(ctx)
+		err = eng.Start(engCtx)
 		if err == nil {
 			break
 		}
@@ -178,19 +184,19 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 		}
 	}
 	defer eng.Close()
-	eng.WatchService(ctx, 2*time.Second)
-	if err := eng.FollowHost(ctx, 500*time.Millisecond); err != nil {
+	eng.WatchService(obsCtx, 2*time.Second)
+	if err := eng.FollowHost(obsCtx, 500*time.Millisecond); err != nil {
 		log.Warn("the host is not followed", "error", err)
 	}
-	_ = eng.PollWireGuard(ctx, o.poll)
-	_ = eng.PollRouting(ctx, o.poll)
-	if err := eng.PollObserved(ctx, time.Second); err != nil {
+	_ = eng.PollWireGuard(obsCtx, o.poll)
+	_ = eng.PollRouting(obsCtx, o.poll)
+	if err := eng.PollObserved(obsCtx, time.Second); err != nil {
 		log.Warn("the observed state is not polled", "error", err)
 	}
-	if err := eng.FollowNeighbors(ctx, 100*time.Millisecond); err != nil {
+	if err := eng.FollowNeighbors(obsCtx, 100*time.Millisecond); err != nil {
 		log.Warn("the neighbor table is not followed", "error", err)
 	}
-	if err := eng.FollowConntrack(ctx, 100*time.Millisecond); err != nil {
+	if err := eng.FollowConntrack(obsCtx, 100*time.Millisecond); err != nil {
 		log.Warn("conntrack is not followed; polling alone", "error", err)
 	}
 	if o.serviceToken != "" {
@@ -214,12 +220,25 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 		log.Warn("this binary has no web app (built without the tag webui) and none was given with --web-dir: only the API is served")
 	}
 
+	// the certificates of the HTTPS listeners (plan §2.16, M29): the gateway's own, which the service containers verify and
+	// which is published to them, and the one the administrator installed, which the other addresses present
+	names, ips := certNames(eng)
+	certs, err := api.OpenCertificates(filepath.Join(o.secretsDir, "tls"), names, ips, time.Now, log)
+	if err != nil {
+		return err
+	}
+	if o.serviceCert != "" {
+		if err := api.PublishCertificate(filepath.Join(o.secretsDir, "tls"), o.serviceCert); err != nil {
+			return fmt.Errorf("the service certificate: %w", err)
+		}
+	}
+
 	var report atomic.Pointer[api.PreflightReport]
 	go func() { report.Store(buildPreflight()) }()
 	srv, err := api.New(api.Config{Engine: eng, Store: st, Auth: au, Audit: lg, Secrets: sec, Exec: ex, Namespace: o.namespace, Log: log,
 		StateDir: o.dataDir, BootID: uuid.NewString(), Started: time.Now(), Version: version.Version, Commit: version.Commit, BuildDate: version.Date,
 		Preflight: report.Load, ConfirmTimeout: o.confirm, UI: ui, TrafficInterval: o.trafficInterval, TrafficPeriod: o.trafficPeriod, RunRetention: o.runRetention,
-		CapturesDir: o.capturesDir, CaptureQuota: o.captureQuota, CaptureMinFree: o.captureMinFree, TLSCADir: o.tlsCADir})
+		CapturesDir: o.capturesDir, CaptureQuota: o.captureQuota, CaptureMinFree: o.captureMinFree, TLSCADir: o.tlsCADir, Certificates: certs})
 	if err != nil {
 		return err
 	}
@@ -235,16 +254,6 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 	}
 	_, _ = lg.Append(audit.Entry{Actor: audit.Actor{Type: "system", ID: "system"}, Via: "system", Action: "service.start", Detail: version.Version})
 
-	names, ips := certNames(eng)
-	cert, err := api.LoadOrCreateCertificate(filepath.Join(o.secretsDir, "tls"), names, ips, time.Now())
-	if err != nil {
-		return err
-	}
-	if o.serviceCert != "" {
-		if err := api.PublishCertificate(filepath.Join(o.secretsDir, "tls"), o.serviceCert); err != nil {
-			return fmt.Errorf("the service certificate: %w", err)
-		}
-	}
 	if o.keaEventsSocket != "" {
 		go func() {
 			if err := srv.ListenKeaEvents(ctx, o.keaEventsSocket); err != nil {
@@ -256,7 +265,7 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 		Addrs:   func() []netip.Addr { return listenAddrs(eng.Snapshot(), au.SetupCompleted(), o.listen) },
 		Port:    func() int { return uiPort(eng, o.port, o.listen) },
 		Handler: srv.Handler(),
-		TLS:     &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
+		TLS:     certs.TLSConfig(),
 		Log:     log,
 	}
 	done := make(chan struct{})
@@ -267,9 +276,22 @@ func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOpti
 	case <-eng.Done():
 		return fmt.Errorf("the engine stopped")
 	}
+	// the stop order of plan §3.11: the listener stopped accepting requests; the runs are aborted and the last apply is one
+	// without overlays; then the observers stop, and the event bus and the executor connection close (the defers above)
 	<-done
+	shutdown, cancelShutdown := context.WithTimeout(context.Background(), apiShutdownTimeout)
+	defer cancelShutdown()
+	if err := srv.Shutdown(shutdown); err != nil {
+		log.Warn("the overlays were not removed before the stop (the executor removes everything when it stops)", "error", err)
+	}
+	stopObservers()
+	_, _ = lg.Append(audit.Entry{Actor: audit.Actor{Type: "system", ID: "system"}, Via: "system", Action: "service.stop", Detail: version.Version})
 	return nil
 }
+
+// apiShutdownTimeout bounds the removal of the overlays at the stop; the container runtime stops the container after its stop
+// grace period (30 s in the shipped compose files).
+const apiShutdownTimeout = 20 * time.Second
 
 // webUI is the web app to serve: the directory given, else the build embedded in the binary (nil
 // when it was built without one).

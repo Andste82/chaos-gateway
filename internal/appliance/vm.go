@@ -61,12 +61,18 @@ type VM struct {
 // at once; WaitSSH waits for the machine. QEMU runs through the host's sudo: it attaches to the
 // tap devices.
 func Boot(ctx context.Context, h Host, dir, baseImage, seed string, nics []NIC, addr string, key *Key) (*VM, error) {
+	return BootArch(ctx, h, dir, baseImage, seed, nics, addr, key, "")
+}
+
+// BootArch is Boot for an architecture, "amd64" (or empty) or "arm64" (M28): an arm64 machine is emulated even where /dev/kvm exists,
+// because the KVM of an x86-64 host cannot run it.
+func BootArch(ctx context.Context, h Host, dir, baseImage, seed string, nics []NIC, addr string, key *Key, arch string) (*VM, error) {
 	overlay := filepath.Join(dir, "disk.qcow2")
 	if out, err := exec.CommandContext(ctx, "qemu-img", "create", "-q", "-f", "qcow2", "-b", baseImage, "-F", "qcow2", overlay, "10G").CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("appliance: qemu-img: %w\n%s", err, out)
 	}
-	cfg := VMConfig{Disk: overlay, Seed: seed, NICs: nics, SerialLog: filepath.Join(dir, "serial.log"), KVM: HasKVM()}
-	argv := h.argv(append(Cmd{"qemu-system-x86_64"}, QEMUArgs(cfg)...))
+	cfg := VMConfig{Disk: overlay, Seed: seed, NICs: nics, SerialLog: filepath.Join(dir, "serial.log"), KVM: HasKVM() && arch != "arm64", Arch: arch}
+	argv := h.argv(append(Cmd{QEMUBinary(arch)}, QEMUArgs(cfg)...))
 	vm := &VM{Dir: dir, SerialLog: cfg.SerialLog, Addr: addr, host: h, key: key, done: make(chan struct{})}
 	vm.cmd = exec.Command(argv[0], argv[1:]...)
 	vm.cmd.Stdout, vm.cmd.Stderr = &lockedWriter{vm}, &lockedWriter{vm}
@@ -255,4 +261,26 @@ func (v *VM) Close() {
 		_ = v.cmd.Process.Kill()
 		<-v.done
 	}
+}
+
+// SmokeBudget is how long one run of the smoke test may take in all, from the boot to the last check, for the architecture (M28): the
+// wait for the boot of an emulated arm64 machine alone is longer than the budget of a machine with KVM. It stays below the test
+// timeout of the weekly job (.github/workflows/weekly.yml, 320 minutes).
+func SmokeBudget(arch string) time.Duration {
+	if arch == "arm64" {
+		return 5 * time.Hour
+	}
+	return 40 * time.Minute
+}
+
+// BootWait is how long WaitSSH waits for the machine to boot and cloud-init to finish: a machine without KVM and an emulated arm64
+// machine (the firmware, the kernel and cloud-init under software emulation) are slower than one with it.
+func BootWait(arch string, kvm bool) time.Duration {
+	switch {
+	case arch == "arm64":
+		return 45 * time.Minute
+	case !kvm:
+		return 25 * time.Minute
+	}
+	return 6 * time.Minute
 }

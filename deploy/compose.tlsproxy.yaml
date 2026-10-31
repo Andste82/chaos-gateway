@@ -9,15 +9,15 @@
 # (169.254.100.1) and reports what it sees; the responder's control interface (127.0.0.1:9445) is where it asks for a connection to
 # be paced or reset.
 #
-# It signs with the test CA, which the API makes in the volume `chaosgw-tlsca` and which this container reads, key included
-# (the volume is the CAs' alone), and starts mitmproxy again when `POST /tls/ca/regenerate` replaces it. It needs no capability (its
+# It signs with the test CA, which the API makes in the directory /var/lib/chaosgw/tlsca of the host and which this container reads, key included
+# (the directory is the CAs' alone), and starts mitmproxy again when `POST /tls/ca/regenerate` replaces it. It needs no capability (its
 # ports are above 1024) and keeps its working files in a tmpfs. The certificates of the servers are verified against the bundle of
 # mitmproxy; `CHAOSGW_UPSTREAM_CA_FILE` names other CAs (the path of a file you mount into the container, docs/install.md section 3
 # has a compose file for it), `CHAOSGW_UPSTREAM_INSECURE=1` verifies nothing (a lab with private servers). Both are the default of the installation: a case says otherwise for its own devices with
 # `intercept.upstream` (`verify`: the bundle, `own_ca`: the file named here, `insecure`: no check).
 services:
   tls-proxy:
-    image: chaos-gateway:${CHAOSGW_VERSION:-latest}
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
     entrypoint: ["/opt/chaosgw/tls-proxy/venv/bin/python", "-m", "chaosgw_tlsproxy.launcher"]
     command: ["--api", "https://169.254.100.1:${CHAOSGW_UI_PORT:-8443}", "--service-token-file", "/var/lib/chaosgw/service/token", "--api-cert-file", "/var/lib/chaosgw/service/api.pem", "--ca-dir", "/var/lib/chaosgw/tlsca", "--listen", "127.0.0.1:9444", "--control", "http://127.0.0.1:9445", "--confdir", "/tmp/mitmproxy"]
     environment:
@@ -37,23 +37,31 @@ services:
       # owned by the proxy's user: a tmpfs is root's unless it is told otherwise, and mitmproxy's configuration directory is made in it
       - /tmp:size=64m,mode=0700,uid=65532,gid=65532
     volumes:
-      # the token the proxy authenticates with and the API's certificate: nothing else of the service volume
-      - type: volume
-        source: chaosgw-service
+      # the token the proxy authenticates with and the API's certificate: nothing else of the service directory
+      - type: bind
+        source: /var/lib/chaosgw/service
         target: /var/lib/chaosgw/service
         read_only: true
+        bind:
+          create_host_path: false
       # the test CA the API made (and the unknown CA beside it, which the proxy does not use)
-      - type: volume
-        source: chaosgw-tlsca
+      - type: bind
+        source: /var/lib/chaosgw/tlsca
         target: /var/lib/chaosgw/tlsca
         read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       svcns:
-        condition: service_started
+        condition: service_healthy
         # a recreated holder has a new namespace: the proxy has to join it again. This acts on Compose operations only; after a restart
         # of the holder by the daemon the launcher notices that its namespace lost the service address 169.254.100.2 and exits (code 3,
         # --namespace-check, on by default), and `restart` brings it back into the current namespace
         restart: true
+      # the proxy fetches its rules from the API (169.254.100.1)
+      api:
+        condition: service_healthy
+        required: false
     restart: unless-stopped
     stop_grace_period: 15s
     healthcheck:
@@ -67,7 +75,3 @@ services:
       options:
         max-size: 10m
         max-file: "3"
-
-volumes:
-  chaosgw-service:
-  chaosgw-tlsca:

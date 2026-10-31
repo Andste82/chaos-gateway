@@ -191,16 +191,10 @@ func (e *Executor) OpenCapture(ctx context.Context, o CaptureOpen) (CaptureStrea
 		return nil, ErrTooManyCaptures
 	}
 	release := func() { <-e.capSlots }
-	root, err := os.OpenRoot(e.capDir)
+	dir, err := openCaptureDir(e.capDir, o.Dir)
 	if err != nil {
 		release()
-		return nil, fmt.Errorf("the capture directory: %w", err)
-	}
-	defer func() { _ = root.Close() }()
-	dir, err := root.OpenRoot(o.Dir)
-	if err != nil {
-		release()
-		return nil, fmt.Errorf("the directory of the capture: %w", err)
+		return nil, err
 	}
 	uid, gid := -1, -1
 	if fi, err := dir.Stat("."); err == nil {
@@ -229,6 +223,21 @@ func (e *Executor) OpenCapture(ctx context.Context, o CaptureOpen) (CaptureStrea
 	s.events <- CaptureEvent{Kind: CaptureStarted, Interfaces: sess.Interfaces(), Files: sess.Files()}
 	go s.run()
 	return s, nil
+}
+
+// openCaptureDir opens the directory a capture writes to: a name below the capture root. The name is resolved inside the root
+// (`os.OpenRoot`), so a link below it that points out of it is refused, not followed (the threat model of the executor's interface).
+func openCaptureDir(capDir, name string) (*os.Root, error) {
+	root, err := os.OpenRoot(capDir)
+	if err != nil {
+		return nil, fmt.Errorf("the capture directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	dir, err := root.OpenRoot(name)
+	if err != nil {
+		return nil, fmt.Errorf("the directory of the capture: %w", err)
+	}
+	return dir, nil
 }
 
 // diskFree reads the free and the total space of the file system of dir.

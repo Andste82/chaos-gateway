@@ -79,7 +79,10 @@ test('safe mode: a full-width red banner with the reason and the way to recovery
   await expect(banner).toHaveAttribute('role', 'alert');
   await expect(banner).toContainText('Safe mode: forwarding is disabled.');
   await expect(banner).toContainText('revision 42 and the last known good revision 41 failed to apply');
-  await expect(banner.getByRole('link', { name: 'How to recover' })).toBeVisible();
+  // the link leads to the recovery instructions (docs/recovery.md, P3-M12-05); the level 0 test of internal/docscheck checks that the file and the heading exist
+  const recover = banner.getByRole('link', { name: 'How to recover' });
+  await expect(recover).toBeVisible();
+  await expect(recover).toHaveAttribute('href', 'https://github.com/Andste82/chaos-gateway/blob/main/docs/recovery.md#safe-mode');
   await expect(page.getByTestId('health')).toHaveText('Unhealthy');
   // on every page
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Devices' }).click();

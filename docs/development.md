@@ -8,7 +8,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | Path | Content |
 |---|---|
 | `api/` | `openapi.yaml`, the source of truth for the domain model and the REST API; examples and their validator |
-| `cmd/chaosgw`, `cmd/chaosctl` | the core binary and the CLI (`chaosgw exec` is the executor; `chaosgw tls` is the TLS responder (M21), which hands the connections of the case `intercept` to the proxy (M22); `cmd/chaosctl` is a `main` over `internal/ctl`) |
+| `cmd/chaosgw`, `cmd/chaosctl` | the core binary and the CLI (`chaosgw exec` is the executor, which removes everything it created when it stops, and `chaosgw teardown` does that on demand (M27); `chaosgw tls` is the TLS responder (M21), which hands the connections of the case `intercept` to the proxy (M22); `cmd/chaosctl` is a `main` over `internal/ctl`) |
 | `internal/ctl` | `chaosctl` (M18): the commands (Cobra), the API client with its token and certificate options, runs that are waited for with their lease, `wait device`, `with`; the commands of the application-layer kinds, `dns set`, `tls set` and `dhcp set` (M23b), and the interception, `intercept set`, `intercept flows` and `tls ca` (M23c); the probes, `probe list`, `probe add` and `probe remove` (M26a) |
 | `internal/clock` | injectable clock: real and fake, wall time apart from monotonic time |
 | `internal/preflight` | kernel version, the one shared kernel-module list, namespace capability |
@@ -20,12 +20,12 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `internal/run` | the engine of scenario runs (M15): create, queue per target, preconditions, the timeline on the monotonic clock with `wait` steps, lease, abort, the records of runs on disk, events, JSON and JUnit reports; the checks of a scenario and the zero-hit warnings (M16) |
 | `internal/capture` | the packet capture engine (M17): the filter of a capture (a selector as a user space matcher and as a classic BPF program), the pcap and pcapng writers and reader, the files of a capture with ring buffer and size limit, and the session that reads AF_PACKET sockets (runs in the executor) |
 | `internal/capturemgr` | the management of captures (M17): the scope of a request resolved to interfaces and filters, the records, the quota and the free-space limit (and the report of both for the Captures screen, M23a), the stream to the executor, the download, and the TLS key log of a capture with the clients a scope covers (M22) |
-| `internal/store` | persistence: immutable revisions with checksum, status, commit-confirm, atomic writes, schema migrations |
+| `internal/store` | persistence: immutable revisions with checksum, status, commit-confirm, atomic writes, schema migrations; the revision to fall back to when the active one cannot be applied and its restoration (M27) |
 | `internal/linux` | parsers for `ip -j`, `tc -j`, `nft -j` and `ethtool -k` output (recorded outputs in `testdata/`) |
 | `internal/executor` | the privileged executor: closed set of typed operations, strict decoder, scope checks, command planning, serialized queue, Unix-socket protocol with version handshake and `SO_PEERCRED` check, client |
 | `internal/compiler` | the pure function from configuration + observed host + generation to the target state: bridges, addresses, sysctls, routes and rules, the nftables layout; golden tests |
-| `internal/apply` | reads the kernel state through the executor, plans the difference, applies it in one request and verifies it; `kernelsim` simulates the kernel's tools for tests |
-| `internal/engine` | the state owner, immutable snapshots, the apply loop, commit-confirm, rollback, preview and the event bus |
+| `internal/apply` | reads the kernel state through the executor, plans the difference, applies it in one request and verifies it; the stop cleanup, which plans the difference to nothing (`teardown.go`, M27); `kernelsim` simulates the kernel's tools for tests |
+| `internal/engine` | the state owner, immutable snapshots, the apply loop, commit-confirm, rollback, preview and the event bus; the recovery at start: the last known good revision and safe mode (`recovery.go`, M27) |
 | `internal/observer` | netlink events (links, addresses, routes, rules) debounced into triggers |
 | `internal/supervisor` | starts goroutines: recovers panics, reports health, critical goroutines end the process |
 | `internal/secrets` | the protected store for key material (mode 0600/0700, atomic writes); WireGuard keys by UUID |
@@ -49,6 +49,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 | `web/` | the web app (M12; scenarios M19; captures M23a; the forms of the DNS, TLS and DHCP kinds M23b; the interception M23c; the diagnostics M24): Vue 3, Vite, Tailwind 4, TanStack Query, Pinia, Reka UI, Vue Router, uPlot; `web/embed.go` embeds its build into `chaosgw` (tag `webui`) |
 | `web/e2e`, `web/e2e-testbed` | Playwright: the screens against a mocked API, and the browser flows against the real stack in the testbed |
 | `clients/` | generated TypeScript and Python clients (not committed), and `clients/examples`: the example suites for pytest and Jest and a scenario file (M18) |
+| `internal/docscheck` | the checks of the user documentation (M30): the fenced blocks of `docs/*.md` with the words of their info string, the lint, the links and anchors, and the matching of printed output |
 | `deploy/` | the container image (multi-arch) and the compose files of the deployment ([`install.md`](install.md)); `internal/executor/hardening_test.go` pins their hardening |
 
 ## Setup
@@ -77,8 +78,11 @@ The plan (§4.5) defines levels; this is how they map to commands.
 | 1b | `make test-vm` | the testbed tests in a QEMU VM with a stock Ubuntu kernel | `vng`, QEMU, the kernels in `/boot` (all in the devcontainer) |
 | – | `make test-testbed` | level 1 if the preflight allows it, else level 1b | |
 | – | `make test-arm64` | the unit tests as arm64 binaries under `qemu-user` | `qemu-aarch64` |
+| – | `make check-compose` / `make compose` | `deploy/compose.yaml` is what the compose files of the containers give (M28, `tools/composegen`) / make it | nothing |
+| 2 | `make test-appliance` | the gateway in a QEMU/KVM VM from the Ubuntu cloud images: the smoke test, the recovery and stop (M27) and the container deployment with the updates (M28); `CHAOSGW_APPLIANCE_ARCH=arm64` runs the smoke test on an emulated ARM64 machine (the other two tests skip with a message on arm64; the weekly workflow selects the smoke test with `-run`) | root, QEMU, `/dev/kvm`, `udhcpc`, `CHAOSGW_APPLIANCE_IMAGE_TAR` (nightly and weekly workflows) |
 | – | `make test-e2e` | Playwright tests of the web app against a mocked API (port and server reuse: see below) | `npx playwright install chromium` once |
 | – | `make test-examples` | the example suites of `clients/examples` (pytest with the generated Python client, Jest with the generated TypeScript client, both also driving `chaosctl`) against a gateway on the simulated kernel (M18; test tag `examples`) | network access for `pip` and `npm ci`; no root |
+| – | `make test-docs` | the `sh run` examples of the user documentation (`docs/`) against a gateway on the simulated kernel, their printed output compared with what the documents show (M30; test tag `examples`) | `curl`, `jq`; no root |
 | 1/1b | `make test-vm ARGS='-tags testbed,browser -run InTheBrowser ./internal/api'` | the browser flows of the web app against the real stack in the testbed: first start (M12), a fault created in the UI and measured (M13) (also `test-privileged`) | `make build-web`, `cd web && npm ci && npx playwright install chromium` |
 
 **Playwright port.** The e2e tests (`web/playwright.config.ts`) build the app and start `vite preview` on
@@ -382,9 +386,9 @@ case in `Decode`, golden tests in `plan_test.go`, rejection tests in `decode_tes
 `fuzz_test.go`. The fuzz targets check that anything the decoder accepts yields inert commands that
 stay in scope.
 
-`make fuzz` runs both fuzz targets for `FUZZTIME` each (default 2m30s, 5 minutes in CI); the
-nightly workflow runs them for an hour each. A crashing input lands in
-`internal/executor/testdata/fuzz/`; commit it as a regression test with the fix.
+`make fuzz` runs the six fuzz targets of the executor's interface for `FUZZTIME` each (default 60s, 6 minutes in CI; the list is in "Security hardening (M29)"); the
+nightly workflow runs them for 45 minutes each. A crashing input lands in
+`testdata/fuzz/` of its package (`internal/executor` or `internal/capture`); commit it as a regression test with the fix.
 
 Captures (M17) are not operations of this queue: a capture lives as long as a connection of its own, like a watch,
 and changes nothing in the network configuration (see "Packet captures (M17)").
@@ -905,6 +909,12 @@ two ports:    the management network lives behind the uplink interface; there is
   ends is `testdata/echo`, a static Go binary the test builds (`appliance.BuildEcho`), so it runs in
   the gateway's own image without anything to pull. Logs (cloud-init, journal, Docker, nftables,
   console, QEMU) are collected into the artifacts directory even when the test fails.
+- **The recovery test (M27, `recovery_test.go`).** The same VM and compose files plus `compose.api.yaml` and `compose.dns.yaml` (the holder and the DNS proxy: the stop has the pair `svc0`, the name `cgsvc` and a DNS redirect to remove; there is no Kea container, so no probe at level 2) and `compose.teardown.yaml`: two revisions are written into the store with `chaosgw apply --file --state-dir` (as the API's user,
+  with the API container stopped); stopping the containers must leave nothing of the gateway on the host (`nothingLeft`: table, rules and routes with the protocol 201, bridges, `svc0`, `pv<8 hex>` ends,
+  namespaces, rules in `DOCKER-USER`, the test NIC no longer a port); a dummy interface with the name of the bridge of revision 2's network makes that revision fail, so the API container applies revision 1
+  (log, `config.json`, the status of revision 2, traffic); with a dummy for revision 1 too there is nothing to fall back to and the API container runs in safe mode (log, a fresh SSH connection works, the client
+  reaches nothing), and after the dummy is gone and the container restarts the network works; last the executor is killed (`docker update --restart=no`, `docker kill`), the bridge stays, and
+  `docker compose -f compose.teardown.yaml run --rm teardown` and then `--purge` remove what it left.
 - **Running it.** It needs root (taps, bridges, namespaces; the harness uses `sudo -n`), QEMU, `/dev/kvm`
   (without it the tests skip; `CHAOSGW_APPLIANCE_ALLOW_TCG=1` runs them emulated and very slowly) and
   the image as `docker save | gzip` in `CHAOSGW_APPLIANCE_IMAGE_TAR`. The nightly workflow's job
@@ -6878,6 +6888,379 @@ dialog, a gateway without the feature, and a revision that waits for confirmatio
 | Tests: a `chaosctl` test lists, adds and removes one | `TestChaosctlOverlays/ManagesProbes` |
 | P6-M25-01: the empty state of the probes card points to the dialog | `e2e/probe-management.spec.ts` ("the empty state points to the dialog") |
 
+## Recovery and stop (M27)
+
+Plan §2.14, §3.8 ("Stop"), §3.9, §3.11, D35 and M27 (variant A of the stop cleanup, decided 2026-10-16, `docs/open-items.md` "Shutdown and host cleanup"). The kernel state is never the source of truth: whatever
+happened to the machine, the committed revision is compiled again and applied. M27 adds what is missing around that: a start that survives a revision that cannot be applied, a safe mode for when nothing can,
+and a stop that leaves nothing of the gateway on the host. There is no change of the spec: `GatewayState.safe_mode` and `safe_mode_reason`, the event type `safe_mode` and the status `rolled_back` of
+`last_apply` were in it already.
+
+### How it works
+
+- **The start** (`internal/engine/recovery.go`, `internal/store/recovery.go`). `Engine.Start` applies the active revision. That is a full apply against what the kernel holds, followed by the read-back that
+  verifies it (plan §2.14 "verify at start"), so an apply that a power loss or a killed executor interrupted is healed the same way as a clean start: the routes, rules, links and the table of the interrupted
+  revision are replaced by those of the committed one. When the apply fails it is tried once more after `retryDelay` (10 s, `Config.RetryDelay`; a failure that only a moment caused must not roll a configuration back),
+  and when that fails too, or when the revision's file is damaged (`store.ErrCorrupt`: a checksum, a JSON error, a missing status file; a newer schema still stops the start, plan §3.9 "Downgrade"), the engine applies
+  the last revision that worked: `Store.Fallback` is the last known good revision when it is another one than the active, else the newest revision that was confirmed and then replaced (`superseded`). When that
+  applies, `Store.Restore` makes it the active and the last known good revision and the failed one `rolled_back` (the pointer moves last, so a crash in between is repaired by the next start); the event
+  `revision_rolled_back` carries `reason: "boot: <why>"` and `restored`, `last_apply.result` says `rolled_back`, and the audit log records it. A revision that applies at start becomes the last known good one
+  (`Store.MarkGood`). A revision that did not apply at start and ended in safe mode, and the fallback that failed too, are marked (`Store.MarkBootFailed`, `boot_failed_at` in the status file): the newer revision that
+  is the way out supersedes the failed one with its confirmation still set, and without the mark a later failing start would fall back to a revision that is known not to apply (and stop there, never trying an older
+  one). `Fallback` skips a marked revision, `MarkGood` and `Restore` clear the mark.
+- **Safe mode.** When there is no revision to fall back to or that one fails too, the engine applies `domain.SafeModeConfiguration` of the failed configuration (the uplink, the management interface and its allowed sources
+  and port, the settings; no network, device, rule, fault, port forward, probe, profile, scenario or routing): the management network keeps reaching the UI and the API through gateway protection, and with no test
+  network there is no bridge, no route between networks and no masquerade (`TestTheSafeModeConfigurationCompilesToNoTestNetworkAtAll`); the management network keeps its normal path to the uplink (plan §2.14), and a
+  WireGuard network of the role `management` is dropped with the other networks, so the way in is the management interface (P7-M27-01). If nothing is readable at all (the only revision is damaged) there is nothing to compile, so the engine removes what the kernel holds of the gateway's with `apply.Teardown` (after a restart of the API alone the previous
+  revision's bridges, table and routes would go on forwarding; after a host start there is nothing to remove); a failure is logged and safe mode goes on. The snapshot
+  has `SafeMode` and `SafeModeReason`, `GET /state` reports `safe_mode` and `safe_mode_reason`, the event `safe_mode` (`active: true` with the reason, `active: false` at the end) reaches the UI, whose
+  banner (M12, `AppShell.vue`) shows the reason; its link target is the recovery instructions of M30 (P3-M12-05). In safe mode the operations that need a gateway that forwards (`createOverlay`, `renewOverlay`,
+  `createRun`, `runScenario`, `renewRun`, `calibrateProbe`, `startCapture`, `runDiagnostic`) answer `503 unavailable` with the reason (`safeModeHolds` in `internal/api/middleware.go`); reading, the revisions, the
+  removal of overlays and runs, the tokens and the setup work. The way out is a revision that works: `POST /revisions/{id}/clone` of an earlier one, `apply` (and `confirm`, when it changes what reaches the
+  control plane); the apply that commits ends the safe mode. A restart repeats the whole start. There is no periodic attempt to leave it: a revision that fails would flap the kernel every time.
+- **The keys of the revision to fall back to.** The prune of the WireGuard secrets after a commit (`owner.prune`, `wireguard.PruneKeeping`) keeps the keys of `Store.Fallback()` that a later revision dropped (the key of a
+  network that is gone, of a client or link peer that is gone), because the start applies that revision when the active one fails and its compile needs them. A key generation that a rotation replaced is not
+  kept: the commit of a rotation retires it (`TestRotatingAClientKeyKeepsTheOldKeysUntilTheCommitAndAFailedApplyStillRestores`), so a fallback to a revision from before the rotation fails on the missing key and ends in
+  safe mode (`docs/open-items.md`, P7-M27-02).
+- **Degraded networks** are not new: a test interface that is missing at the start or goes while the gateway runs makes the compiler report `port_missing`, the network is degraded (event `network_degraded`,
+  `GET /state` `degraded_networks`), the rest keeps working and no safe mode is entered; it is applied again when the interface comes back. M27 adds the tests (below).
+- **The stop** (`cmd/chaosgw/exec.go`, `internal/apply/teardown.go`). The shutdown order of plan §3.11 is the API's first: the listener stops, `Server.Shutdown` aborts the runs (their overlays are removed
+  through the engine) and removes every overlay that is left, so the last apply of the process is one without overlays, the audit log gets `service.stop`, the observers (`obsCtx` in `serveAPI`, cancelled after
+  `Server.Shutdown` returns; the signal stops only the listener) and the engine and the executor connection close, as plan §3.11 orders. Compose stops
+  the `api` container before `exec` (it depends on it). Then the executor, on `SIGTERM`: the connections are closed, `Executor.StopProbeClients` stops the DHCP clients of the probes first, `apply.Teardown`
+  removes everything Chaos Gateway created, and the exit code is 1 when something of it is left (the cleanup is bounded by 25 s, the stop grace period of the compose files is 30 s).
+  `apply.Teardown` reads the kernel and plans the difference to nothing with the planner of every apply (`BuildTeardown` is `buildPlan` of an empty target): the routes and rules of the own tables 100 to 109 and
+  the protocol tag, the service pair `svc0`/`svc1` and the name of the service namespace (`ServiceNS delete` runs `ip netns delete <name>` now: the namespace itself is the holder's and ends with it), the probes
+  (`ProbeNS delete`: the client, the pair by the name `pv<8 hex>` because a deleted bridge does not delete its ports, the namespace `cgp-<8 hex>`), the WireGuard interfaces, the bridges after their ports are
+  released, the tc trees on every interface that was assigned, the table `inet chaosgw` (`add` and `delete` in one transaction, which also works when it is not there) and the duplication table, the rules in
+  `DOCKER-USER`, the IFB device, the protocols of the BIRD instance, and last the scope itself (nothing is assigned afterwards). It then reads the state again and fails with the list when `Leftovers` finds
+  anything (`internal/apply/teardown.go`). It can be repeated and finishes what a killed executor left.
+- **`chaosgw teardown`** (`cmd/chaosgw/teardown.go`) is the same on demand, `docker compose -f compose.teardown.yaml run --rm teardown` (`--socket`, `--state`, `--bird-dir`, `--service-ns`). It refuses
+  while an executor answers on the socket (two writers of the kernel would break the serialization), and with `--purge` it also empties the volumes (`dataDirs`) and names the ones it does not see, once the kernel is clean: a teardown that fails (it lists what is still there) leaves the volumes and says so,
+  because the state file in them names the interfaces assigned to the executor that a second run needs, and the emptying cannot be undone (`TestPurgeLeavesTheVolumesWhenTheKernelCleanupFails`). The executor's
+  container mounts only what it needs (the secrets read-only, no revisions or audit log), so the shipped deployment has `deploy/compose.teardown.yaml`: one service under the profile `teardown` (`up` never starts
+  it), the executor's profile (privileged, the host's network stack, `/run/netns`) with every directory that holds data or state (eight, below `/var/lib/chaosgw` of the host since M28) mounted writable; its flags are in the `entrypoint`, because `compose run teardown --purge` replaces the
+  `command`. `TestTheTeardownServiceMountsEveryDirectoryPurgeEmptiesWritable` pins that every directory of `dataDirs` is mounted writable, from the directory of the host (plan §3.6, M28) that the other compose files mount, at the path they mount it at; the CI job `mounts` renders the file with
+  `docker compose config`, runs the service and checks that its volumes and the shared `/run/netns` do not leak into the host's mount table and that `down -v` works (issue #57).
+- **What the stop does not undo.** The addresses and routes of the uplink and the management interface (the host's), the networkd rule and the netplan entry of a test interface (out of scope until the host
+  setup or the executor writes them, `docs/open-items.md` "Shutdown and host cleanup"), the global `ip_forward` (Docker needs it), the loaded modules, the offloads switched off on a port (a driver setting
+  the planner does not read back) and the sysctls of the host's own interfaces.
+
+### Decisions
+
+1. **The stop cleanup is the planner's diff to nothing,** not a second list of what to delete: whatever an apply can remove, the stop removes, and the same tests cover both. The ownership is the executor's own
+   (the interfaces assigned to it, kept in its state file, and the fixed names of its objects); an interface that was never assigned is never touched.
+2. **Two attempts at start, then the last known good revision,** not an immediate roll back: a transient failure would otherwise move the pointer of the store to an older configuration for good.
+3. **A damaged revision is a failed start, not a refused one,** except a newer schema, which is the downgrade refusal of plan §3.9.
+4. **Safe mode applies a target of its own** (revision 0 in the generation id, the store's active id in the snapshot's `Revision` so that `If-Match` and the revisions list stay consistent) instead of leaving the
+   kernel as it is, so that a start after a crash does not keep the interrupted revision's forwarding.
+5. **Safe mode is left by a revision, not by a timer.**
+6. **The writes of the API held back in safe mode** are the ones that need forwarding; everything that repairs stays open, so the admin can look and fix with the same UI.
+7. **`Leftovers` is part of the cleanup,** so that an exit code of 1 and a message name what is still there (the log of the container is what the operator reads after a stop).
+
+### Tests
+
+Level 0 (run here): `internal/apply/teardown_test.go` (probes with their clients, the service namespace and its name, faults and DOCKER-USER, WireGuard, what is not the gateway's, repeated and after a partial cleanup),
+`cmd/chaosgw/teardown_test.go` (the executor's stop on `SIGTERM`, `chaosgw teardown` refusing while an executor serves and repeating, `--purge` and its refusal to empty the volumes while the kernel is not clean, the audit record of the API's stop),
+`internal/store/recovery_test.go`, `internal/engine/recovery_test.go` (the fallback, the retry of a transient failure, safe mode, a damaged revision, the interrupted apply, the degraded network at start
+and while running, a panic in the state owner and the restart, the last known good pointer moved by a start, a revision that failed at start not being the fallback of a later one), `internal/api/recovery_test.go` (safe mode over HTTP,
+a revision in safe mode that is rolled back or whose window runs out, the events of the recovery on the stream with their messages, the stop of the API), `internal/domain/safemode_test.go`, `internal/compiler/safemode_test.go`, and the simulated kernel
+(`kernelsim`) deletes tables. Level 1 (the list `M27_LEVEL1`, `internal/engine/integration_recovery_test.go`): the executor killed in the middle of an apply, twice (an `apply.Exec` wrapper that cuts a request in front of the nftables
+transaction, and the executor as a process of its own that is killed with SIGKILL while it runs the transaction), an unplugged test interface, and the stop cleanup on
+the real kernel with a probe and a fault, and with a service namespace and a DNS redirect. Level 2 (`internal/appliance/recovery_test.go`, nightly, needs KVM): the last known good revision, safe mode, the stop and `teardown` on an Ubuntu host with a
+test interface; the break is a dummy interface with the name of a network's bridge. Revision 1 is made by the setup of the API (`POST /setup`, a login that confirms it and creates a token), so the test reads `GET /state` (`safe_mode`,
+`safe_mode_reason`, the pointers) in safe mode and after it, and a fault is active when the stack stops, so that the tc tree is there to be removed. Not run on the development machine: level 1 (no network namespaces here) and level 2 (no KVM); both compile and vet
+(`go vet -tags testbed ./...`, `go vet -tags appliance ./internal/appliance`).
+
+What the tests do not do, stated: the executor process of the level 1 kill test is the test binary run again in the gateway's namespace (`TestExecutorProcessHelper`), serving with the same `executor.Executor` and `executor.Server` as `chaosgw exec`
+(the testbed's VM has no toolchain to build the binary), not the `chaosgw` binary itself. The kill falls in the `nft -j -f -` of an apply (the watcher stops that child with SIGSTOP and then kills the executor, so the request cannot end first);
+level 2 kills the executor's container (`docker kill`) in a settled state and runs `teardown` after it. The probes' namespaces and DHCP clients of the stop are level 1 only: the level 2 stack has no Kea container, and the Kea stack
+at level 2 is the test of M28.
+
+### Acceptance map (plan M27 "Scope" and "Tests")
+
+| Plan M27 | Test |
+|---|---|
+| Scope: last-known-good at start | `TestABrokenRevisionAtStartLeadsToTheLastKnownGoodRevision`, `TestADamagedActiveRevisionLeadsToTheLastKnownGoodRevisionWithoutApplyingIt`, `TestATransientFailureAtStartIsTriedAgainBeforeAnythingIsRolledBack`, store: `TestRestoreMakesTheFallbackActiveAndTheFailedRevisionRolledBack`; the pointer: `TestARevisionThatAppliesAtStartBecomesTheLastKnownGoodOne`; a revision that failed is not the fallback of a later start: `TestARevisionThatFailedAtStartIsNotTheFallbackOfALaterStart`, store `TestARevisionThatFailedAtStartIsNotTheFallbackUntilItAppliesAgain` |
+| Scope: safe mode, reported by the API and shown by the banner | `TestWhenTheLastKnownGoodRevisionFailsToo_TheGatewayRunsInSafeMode`, `TestAFirstRevisionThatFailsAtStartHasNothingToFallBackToAndRunsInSafeMode`, `TestADamagedFirstRevisionRunsInSafeModeAndTouchesNothing`, `TestSafeModeIsReportedAndHoldsBackWhatNeedsAForwardingGatewayUntilARevisionWorks`, `TestARevisionThatIsNotConfirmedInSafeModeLeavesTheGatewayInSafeMode`, `TestTheEventsOfTheRecoveryAreStreamedWithTheirMessages` (the live update of the banner); level 2 `TestRecoveryAndStopOnCleanUbuntuHosts` reads `safe_mode` and `safe_mode_reason`; the banner: `states.spec.ts` "safe mode: a full-width red banner …" |
+| Scope: recompile after an interrupted apply, verify at start | `TestAnInterruptedApplyIsRecoveredByRecompilingTheCommittedRevision`, level 1 `TestKillingTheExecutorInTheMiddleOfAnApplyIsRecoveredOnTheRealKernel` and `TestKillingTheExecutorProcessInTheMiddleOfAnApplyIsRecoveredOnTheRealKernel` (a SIGKILL of the executor process in the transaction) |
+| Scope: overlay removal on stop | `TestTheStopOfTheAPIAbortsTheRunsAndRemovesEveryOverlay`, `TestTheAPIRemovesItsOverlaysWhenItStopsAndRecordsTheStop` (the process wiring: the engine outlives the signal) |
+| Scope: stop cleanup (variant A) and `chaosgw teardown` | `TestTeardownRemovesEverythingTheGatewayMadeAndTheProbesWithIt`, `TestTeardownDeletesTheProbesWhoseClientsWereStoppedBeforeIt`, `TestTheStopCleanupStopsTheDHCPClientsOfTheProbesBeforeItRunsAnyCommand` (the order), `TestTeardownRemovesTheTCTreesAndTheRulesInDockerUser`, `TestTeardownRemovesTheWireGuardInterfaces`, `TestTeardownLeavesWhatTheGatewayDidNotMake`, `TestTeardownTwiceFindsNothingToDoAndAKilledGatewayIsFinished`, `TestExecRemovesEverythingItCreatedWhenItStops`, `TestTeardownRemovesWhatAKilledGatewayLeftAndRefusesWhileAnExecutorServes`, `TestPurgeEmptiesTheVolumesThatAreMountedAndNamesTheOthers`, `TestTheTeardownServiceMountsEveryVolumePurgeEmptiesWritable` |
+| Scope: degraded networks on missing interfaces | `TestAMissingTestInterfaceAtStartDegradesTheNetworkAndIsNoSafeMode`, `TestUnpluggingATestInterfaceDegradesItsNetworkWithoutSafeMode`, level 1 `TestUnpluggingATestInterfaceDegradesItsNetworkWithoutSafeModeOnTheRealKernel` |
+| Tests: a broken revision at start leads to last-known-good (level 2) | `TestRecoveryAndStopOnCleanUbuntuHosts/<release>/three-ports` |
+| Tests: stopping the containers leaves no fault active and follows the shutdown order; after a stop no table, rule, route, bridge, veth, namespace, `pv` end, `cgp` namespace or probe DHCP client, and the DNS is not redirected | level 1 `TestTheStopCleanupLeavesNothingOfTheGatewayOnTheRealKernel`; level 2 `TestRecoveryAndStopOnCleanUbuntuHosts` (`nothingLeft`); level 0 the tests of the stop above |
+| Tests: level 2 on a host with a test interface | `TestRecoveryAndStopOnCleanUbuntuHosts` (the test NIC `lan0`) |
+| Tests: a panic in the state owner restarts the process and recompiles from the committed revision | `TestAPanicInTheStateOwnerEndsTheEngineAndTheNextStartRecompilesTheCommittedRevision` (the process ends on `Engine.Done`, `serveAPI` returns an error and the container restarts) |
+| Tests: a newer schema is a refused start, not a fallback (plan §3.9, downgrade) | `TestARevisionOfANewerSchemaRefusesTheStartInsteadOfFallingBack` |
+| Tests: the service namespace, its name and the DNS redirect are gone after the stop | level 1 `TestTheStopCleanupRemovesTheServiceNamespaceAndTheDNSRedirectOnTheRealKernel`; level 2 (`TestRecoveryAndStopOnCleanUbuntuHosts`: `svc0`, `cgsvc` and the redirect exist before the stop) |
+| Scope: the revision to fall back to finds its WireGuard keys | `TestTheLastKnownGoodRevisionKeepsItsWireGuardKeysWhenALaterRevisionDropsTheNetwork`, wireguard: `TestPruneKeepingTheFallbackKeepsTheKeysOfWhatIsGoneAndNotTheRotatedOnes` |
+| Scope: safe mode without a readable revision does not leave the previous revision forwarding | `TestSafeModeWithoutAReadableRevisionRemovesWhatTheKernelStillHolds` |
+| Tests: every table of the own range (100 to 109) is empty after the stop | `TestTeardownEmptiesTheRoutingTablesOfTheOwnRange`; level 1 `TestTheStopCleanupLeavesNothingOfTheGatewayOnTheRealKernel` (`ownTablesEmpty`, also for a gateway that was killed with an MTU fault active) |
+| Tests: shutdown order of plan §3.11, observers after the last apply | `TestTheAPIRemovesItsOverlaysWhenItStopsAndRecordsTheStop` (the observers still read while the last apply is held) |
+| Open item "Shutdown and host cleanup" | implemented (stop cleanup, teardown, purge of every volume) |
+
+## Container deployment (M28)
+
+Plan §3.6, §3.8, §3.9, §4.4 and M28 (the rows of `docs/open-items.md` that name M28: M1-02, M2-08, P3-M12-07, the netplan hints and the x86-64-only deployment of M5b, S7, `image.yml`, the full image, M6a-10, M6b-06 and M6b-10).
+M28 turns the compose files of the earlier milestones into one deployment that an administrator installs, starts, updates and removes without the repository.
+There is no change of the spec and none of the HTTP API: the preflight adds checks to the existing `GET /system/preflight` and to the preflight of `GET /setup`.
+
+### How it works
+
+- **The image** (`deploy/Dockerfile`). One multi-arch image (amd64, arm64) for every container. M28 adds `tcpdump` (for the administrator's shell: `docker compose exec exec tcpdump -i br-iot`; the gateway's own captures are
+  AF_PACKET sockets, M17) and `kmod` (`modprobe`, for the executor's preflight), the files of the deployment under `/usr/local/share/chaosgw` (`compose.yaml`, `update.sh`, `host-setup.sh`, `env.example`) and the
+  labels `org.opencontainers.image.source` and `.documentation`. The description of the image that still said the full image follows with M28 (P5-AUDIT-22) is replaced. `.dockerignore` lets the four files in.
+- **`deploy/compose.yaml`** is made from the compose files of the containers (`compose.executor.yaml`, `compose.api.yaml`, `compose.kea.yaml`, `compose.dns.yaml`: the holder `svcns` and the DNS proxy, `compose.tls.yaml`, `compose.bird.yaml`,
+  `compose.tlsproxy.yaml`, `compose.teardown.yaml`) by `tools/composegen` (`make compose`; `make check-compose`, part of `make check-generated`, and a Go test fail when it is not current). The files stay what the lower levels start
+  (the executor alone, with BIRD, the proxy of the interception alone), so there is one definition of every container. The union has three changes: a dependency on a service of another file that is optional in its file
+  (`required: false`) is a plain one, the interception proxy is under the profile `interception` (`COMPOSE_PROFILES=interception`), and the project is named `chaosgw`. The image is
+  `${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}` in all of them; `.env` (written by the host setup) names the published image and its version.
+- **Bind mounts at the §3.6 paths** (M2-08, decided 2026-10-04). The persistent data is in `/var/lib/chaosgw/{state,secrets,api,service,tlsca,captures,exec,kea}` of the host (`kea` is Kea's `/var/lib/kea` inside), mounted with
+  `create_host_path: false`: Docker would make a missing directory as root's, which the API container (user 65532, no capability) could not write (issue #57); the host setup makes them with their owners instead, and a compose file started
+  without it fails with the name of the missing directory. The sockets between the containers (`chaosgw-run`, `chaosgw-bird`, `chaosgw-kea-run`, `chaosgw-kea-events`, `chaosgw-svcns`) stay named volumes: they carry no state, and the Kea events
+  directory takes its owner from the image. `teardown --purge` empties the directories and leaves them. `docs/install.md` has the move from the named volumes of an older installation.
+- **Start order and health checks** (plan §3.8). `exec` first (its health check is the answer of its socket), then `api`, `svcns` and `kea` (each `depends_on: exec: service_healthy`), `bird` (as before), then `dns`, `tls` and `tls-proxy`
+  once `svcns` and `api` are healthy (`depends_on` with `restart: true` on the holder). New health checks: `svcns` (its PID file is written: `test -s`), `kea` (its control socket is there: `test -S`). The cross-file dependencies are `required: false`
+  in the files, so `compose.dns.yaml` still starts without the executor in the lower-level tests.
+- **The preflight in the executor** (`internal/preflight/host.go`, `internal/executor/hostpreflight.go`). The privileged process checks the host it runs on at its start and writes each check into its log (`docker compose logs exec | grep preflight`):
+  the tools and their versions (`host.tools`; legacy `iptables` is `host.iptables`, because Docker's `DOCKER-USER` is in the nf_tables backend), the required kernel modules, which it loads with `modprobe -a -q` when they exist and are
+  not loaded (`host.modules`), forwarding and the ping group range, a writable `/proc/sys`, a network namespace that can be made and `/run/netns` shared with the host (`host.netns`; the throw-away namespace is `pfchk-<8 hex>`, and one that a killed executor left is removed before the next check, by the stop cleanup and by `chaosgw teardown`: `preflight.RemoveCheckNamespaces`), other firewalls (`ufw` by its chains, `firewalld` and other
+  nftables tables by name, `host.firewall`) and the data directories' owner and mode (`host.data.<dir>`: the API's user must be able to write `captures`, the secrets are 0700). The read operation `host_preflight` returns the checks (cached for
+  ten seconds), `Engine.HostPreflight` reads it, and the API adds the checks to the report of `GET /system/preflight` and of `GET /setup` (the status of the report counts them; an executor that cannot be asked is a warning, the reason only in the log for the
+  unauthenticated `GET /setup`). It does not stop the executor: a failed check is shown with its fix, the rest goes on. An executor on a simulated kernel (a runner other than `ExecRunner`) has no tools to check and returns none.
+- **The host setup** (`deploy/host-setup.sh`) is final: besides Docker, the modules, the sysctls and the networkd rule of a test interface it makes the data directories (`DATA_DIRS`, owner and mode, the directory itself only), and with `--image REF`
+  copies `compose.yaml`, `update.sh`, `host-setup.sh` and `env.example` out of the image (`docker run --entrypoint tar`) into `--install-dir` (`/opt/chaosgw`) and writes `.env` (never over one). `--data-only` makes only the directories (CI, a repair after
+  a restore). The netplan hints are the existing check: it names the file and line of the entry of a test interface and the fix, the setup exits 1 until the entry is gone.
+- **The setup token** is printed to the log of the `api` container at the first start (`docker compose logs api | grep 'Setup token'`; M5, unchanged); the host setup and the level 2 tests use that line.
+- **The update** (`deploy/update.sh`). Pull, then `chaosgw schema-check` of the new image against the revisions of the host (read-only, no network, no capability, as user 65532; a newer schema is exit 4 with the version needed and nothing stopped),
+  then wait for `GET /system/busy` (a token with the scope `read`: `--token-file` or `CHAOSGW_TOKEN`) up to `--timeout`, exit 3 when a run is still active unless `--force`, then `docker compose up -d --remove-orphans`, a wait for the health checks of `exec api svcns kea bird` (and of `dns` and `tls` too once `GET /setup` says the gateway is set up: they cannot be healthy before the first configuration), and the API's health. The token goes to `curl` as a configuration on its standard input (`-K -`), never in the arguments. `INT` and `TERM` end the script (`exit 130`/`143`; a handler that returns would let it go on to the restart). Before the restart it replaces `compose.yaml` with the one of the new image (checked with `docker compose -f NEW --project-directory DIR config -q` first; the old one is kept as `compose.yaml.bak`), and `env.example` and, where one is installed, `update.sh` (by a rename). The test is `tools/deployscripts` (stubs of `docker` and `curl`). D35: the executor stops,
+  tears the test networks down and rebuilds them from the confirmed revision; the devices lose the gateway for that time. `store.CheckSchema` is the store's reading without opening it (no lock, so it runs beside the API); `chaosgw schema-check` is its command.
+- **Teardown** is M27's `chaosgw teardown` with the directories of the host instead of volumes, in `compose.yaml` under the profile `teardown`: `docker compose --profile teardown run --rm teardown [--purge]`.
+- **ARM64** (M1-02, plan §4.4). Every commit builds the image for both architectures and runs `deploy/smoke-image.sh` for each (the arm64 image under `qemu-user`: the binaries start, the architecture, the tools at the pinned versions, `tcpdump`, the files of
+  the deployment, Kea accepts the configuration the gateway starts it with, `schema-check` runs as user 65532); `image.yml` runs it before it pushes. The weekly workflow boots the Ubuntu 24.04 arm64 cloud image in a QEMU `virt` machine under software emulation
+  (`appliance.BootArch`, `QEMUArgs` with `Arch: arm64` and the UEFI firmware of `qemu-efi-aarch64`, `CHAOSGW_APPLIANCE_ARCH=arm64`) and runs the smoke test of level 2 with the arm64 image: host setup, Docker, the executor and BIRD, an applied configuration and traffic.
+  That is the emulated whole-machine test of the arm64 image; the namespace testbed (level 1b proper) does not run on arm64, because `tools/testvm` boots x86-64 kernels (open item).
+
+### Decisions
+
+1. **One `compose.yaml` generated from the files, not a copy.** The files are what lower-level tests start; a hand-kept union would drift (`TestComposeYAMLIsMadeFromTheComposeFilesOfTheContainers`).
+2. **Bind mounts with `create_host_path: false` and a host setup that makes the directories**, instead of an init container that fixes owners: the failure on a host where the setup did not run names the directory, and the owner of a bind mount is a thing
+   an administrator can see and back up.
+3. **The executor's preflight reports and does not stop.** A failed check is shown where the administrator looks (the log, the wizard); stopping the one privileged process would make the cause harder to see.
+4. **The update asks the API for the runs with a token,** like any client; there is no unauthenticated way to ask, and the script does not read the service token. A gateway that is not set up has no run and needs no token.
+5. **The schema is checked by the new image before the old one stops,** so that a downgrade onto a newer configuration is refused with the gateway still running.
+6. **The release assets and the smoke test before the push** are in `image.yml` (it has never run on a tag; the first release is its first run).
+
+### Tests
+
+Level 0 (run here): `internal/preflight/host_test.go` (every check, scripted), `internal/preflight/hostsetup_deploy_test.go` (the directories, `--data-only`, `--image` with a stub of `docker`, `.env` kept, bad references),
+`internal/executor/hostpreflight_test.go`, `internal/api/hostpreflight_test.go` (the checks in `GET /system/preflight` and `GET /setup`, a failing read, the reason hidden from the unauthenticated caller), `cmd/chaosgw/preflight_test.go`,
+`internal/store/schemacheck_test.go` and `cmd/chaosgw/schemacheck_test.go`, `tools/composegen/main_test.go` (compose.yaml current; the privileges and capabilities of the table of §3.8; the start order and health checks; the bind mounts and named volumes; one image),
+`tools/deployscripts/update_test.go` (the update script against stubs of `docker` and `curl`: the order, the busy wait and its timeout, `--force`, the refusal of a newer schema, the token, `--check`, the failures and their exit codes), `tools/ciconfig/deploy_test.go`
+(the host setup's directories equal the Dockerfile's and the compose file's, the files of the image, the smoke tests run by the jobs), the updated `hardening_test.go`, `capture_deploy_test.go` and `cmd/chaosgw/teardown_test.go`, and `internal/appliance` unit tests of the arm64 machine.
+`shellcheck` passes on every script of `deploy/`. Level 2 (nightly, needs KVM and `udhcpc`): `internal/appliance/deployment_test.go`, `TestContainerDeploymentOnCleanUbuntuHosts`, Ubuntu 24.04 and 26.04, three and two ports:
+the netplan hint and the removal of the entry, the host setup with the image, `compose up`, the order of the starts, the privileges read from the container runtime (the `privileged` flag, the bounding set of capabilities and no-new-privileges of the main process), the setup token and the executor's checks in the setup status, the wizard,
+a device that gets its lease from the Kea container (M6a-10: the `dhcp_lease` event of the hook in the stream, `GET /networks/{id}/leases`, no hook error in Kea's log), the gateway's DNS from the service namespace next to the host's `systemd-resolved` (M6b-06), S7 (`netplan apply`, a restart of
+`systemd-networkd`, NetworkManager installed and running leave the bridge, its address, the table and the traffic alone), the PID file of the holder naming another real container process (M6b-10), a reboot, and the updates (idle; a newer schema refused; an active run: the wait, exit 3, `--force`, the run `aborted`,
+the fault gone, the same lease and the gateway back). The existing level 2 tests (`TestSmokeOnCleanUbuntuHosts`, `TestRecoveryAndStopOnCleanUbuntuHosts`) follow the bind mounts. CI: the job `deployment` (`deploy/smoke-compose.sh` on a hosted runner: `compose.yaml` renders and starts,
+the containers are healthy in the order of the plan, the privileges from the runtime, the setup token and the executor's checks, the containers stop and start again; it applies no configuration, so what the stop removes from the kernel is checked by the recovery test only), the image smoke test for amd64 and arm64 in the job `arm64`, the host setup's directories in place of the fresh named volumes, and `shellcheck` in the level 0 job.
+
+Not run on the development machine (an unprivileged container without Docker, KVM or network namespaces): `docker compose config` and every compose file against a real Compose (the structure is checked by the Go tests above), `deploy/smoke-image.sh`,
+`deploy/smoke-compose.sh`, the level 2 tests and the weekly arm64 job; they compile, vet (`go vet -tags appliance ./internal/appliance`, also with `GOARCH=arm64`) and the scripts pass `shellcheck`. `image.yml` has not run.
+
+### Acceptance map (plan M28 "Scope" and "Tests")
+
+| Plan M28 | Test |
+|---|---|
+| Scope: multi-arch image, tcpdump | the Dockerfile; `smoke-image.sh` (CI jobs `arm64`, `image.yml`); `TestTheFilesOfTheDeploymentAreInTheImage` |
+| Scope: `compose.yaml` with the containers and privileges of §3.8 | `deploy/compose.yaml`; `TestComposeYAMLIsMadeFromTheComposeFilesOfTheContainers`, `TestOnlyTheExecutorIsPrivilegedAndTheCapabilitiesAreThoseOfThePlan`; level 2 (the runtime) |
+| Scope: health checks and start order | `TestTheStartOrderFollowsPlan38AndEveryServiceHasAHealthCheck`; the job `deployment`; level 2 |
+| Scope: final host-setup script (modules, `ip_forward`, netplan hints) | `TestHostSetup*`; level 2 (the check names the entry, the removal, "ready") |
+| Scope: preflight in the executor | `TestEveryCheckPassesOnAPreparedHost` and the others of `host_test.go`, `TestTheExecutorChecksTheHostAndKeepsTheAnswerForTenSeconds`, `TestThePreflightCarriesTheChecksTheExecutorMadeOfTheHost` |
+| Scope: setup token in the container log | `deploy/smoke-compose.sh`; level 2 (the token is read from the log and used) |
+| Scope: update script (waits for `system/busy`, refuses newer schemas) | `tools/deployscripts/update_test.go`, `TestCheckSchema*`, `TestSchemaCheck*`; level 2 (the three updates) |
+| Scope: teardown | M27's tests with the bind mounts: `TestTheTeardownServiceMountsEveryDirectoryPurgeEmptiesWritable`, level 2 `TestRecoveryAndStopOnCleanUbuntuHosts` |
+| Scope: bind mounts at the §3.6 paths | `TestPersistentDataIsInBindMountsAtThePathsOfThePlan`, `TestTheHostSetupMakesEveryDirectoryTheImageGivesTheAPIAndTheComposeFileMounts` |
+| Tests: smoke tests on Ubuntu 24.04 and 26.04, two and three ports: host setup, `compose up`, wizard, reboot | `TestContainerDeploymentOnCleanUbuntuHosts` |
+| Tests: image update during an idle and an active run (devices get gateway and DHCP back, the run ends `aborted`) | the same test |
+| Tests: the arm64 image starts and passes the functional smoke test in emulated level 1b | `smoke-image.sh linux/arm64` under `qemu-user` on every commit; the weekly `appliance-arm64` job (the emulated machine); the namespace testbed on arm64 is not built |
+| Tests: non-exec containers run without privileges, checked from the container runtime | level 2 (`docker inspect`, `/proc/1/status`), `deploy/smoke-compose.sh` |
+| Tests: DNS proxy next to `systemd-resolved` (M6b-06) | level 2 |
+| Tests: the PID file reused by another real container process is refused (M6b-10) | level 2 (`holderPIDFileReusedByAnotherProcess`) |
+| Tests: Kea starts from compose, the API configures it, a client gets a lease, the hook posts with the real token (M6a-10) | level 2 |
+| Open items: S7 coexistence | level 2 (`netplan apply`, `systemd-networkd`, NetworkManager) |
+
+## Security hardening (M29)
+
+M29 closes the security items of the plan (§2.16, §3.8): the HTTPS certificate can be replaced, the token scopes were reviewed, secrets stay where they are made,
+login is rate limited, the containers were reviewed one by one, and the executor's interface has a threat model, six fuzz targets that run every night and a
+package for the external review. Most of it is review and proof: the code that already enforced a rule got the test that holds it to the rule (the scopes of every
+operation, the secrets in every output, the mounts of every container), and the reviews found three things that were not as the plan or the tests wanted, which are fixed: the image ran as root by default, four types of operation had no fuzz seed, and the capture request and the capture filter had no fuzz target.
+
+### How it works
+
+**HTTPS certificate.** `api.Certificates` (`internal/api/certs.go`) holds two certificates. The gateway's own (`secrets/tls/cert.pem` and `key.pem`, self-signed, made at the
+first start, issued again by `LoadOrCreateCertificate` when it lacks a built-in address) is what the service containers verify: `PublishCertificate` copies it
+(never the key) to `service/api.pem`. The installed one (`secrets/tls/ui.pem`: the chain and the key in one file, mode 0600, written to a temporary file and renamed, so a reader sees
+the old file or the new one) is what `PUT /api/v1/system/certificate` stores after `parseUpload` has checked it (PEM blocks of the right kind, chain in order, valid now, a SAN, `serverAuth`
+if the certificate names a key usage, the key belongs to the certificate, no password on the key, RSA at least 2048 bits, and a key and certificate a TLS handshake can use at all: an ECDSA key on P-224 is refused, because installed it would lock the administrator out). `TLSConfig()` returns a `tls.Config` with `GetCertificate`:
+the installed certificate for every connection except those that came in on `127.0.0.1`, `::1` or `169.254.100.1` (`internalAddr`, the same list as `builtinIPs`), which get the
+gateway's own. A replacement therefore takes effect for the next handshake without a restart, and cannot cut off the DNS proxy, the TLS responder or Kea's hook (decision 1).
+`DELETE` removes `ui.pem`. A `ui.pem` that cannot be read at the start is logged and the gateway's own certificate is presented (decision 4). `GET` reports the certificate that
+the management listeners present (`source` `own` or `installed`, the names, the validity, `fingerprint_sha256`, the chain length); the audit entries `certificate.install` and
+`certificate.reset` name the certificate by its fingerprint and subject, never the key. `chaosctl certificate show|install|reset` (`internal/ctl/certificate.go`) reads the key from a file.
+There is no screen for it in the web UI: the plan has no design for Settings yet (§2.17, "Not yet designed"), and a certificate is installed once.
+
+**Token scopes.** The spec names the least scope of every operation (`x-required-scope`) and the guard (`internal/api/middleware.go`) enforces it before any handler runs; a session has `full`.
+The review (2026-10-29) went through all 103 operations and left every scope as it was; the result is pinned by `TestTheScopesOfTheOperationsAreTheResultOfTheReview`:
+
+| Scope | Operations | Why |
+|---|---|---|
+| `read` | all `GET` except the three below, `POST …/preview`, `POST /auth/logout` | they change nothing the gateway keeps. The reads that show a device's traffic (flows, DNS queries, the exchanges of the interception proxy: method, host, path, status and sizes, never headers or bodies, the path cut at 1024 characters) are `read` on purpose: a CI job that watches a test needs them; `captures/{id}/download` is `read` as well, but `part=keylog` and a capture marked `sensitive` are `full` inside the handler |
+| `overlays` | create, renew and delete overlays, runs and scenario runs, captures, diagnostics, probe calibration, `POST /reset` (own overlays only) | what a test does to the gateway for a while, with an owner and a lease; a diagnostic may aim at every address the gateway reaches (P6-M24-01, decided 2026-10-28, option (a)) and every run is audited as `diagnostic.run`; the review keeps it: the scope is for the automation of a lab, and the destination cannot be limited by address without also following what the DNS proxy resolves |
+| `full` | revisions (create, discard, clone, apply, confirm, rollback), tokens and the password, `reset?owner=all`, the test CA regeneration, the certificate, and the secret downloads: `GET /auth/tokens`, the two WireGuard exports, `DELETE …/private-key`, `GET /revisions/{id}/export?include_secrets=true` (inside the handler) | the configuration decides who can reach what; the downloads hand out keys |
+| `service` | the nine `/internal` operations | only the service token that the API makes at its start for the containers; `Scope.Allows` lets a user token never reach them and the service token never reach anything else |
+| none | `GET /setup`, `POST /setup` (setup token), `GET /system/health`, `POST /auth/login` | before there is an administrator, or a health check without data |
+
+**Secret storage.** The secrets directory (`/var/lib/chaosgw/secrets`, a bind mount, 0700, the API's) holds `auth/auth.json` (the argon2id hash of the password, the SHA-256 of every token and of the service token,
+the hash of the setup token), `wireguard/<uuid>.json` (the keys), `tls/key.pem` and `tls/ui.pem`. Every file is written 0600 through a temporary file and a rename. The executor mounts the directory read-only (it only
+reads keys by UUID, `key_ref`), the services do not mount it; the keys of the test CAs live in `tlsca` (the responder and the proxy mount it read-only, they sign with it). The one secret outside both directories is the service token (`service/token`, scope `service`, only `/internal`): the DNS proxy, the TLS responder
+and Kea's hook read it from a read-only mount, and they are not the API's user (Kea runs as 0:65532, the DNS proxy as 65532), so the file is 0640 and its directory 0750, owned by the API's group, and nothing for others.
+`TestEverySecretOnDiskIsPrivateToItsOwner`
+walks both directories after the operations that make secrets and fails on a file or directory that group or others can read, and checks the modes of the service token's file and directory;
+the secret-free search below includes the service token's value and skips only its own file.
+
+**Secret-free outputs.** Private keys, password hashes and token values do not appear in responses, events, logs or exports (the table of the spec): the exceptions are the value of a token in the answer that creates it and
+the downloads that are secret on purpose (the WireGuard exports and the revision export with `include_secrets=true`, scope `full`, audit-logged before the bytes leave; `export_once` deletes the key after the download).
+`TestNoSecretIsInAResponseAnEventAnAuditEntryOrALog` collects every secret the gateway holds, drives the operations that handle them, and searches 49 reads with the scopes `full` and `read`, the events of the
+whole test, the audit log and the log of the server for them; the same search finds the key in the three secret downloads, so a search that looks at nothing fails.
+
+**Login rate limiting.** Five wrong passwords from one client address (the address of the TCP connection; `X-Forwarded-For` is not read) start a wait of 5 s that doubles with every further failure up to 15 minutes; the answer is `429`
+with `Retry-After`, a blocked attempt does not reach the password check and is not written to the audit log again, and a success clears the record. The password change has its own limit. The limiter is concurrency safe (a burst of
+30 parallel guesses checks five). Tokens (256 bits) and the setup token (192 bits) are random values that cannot be guessed; they need no limit. The tests are the ones of M5 (`TestTheLoginIsRateLimited`, `TestAParallelBurstOfWrongPasswordsIsLimited`,
+`TestBlockedLoginsDoNotFloodTheAuditLog`, `TestPasswordGuessingThroughTheChangeIsLimitedToo`, `TestXForwardedForDoesNotChooseTheClient`, `TestLoginIsRateLimitedPerClient`); the review found nothing to change.
+
+### Container hardening review
+
+The review went through `deploy/compose.yaml`, container by container, for the privileges, the capabilities, the user, the file system, the namespaces and what is mounted from the host. The results:
+
+| Container | User | Privileges | File system | Mounts from the host | Accepted risk |
+|---|---|---|---|---|---|
+| `exec` | root | privileged, host network and PID, `no-new-privileges` | read-only; tmpfs `/tmp`, `/run` | its two data directories and the captures (rw), the secrets, `/lib/modules`, `/etc`, `/usr/lib/systemd/network` (ro), `/run/netns` (rw, `rshared`) | root on the host if the process is taken over: it is small, listens on a Unix socket only, runs no shell and nothing but typed operations (below) |
+| `api` | 65532 | `cap_drop: ALL`, `no-new-privileges`, host network | read-only; tmpfs `/tmp` | its data directories (rw), `/run/systemd/resolve` (ro) | in the host network namespace to listen on the management network; the port is above 1024 |
+| `kea` | 0:65532 | `NET_RAW`, `NET_BIND_SERVICE`, `CHOWN`, `FOWNER`, `DAC_OVERRIDE`, `no-new-privileges` | read-only | its leases, the service directory (ro) | the container is root and the capabilities are the ones it needs; `no-new-privileges` was added on 2026-10-31 (P7-M29-02, option (b)), and the CI job `deployment` and the nightly level 2 run show that Kea's package starts with it (if it needs file capabilities, the option goes and the exception comes back in the review test, the compose test and the level 2 test) |
+| `bird` | root | `NET_ADMIN`, `NET_RAW`, `NET_BIND_SERVICE`, `no-new-privileges`, host network | read-only | none | `NET_ADMIN` in the host's network namespace is wide; BIRD needs it to write routes. It runs a configuration that only the executor writes and checks (`bird -p`, `include` refused) |
+| `svcns` | 65532 | none, `network_mode: none`, host PID | read-only | none | sees the host's processes (no capability to signal them); it needs the host PID to tell the executor which namespace is its own |
+| `dns`, `tls` | 65532 | `cap_drop: ALL` (+ `NET_BIND_SERVICE` for `dns`), joined to `svcns` | read-only | the service directory (ro), for `tls` the CAs (ro) | the keys of the test CAs are readable by `tls` and `tls-proxy`: they sign with them |
+| `tls-proxy` | 65532 | `cap_drop: ALL`, profile `interception` | read-only; tmpfs 64 MiB for mitmproxy | as `tls` | a Python process that parses what devices send; confined to the service namespace and without a capability |
+| `teardown` | root | as `exec` | read-only | every data directory (rw) | on demand only (`run --rm`) |
+
+Findings, all fixed in M29:
+
+1. **The image ran as root by default** (the open item "M1: container image has no non-root user"). `deploy/Dockerfile` ends with `USER 65532:65532` now; every service of `compose.yaml` names its user all the same, and the review's list of the containers that are root
+   (`exec`, `bird`, `kea`, `teardown`) is pinned. The documentation and the level 2 tests that need root in a throw-away container (moving the old volumes, reading a PID file, the minimal `apply`) say `--user 0:0`.
+2. Nothing but the tests above pinned the *set*: `internal/executor/hardening_review_test.go` now holds `compose.yaml` to the review: the user of every service, an allow-list of the privileged flag, the exact capabilities added after `cap_drop: [ALL]` and the network of every service (a capability not in it fails, whichever it is), the table of what each container may mount from the host (a mount outside it, or of the Docker socket, `/`, `/proc`, `/sys` or `/dev`, fails),
+   no published ports, devices, IPC, user namespace, cgroup or sysctls, a host PID namespace only for `exec` and `svcns`, no unconfined profile, none of the capabilities that give the host away, a restart policy and a limit for the log of every container, and a read-only root file system everywhere.
+   `tools/composegen` keeps the privileges and capabilities of §3.8 (`TestOnlyTheExecutorIsPrivilegedAndTheCapabilitiesAreThoseOfThePlan`), and the container's own files have their tests in `hardening_test.go`.
+
+Considered and not done: memory and process limits (`mem_limit`, `pids_limit`) would be guesses without measurements of a loaded gateway (H1); a seccomp profile of our own for the unprivileged containers (Docker's default applies); user namespace remapping (the executor
+must be root in the host's namespaces).
+
+### The executor's interface: threat model
+
+**What it is.** The executor (`chaosgw exec`, the only privileged container) serves a Unix socket in the volume it shares with the API. Every connection starts with a protocol-version handshake; the peer is checked with `SO_PEERCRED` against root and `--allow-uid` (the API's 65532);
+the socket is 0660, owned by 65532. Over it the API sends *operations*: typed JSON documents (`internal/executor/op.go`) that `Decode` parses strictly (unknown type, unknown field, duplicate key, trailing data and more than 8 MiB are errors), `validate` checks, and `Plan` turns into commands
+(`plan.go`): an array of arguments for a fixed binary path, with a batch on standard input where the tool takes one. There is no shell and no command string anywhere. Captures (`capture.go`) and probe runs (`probe.go`) are the two requests with a connection of their own.
+
+**What it protects.** The host: its network configuration, files and processes, which the executor can change as root. The gateway's secrets (the WireGuard keys, which it reads). The traffic of the devices under test and the rest of the host's network, which no operation may touch.
+
+**Who sends what.** The attacker we plan for has *taken over the API container* (a flaw in the HTTP handling, in a parser of what devices send, or a stolen token of the scope `full`): they can send any operation the socket accepts, with any content. The devices under test are untrusted too, but they reach the executor only through
+the API (DHCP hostnames, DNS names and addresses, the strings of TLS and HTTP flows), which validates them into the typed fields before an operation exists. A local process on the host is trusted ("local processes on the host are trusted", §2.16), and one that is root can do anything anyway.
+
+**Threats and what stops them.**
+
+| Threat | Mitigation | Test |
+|---|---|---|
+| Run a command or inject arguments | no shell; commands are `[]string` for fixed binaries; every argument is built from validated fields; the fuzz target checks every command of every accepted operation for shell syntax and whitespace | `FuzzDecode`, `FuzzFrame`, `FuzzConn`, `decode_test.go`, `plan_test.go` |
+| Change the nftables rules of the host or of Docker | `nft_apply` accepts only objects in `inet chaosgw`; `nft_dup` only its own `netdev chaosgw_dup`; set and map operations name sets by a pattern and the namespace; `docker_user` adds one fixed rule | `CheckNftRuleset`, the nft oracle in `fuzz_test.go` |
+| Change the host's routes and rules | only the tables 100 to 110, every line carries `proto 201`, the main table and the local table are refused | `FuzzDecode` (`checkStdin`), `TestRoutingInOwnTablesWithOwnTag` |
+| Shape or redirect the traffic of the host | tc on interfaces assigned to Chaos Gateway only (`AssignInterfaces`, the OS-owned ones take no tc), arguments from a grammar (`tcgrammar.go`), filter handles and flow ids by pattern | `FuzzDecode`, `tcops_test.go`, `FuzzNormalizeTC` |
+| Set a sysctl | a fixed list with limits | `TestDecodeRejects` |
+| Read a file or write one | the executor opens no path an operation names: the keys by UUID below the secrets directory, BIRD's file in its own directory, the capture files with `os.OpenRoot` below the capture root and the name of a directory (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`) | `capture_validate_test.go`, `FuzzCaptureOpen`, `FuzzCaptureOpenFiles` |
+| Capture traffic of the host | a capture only on interfaces assigned to Chaos Gateway; a request before any interface is assigned is refused before a socket is opened | `FuzzCaptureOpen`, `TestACaptureIsRefusedOutsideTheScopeAndForBadRequests` |
+| Load BIRD with a hostile configuration | `bird -p` before it is used; `include` and anything outside the import tables is refused | `TestBirdCheckMutatesNothingAndApplyDoes`, seeds of the fuzz targets |
+| Make the executor start or hold too much | limits on the size, the number of items, captures and probe runs; a hung request has a deadline | `TestOversizedLineClosesTheConnection`, `FuzzConn` |
+| Speak the protocol to it from another process | the socket's owner and mode, `SO_PEERCRED`, the handshake with the protocol version (a mixed set of containers is refused) | `TestPeerCredentialsAreChecked`, `TestAllowUIDs`, `TestServerRefusesAClientWithAnotherProtocolVersion` |
+| A partly applied request | the engine recompiles the committed revision at the next start; a cut inside a request heals the same way | M27's tests |
+
+**What a taken-over API can still do** (accepted, and why): it can break the gateway's own networking and the tests (it is the gateway's control plane; the executor does not judge configurations, it limits *where* they may act); it can capture and replay the traffic of the interfaces assigned to Chaos Gateway
+(that is the test traffic); it can make the gateway and the probes open connections to any address the gateway reaches (diagnostics, decided in P6-M24-01), including the management network and the uplink; it can read the keys that the API itself holds. It cannot make the executor change the host's
+other interfaces, firewall rules, routes in other tables, files or processes, and it cannot run a command of its choosing. A taken-over *executor* is root on the host; that is why it is small, offline (a Unix socket, no listener) and read-only.
+
+**What the external review should look at** (see "Preparation for the external review" below): the completeness of the validation per operation (every field that reaches a command or a file name), the scope checks (`scope.go`, `validate.go`: `CheckNftRuleset`, `ownTable`, `checkSysctl`, the tc grammar), `probe_run` (it runs network I/O in a namespace of the host with content from the API),
+the capture path (`OpenRoot`, ownership of the files), the protocol (`server.go`, `proto.go`: framing, handshake, `SO_PEERCRED`) and what a peer with the right uid can do beyond the operations.
+
+### Fuzzing
+
+`make fuzz` runs six targets, `FUZZTIME` each (60 s by default, 6 minutes in CI; 45 minutes each in the nightly workflow, which uploads a crashing input as an artifact: it is the reproducer, and belongs in `testdata/fuzz` of its package). M3 gave the decoder alone 5 minutes in CI and an hour nightly; the time is now per target and the total is what is bounded, so the decoder's own time is lower (60 s in CI, 45 minutes nightly: six targets of 45 minutes make 4.5 hours in one job, which fits the default limit of six hours of a job, and a longer time for the decoder alone is a `make fuzz FUZZTIME=...` away). `make fuzz` runs every target even when one finds a crasher and fails at the end, so one nightly crasher does not hide the other five.
+
+| Target | Package | What it feeds | What it asserts |
+|---|---|---|---|
+| `FuzzDecode` | `internal/executor` | bytes to `Decode` | whatever is accepted encodes stably and yields commands that are inert (no shell syntax, no whitespace), stay in the own tables, `inet chaosgw` and the assigned interfaces |
+| `FuzzFrame` | `internal/executor` | a request frame to `Server.serve` | no panic, a response for every request, nothing runs for a request the decoder refuses, every command inert |
+| `FuzzConn` | `internal/executor` | bytes over a real socketpair after the handshake | the connection always ends, no panic, every command inert |
+| `FuzzCaptureOpen` | `internal/executor` | a capture request (M29) | a refused request opens nothing; an accepted one names one directory below the root and valid interfaces; an executor with no assigned interface refuses every one |
+| `FuzzCaptureOpenFiles` | `internal/executor` | a capture request on an executor whose interfaces are assigned, with a capture root that holds links out of it (M29) | nothing is created or changed outside the capture root, a link out of it is never followed (`os.OpenRoot`; asserted on the directory step itself, `openCaptureDir`, so it holds without the privilege for a raw socket too), nothing is deeper than one directory below the root |
+| `FuzzFilter` | `internal/capture` | a capture filter and a packet (M29) | no panic; a valid filter builds a program that the BPF VM accepts and that selects what the user-space matcher selects |
+
+`TestEveryOperationTypeHasAFuzzSeedThatTheDecoderAccepts` fails when a type of operation has no seed that the decoder accepts: four types had none (`nft_add_map_elements`, `nft_del_map_elements`, `conntrack_delete`, `service_ns`); they have seeds now. A new operation needs a seed in `fuzz_test.go` as before.
+
+### Preparation for the external review
+
+The external review itself is a human activity. It is not part of V1: it moves to M38 (After V1), decided 2026-10-31 (P7-M29-01 in `docs/open-items.md`), and the release notes say that the interface has not been reviewed from outside. What is ready to hand over:
+
+- this section (threat model, accepted risks, the table of mitigations and the tests that hold them);
+- the source of the interface: `internal/executor/{op,validate,plan,scope,server,proto,runner,exec,capture,probe,dnssets,netlinkset,nftdup,tcgrammar,hostpreflight}.go` (about 6,500 lines without the tests) and the compose file of the container (`deploy/compose.executor.yaml`);
+- `go test ./internal/executor` (the unit and golden tests, no privilege needed), `make fuzz FUZZTIME=10m` (the six targets) and the level 1 tests of the executor on the real kernel (`internal/executor/integration_test.go`, `make test-privileged`), with the corpora in `internal/executor/testdata/fuzz`;
+- the acceptance map below, the container table above and the list of the operations with their effects (`op.go` has one type per operation; `plan.go` is the only place where a command is built).
+
+### Decisions
+
+1. **Two certificates, chosen by the address a connection came in on.** One certificate for everything would force the administrator's certificate to name `169.254.100.1` (which no CA issues) or the services to stop verifying. The services keep the gateway's own certificate on the addresses they use, the administrator's certificate is on the others.
+2. **The upload is checked strictly** and refused with the reason (`422 validation_failed`, the member and the message in `errors`), because a certificate that browsers refuse is found out by the administrator too late; an expired certificate, one without names and one for a client are refused instead of accepted.
+3. **The image's default user is 65532** (the open item "M1: container image has no non-root user"): a container that is started without a `user` is not root. The three root containers and the teardown say so in their files.
+4. **A damaged `ui.pem` is no failed start** (M27's rule that the gateway comes up): the gateway's own certificate is presented and the log says why.
+5. **No screen for the certificate in the web UI**: there is no design for a Settings screen (§2.17), and the operation is rare; `chaosctl certificate` and the API cover it.
+6. **The scopes stay as they were**; the review pinned them in a test so that a new operation has to be put into a class on purpose.
+7. **`no-new-privileges` is set on Kea too** (decided 2026-10-31, P7-M29-02, option (b)); it was off until a run could show that Kea's package starts with it. The CI job `deployment` and the nightly level 2 run are that proof: if Kea does not start, the option is taken out of `deploy/compose.kea.yaml` again, and the exception returns to `TestNoContainerWidensItsSandbox`, the compose test and the level 2 deployment test, with the reason in the table.
+8. **No limits on memory and processes** of the containers before there are measurements (H1).
+
+### Tests
+
+Level 0 (run here): `internal/api/certs_test.go` (the certificate is replaced for new connections only and kept on the loopback address of the services, reset, restart, the 14 refusals (an expired or not yet valid intermediate included) and nothing changes, an RSA key, the scope `full`, a damaged file; the own certificate on every address of `builtinIPs` including the service link 169.254.100.1 and ::1; concurrent installs and resets leave the presented certificate and `ui.pem` the same, `Install` and `Reset` hold one mutex; a failing write or removal is a 500 that changes nothing), `internal/api/certs_ctl_test.go` (`chaosctl certificate`),
+`internal/api/scopes_test.go` (every operation of the spec against tokens of every scope, no credential and a wrong token; the result of the review), `internal/api/secrets_test.go` (no secret in any read, event, audit entry or log, and none in a file of the state on disk outside the secrets directories; the failed login is audited as `auth.login_failed`; the exports without secrets), `internal/api/secrets_files_test.go` (modes on disk),
+`internal/executor/hardening_review_test.go` (the containers as a set), `internal/executor/fuzz_seeds_test.go`, `internal/executor/fuzz_capture_test.go`, `internal/executor/fuzz_capture_files_test.go` (the files of a capture request, links out of the capture root) and `internal/capture/fuzz_test.go` (the three new fuzz targets), and the tests of M5 for the login limit and the token lifecycle (`TestTheWaitDoublesUpToFifteenMinutesAndStaysThere` in `internal/auth`: the doubling, the 15-minute cap and the `Retry-After` of the 429). The fuzz targets were run here for 15 to 40 seconds each (`make fuzz FUZZTIME=15s`) with no finding.
+Level 1 (`M29_LEVEL1`, `internal/api/e2e_security_test.go`, written, compiles and vets with `-tags testbed`; it passed in CI on 2026-10-31, PR #127, run 41205381960, in the privileged container and in the VM): the real HTTPS server in the gateway's namespace is reached from the management network, which is shown the gateway's own certificate and then the installed one while the loopback keeps the first, and not from a device in a test network
+(on its gateway address and on the management address), from the server behind the uplink or from a client of a WireGuard network with the role `test` through its tunnel. The older level 1 tests of M4 and M4b (`TestGatewayProtection` in `internal/apply`, `TestRolesDecideWhoReachesTheControlPlane` in `internal/engine`) stay in their lists.
+Level 2: the existing deployment tests follow the image's new default user (`--user 0:0` where they ran as root); nothing else changed.
+
+### Acceptance map (plan M29 "Scope" and "Tests")
+
+| Plan M29 | Test |
+|---|---|
+| Scope: HTTPS with a replaceable certificate (`/system/certificate`) | `TestTheCertificateIsReplacedForNewConnectionsAndCanBeReset`, `TestACertificateThatCannotServeIsRefusedAndChangesNothing`, `TestADamagedInstalledCertificateFallsBackToTheGatewaysOwn`, `TestChaosctlShowsInstallsAndResetsTheCertificate`; level 1 `TestTheUIAndTheAPIAreReachedFromTheManagementNetworkOnlyOnTheRealKernel` |
+| Scope: token scopes | `TestEveryOperationRefusesACallerWithoutTheScopeItNeeds`, `TestTheScopesOfTheOperationsAreTheResultOfTheReview`, `TestOnlyTheFullScopeInstallsACertificate`, `TestTokenScopesAndTheirLifecycle` |
+| Scope: secret storage | `TestEverySecretOnDiskIsPrivateToItsOwner`, `internal/secrets` and `internal/auth` tests (`TestKeysAreStoredPrivately`, `TestFilesAreWrittenPrivately`) |
+| Scope: secret-free exports | `TestNoSecretIsInAResponseAnEventAnAuditEntryOrALog`, `TestAnExportWithoutSecretsHoldsNoKeyInAnyFormat`, `TestExportWithSecretsNeedsFullAndIsAudited` |
+| Scope: rate limiting on login | the M5 tests named above |
+| Scope: container hardening review (capabilities, read-only root file systems) | the table above; `TestEveryContainerNamesItsUserAndTheImageDefaultsToTheUnprivilegedOne`, `TestTheContainersMountFromTheHostOnlyWhatTheReviewAllows`, `TestNoContainerWidensItsSandbox`, `TestOnlyTheExecutorIsPrivilegedAndTheCapabilitiesAreThoseOfThePlan` |
+| Scope: external review of the executor interface | moved to M38 (decided 2026-10-31, P7-M29-01): the threat model, the fuzz targets and the package above are what is ready to hand over |
+| Tests: test networks and test-role WireGuard clients cannot reach the UI/API (regression of M4) | level 1 `TestTheUIAndTheAPIAreReachedFromTheManagementNetworkOnlyOnTheRealKernel` (the real server), `TestRolesDecideWhoReachesTheControlPlane` (M4b) |
+| Tests: tokens with insufficient scope are rejected | `TestEveryOperationRefusesACallerWithoutTheScopeItNeeds` |
+| Tests: exports contain no secrets | `TestNoSecretIsInAResponseAnEventAnAuditEntryOrALog` |
+| Tests: long fuzz runs on executor operations nightly | the workflow `nightly.yml` (job `fuzz`, `make fuzz FUZZTIME=45m`); `make fuzz` here |
+| Open items: M1 container image has no non-root user | the Dockerfile's `USER`; `TestEveryContainerNamesItsUserAndTheImageDefaultsToTheUnprivilegedOne` |
+| Open items: M5 certificate loaded once at start, SANs fixed | `Certificates` (looked up per handshake); the installed certificate has the names its owner chose |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -6894,10 +7277,11 @@ Python clients and checks that they compile and import. CI runs all three.
 
 ## CI
 
-`.github/workflows/ci.yml`: level 0 with the generated-code checks and the example suites of `clients/examples` (`make test-examples`, M18), the Playwright tests, the
+`.github/workflows/ci.yml`: level 0 with the generated-code checks and the example suites of `clients/examples` (`make test-examples`, M18), the job `docs` (the shell examples of `docs/*.md` against the simulated gateway,
+`make test-docs`, M30), the Playwright tests, the
 testbed tests in a VM and in a privileged container, the browser flows of the web app against the real stack
 (`testbed-ui`, a privileged container that builds the app and installs Chromium first; the flows of M12, M13 and M14), the arm64 job (multi-arch image build,
-unit tests under `qemu-user`) and the job `tlsproxy-image` (the image is built and the container of the interception proxy starts from its compose file: `deploy/smoke-tlsproxy.sh`, M22). Where the hosted runner offers `/dev/kvm`, the VM job uses it; where
+unit tests under `qemu-user`, the host setup's directories written by the API's user, the image smoke test for both architectures, M28), the job `deployment` (`compose.yaml` starts on a Docker host: `deploy/smoke-compose.sh`, M28) and the job `tlsproxy-image` (the image is built and the container of the interception proxy starts from its compose file: `deploy/smoke-tlsproxy.sh`, M22). Where the hosted runner offers `/dev/kvm`, the VM job uses it; where
 it does not, it runs emulated. KVM-dependent tests run on hosted GitHub runners (plan D33).
 
 The privileged-container job mounts the runner's `/lib/modules` and runs the tests directly
@@ -6913,15 +7297,15 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
+Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$M27_LEVEL1,$M29_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
 tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of packet captures (M17: the AF_PACKET sockets
 need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of the DNS faults and hostname selectors (M20, with the executor's netlink connection), those of the TLS responder (M21), those of the interception proxy (M22, with the real mitmproxy, which the level 0 job installs too and requires), those of the DHCP test actions (M23, udhcpc and the real Kea), those of the probes and the calibration (M25, the real Kea, the real executor and the real netem), the one of the metrics (M26), those of Kea's packet socket after a link flap
-(issue #64), the tests against the real Kea (I64-05) and those of the observed state of a device (the acceptance of
+(issue #64), the tests against the real Kea (I64-05) and those of the recovery and the stop (M27), those of the observed state of a device (the acceptance of
 issue #79, issue #92) must each pass, so one that is renamed, skips or is no
 longer built fails the job. `tools/ciconfig` checks that every job passes every list of the file and that the list quoted here names them all
 (`TestEveryTestbedRunNamesTheLevel1Lists`, `TestTheDevelopmentGuideQuotesEveryLevel1List`, P5-AUDIT-42).
 
-The fresh-volume check of the `arm64` job (issue #57) runs the image as user 65532 against a new named volume for every directory the API container mounts writable: state, secrets, api, service, captures (the API makes the directory of every capture, M17, and the executor writes into it), tlsca (the CAs of the TLS responder, M21) and the Kea events directory; `docs/install.md` has the same list in its upgrade note.
+The fresh-directory check of the `arm64` job (issue #57; since M28 the host setup's `--data-only` makes the directories of the host and the container mounts them, the directory of Kea's events socket stays a fresh named volume) runs the image as user 65532 against every directory the API container mounts writable: state, secrets, api, service, captures (the API makes the directory of every capture, M17, and the executor writes into it), tlsca (the CAs of the TLS responder, M21) and the Kea events directory; `docs/install.md` has the same list in its upgrade note.
 
 What the first CI run (2026-10-02) showed about hosted `ubuntu-24.04` runners: they offer
 `/dev/kvm`, so the VM job ran with `accurate=true` (a topology builds in about 7 s instead of 70 s,
@@ -6936,7 +7320,8 @@ the testbed tests directly in 12 s.
 - **Manual:** Actions > Image > Run workflow, or `gh workflow run image.yml -f tag=test` (add
   `--ref <branch>` for a branch). It pushes `:<tag>` and `:sha-<commit>`; with `push` off it only
   builds. Use it for test containers.
-- **Release:** pushing a tag `v1.2.3` pushes `:1.2.3`, `:1.2`, `:1` and `:latest` (no `:0` for `v0.x`).
+- **Release:** pushing a tag `v1.2.3` pushes `:1.2.3`, `:1.2`, `:1` and `:latest` (no `:0` for `v0.x`) and makes the GitHub release, whose
+  notes are `docs/release-notes/v1.2.3.md` when the file exists (M30), else generated from the commits.
 - The first push creates the package as private; make it public under the package settings on
   GitHub if it should be pulled without login. Pulling a private image needs
   `docker login ghcr.io` with a token that has `read:packages`.
@@ -6947,4 +7332,87 @@ the version build arguments, loads it and tags it `chaos-gateway:latest` (what t
 `chaos-gateway:$(VERSION)`; `make image` is the multi-arch build without a local image (issue #57 F7,
 `TestMakeImageLocalBuildsAVersionedLocalImage` checks the command `make -n` prints).
 
-The image holds `chaosgw`, `chaosctl`, the pinned Kea and BIRD and the interception proxy (mitmproxy in its own virtualenv `/opt/chaosgw/tls-proxy/venv` with the addon of `sidecars/tls-proxy`, M22, run by `deploy/compose.tlsproxy.yaml`); M28 adds tcpdump and the rest of the container deployment.
+The image holds `chaosgw`, `chaosctl`, the tools of the containers, the pinned Kea and BIRD, the interception proxy (mitmproxy in its own virtualenv `/opt/chaosgw/tls-proxy/venv` with the addon of `sidecars/tls-proxy`, M22, run by `deploy/compose.tlsproxy.yaml`), tcpdump and the files of the deployment (M28, "Container deployment (M28)"). The workflow builds and starts each platform with `deploy/smoke-image.sh` (the arm64 image under `qemu-user`) before it pushes the multi-arch image, and on a release tag attaches `compose.yaml`, `host-setup.sh`, `update.sh`, `env.example` and `SHA256SUMS` to the release; it has not run on a tag yet.
+
+## Documentation examples (M30)
+
+Plan M30: the user guide, the API guide with examples, the scenario cookbook, the troubleshooting (the preflight messages of M28), the
+recovery instructions (safe mode, last known good revision, teardown; M27), linked from the safe-mode banner of the web app (P3-M12-05),
+and the release notes, which name what is unvalidated on ARM64 until H1 has run (the Raspberry Pi targets of §3.10 and the interception
+proxy; P5-M22-02, P5-AUDIT-25). "Documentation examples run in CI."
+
+| Document | Content |
+|---|---|
+| [`user-guide.md`](user-guide.md) | what the gateway is, the ideas (overlays beat the configuration, per-family precedence), the web app screen by screen, scenarios and checks, captures, probes, networks and WireGuard, the draft with preview and commit-confirm, `chaosctl`, security, limits |
+| [`api-guide.md`](api-guide.md) | tokens and scopes, the conventions (problems, generation, idempotency, lists), reading the state and `explain`, overlays, the other overlay kinds, runs and reports, events, revisions, captures and diagnostics, the clients |
+| [`cookbook.md`](cookbook.md) | nine recipes: a test under a fault in CI (`chaosctl with`), a broker outage with a reconnect check, a lossy link during an update, DNS failure, a bad certificate, DHCP, flapping, a capture of a failing run, `explain` |
+| [`troubleshooting.md`](troubleshooting.md) | where to look, a table of every preflight check id with what it looks at and the fix, and the symptoms in the order they appear |
+| [`recovery.md`](recovery.md) | what a start does, the last known good revision, safe mode and the way out, a change that locks out, `teardown`, a forgotten password, an update that went wrong, backup |
+| [`release-notes/v1.0.0.md`](release-notes/v1.0.0.md) | the contents of 1.0.0, what is not validated on ARM64, what was not reviewed from outside, the behavior to know; `image.yml` publishes it as the notes of the release |
+
+### How the examples are tested
+
+Every fenced block of code in these documents (the list is `docscheck.Documents`) says what it is in the words after its language
+(`internal/docscheck`, package comment):
+
+| Info string | Meaning | Checked by |
+|---|---|---|
+| `sh run`, `sh run exit=N` | a script a reader pastes into a shell, run with `bash -eo pipefail`; it must end with the exit code (0 unless `exit=N`) | `TestTheDocumentationExamplesRunAgainstTheGateway` (`internal/api/docs_test.go`, tag `examples`, `make test-docs`, the CI job `docs`) |
+| `text output` | what the `run` block before it prints; each line must be a line of the real output, and `…` in a line stands for any text (ids, times) | the same test |
+| `yaml schema=Scenario`, `json schema=OverlayRequest`, ... | a complete document, validated against that schema of `api/openapi.yaml` (a scenario also by `domain.DecodeScenario` and `domain.ValidateScenario` against the example configuration, so a window that starts at a step that does not exist fails) | `TestEveryDocumentAndScenarioIsValidAgainstTheSpec` (level 0) |
+| `sh host` | a command for the host of the gateway (docker, `update.sh`); not run in CI. The commands of `chaosgw` and the options of `update.sh` it names must exist | `TestTheHostCommandsOfTheDocumentsNameThingsThatExist` (level 0) |
+| `fragment` | a part of a file that is not complete on its own | the lint only |
+
+A block in `sh`, `yaml`, `json`, `http`, `ini` or `toml` without one of these words fails the lint (`TestEveryExampleOfTheDocumentsSaysWhatItIs`),
+so a new example cannot be added without saying how it is tested. The runner starts one gateway per document (the simulated kernel with the real
+engine and the real clock, as `make test-examples`), with the device `esp32-42` online in the network `IoT`, and runs the blocks in the order of the
+document in a working directory of their own; after each block it removes every overlay and run (`POST /reset?owner=all`); revisions, profiles and scenarios a block makes stay, so a block that needs
+configuration makes or reads its own (an example never hard-codes a revision id except in the document of the recovery, which says so). The
+environment of a script is what the documents tell the reader to have: `CHAOSGW_URL` (plain HTTP on the loopback; the documents' `curl` lines carry
+no `--cacert`), `CHAOSGW_TOKEN` (scope `overlays`), `CHAOSGW_ADMIN_TOKEN` (scope `full`), `CHAOSGW_ADMIN_PASSWORD`, `chaosctl` on the `PATH` (built by
+the test), `curl` and `jq`. `CHAOSGW_DOCS=docs/api-guide.md make test-docs` runs one document while you write it.
+
+What this does and does not show: the requests, the answers and the exit codes are the real ones, so a document cannot name a field, a path or a
+command that does not exist, and an output block cannot show a line the tool does not print. The simulated gateway carries no traffic, so the
+examples that depend on a device that talks (a `reconnected` check, the counters of a fault) either show the failing outcome on purpose
+(`exit=1`, the cookbook says so) or only show that the command is accepted. Nothing here tests the host commands (`docker compose`, `update.sh`
+against a real host) or the web app's screens; those are the levels 1 and 2 of M28 and the Playwright tests.
+
+The level 0 checks of `internal/docscheck` (part of `make test`) are the rest: the lint of the blocks; the schemas; the links and anchors of the six
+documents, `README.md` and `install.md` (`docscheck.Links`: a relative link must lead to a file and an anchor to a heading, in the way GitHub makes
+the anchor; an address of a file of this repository on the site is checked as that file); every preflight check the code can report (the ids written in
+`internal/preflight`, `internal/executor/hostpreflight.go`, `cmd/chaosgw/api.go` and `internal/api/system.go`, which the test also demands to find by name
+so that a pattern that stops matching fails it, and the three families `host.data.<dir>`, `module.<name>` and `interface.<name>.os_config`) is explained in `troubleshooting.md`
+(`TestEveryPreflightCheckIsExplainedInTheTroubleshooting`), and so is every health component of the spec (`TestEveryHealthComponentIsNamedInTheTroubleshooting`); the safe-mode banner of `AppShell.vue` links to `docs/recovery.md#safe-mode` and the
+heading exists (`TestTheBannerOfSafeModeLinksToTheRecoveryInstructions`; the Playwright test of the banner, `web/e2e/states.spec.ts`, pins the href);
+the recovery instructions, `install.md` and the release notes state that a management WireGuard network is down in safe mode and that a fallback to a revision from before a key rotation ends in safe mode (P7-M27-01, P7-M27-02: `TestTheDocumentsStateWhatSafeModeAndAKeyRotationDo`); the CI overview above names the job `docs`; the release notes contain the ARM64 section and name the Raspberry Pi targets, H1 and the interception proxy
+(`TestTheReleaseNotesNameWhatIsUnvalidatedOnARM64`, the TLS proxy's throughput target of §3.10 included), and its links are addresses of the documents at the tag, because
+the text of a release is shown on a page where a relative link leads nowhere (`TestTheLinksOfTheReleaseNotesAreAddressesAtTheirTag`); and `tools/ciconfig` checks that the CI job `docs` runs `make test-docs` and that `image.yml` uses
+the release notes of the tag (`TestTheCIRunsTheExamplesOfTheDocumentation`).
+
+### Acceptance map (plan M30 "Scope" and "Tests")
+
+| Plan M30 | Where |
+|---|---|
+| user guide | `docs/user-guide.md` |
+| API guide with examples | `docs/api-guide.md`; every `sh run` block runs in the job `docs` |
+| scenario cookbook | `docs/cookbook.md`; its scenarios are checked against the schema `Scenario`, the runnable ones run |
+| troubleshooting (preflight messages) | `docs/troubleshooting.md`, "The preflight checks"; every id of the code is in it (level 0) |
+| recovery instructions (safe mode, last known good, teardown; M27) | `docs/recovery.md` |
+| linked from the UI's safe-mode banner (P3-M12-05) | `AppShell.vue` links to `docs/recovery.md#safe-mode`; level 0 and Playwright tests above |
+| release notes name what is unvalidated on ARM64 until H1 has run (P5-M22-02, P5-AUDIT-25) | `docs/release-notes/v1.0.0.md`, "Not validated on ARM64 until the hardware lab has run"; level 0 test above |
+| Tests: documentation examples run in CI | `make test-docs`, the CI job `docs`, `TestTheDocumentationExamplesRunAgainstTheGateway` |
+
+### Decisions
+
+1. **The documents are served from the repository, not by the gateway.** The banner links to `docs/recovery.md` on GitHub (`main`), which a
+   lab gateway without internet access cannot open; the recovery instructions are short enough to print, and `install.md` repeats the essentials
+   (what safe mode is and how to leave it). Serving the documents from the web app would need a Markdown renderer in the build and a copy of the
+   documents in the image; the link is the simplest thing that satisfies P3-M12-05 (its task says "served with the app or in the docs"). Should the offline case
+   matter, the banner can carry the three commands itself.
+2. **The examples run against the simulated gateway, not the testbed.** As for the example suites of M18 (decision 11): they test the shapes
+   of requests and answers and the commands, not the kernel; a level 1 run of the documents would need namespaces and make the job slow for no
+   additional coverage of the documents.
+3. **Printed output is compared line by line with `…` as the only wildcard,** not as a whole: the real output has ids and times, and a whole-output
+   comparison would force every example to normalise them. A line that is shown must be printed; a line that is printed need not be shown. So an output block cannot show that something is absent; a document that says "nothing is left" ends its example with a command that fails when something is (`test "$(chaosctl overlay list --json | jq length)" = 0 && echo "no overlay left"`, in the cookbook).
+4. **The release notes are `docs/release-notes/<tag>.md`,** one file per release, published by `image.yml` as the notes of the GitHub release.

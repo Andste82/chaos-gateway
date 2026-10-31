@@ -181,6 +181,15 @@ func (r *real) target() *compiler.Target {
 }
 
 // verifyKernel checks that the real kernel is the compile of the final snapshot.
+// kernelReader is how verifyKernel reads the kernel: through the test's own executor, or through reader when a test runs the
+// executor as a process of its own (whose assigned interfaces the test's executor does not know).
+func (r *real) kernelReader() apply.Exec {
+	if r.reader != nil {
+		return r.reader
+	}
+	return apply.Local{E: r.ex}
+}
+
 func (r *real) verifyKernel() *compiler.Target {
 	r.t.Helper()
 	tg := r.target()
@@ -196,7 +205,7 @@ func (r *real) verifyKernel() *compiler.Target {
 	for _, c := range r.e.RetiringTC() {
 		retiring[c.Key()] = true
 	}
-	st, err := apply.ReadState(ctx, apply.Local{E: r.ex}, r.top.GW.Name, apply.WantOf(tg))
+	st, err := apply.ReadState(ctx, r.kernelReader(), r.top.GW.Name, apply.WantOf(tg))
 	if err != nil {
 		r.t.Fatal(err)
 	}

@@ -211,8 +211,14 @@ func str(f map[string]json.RawMessage, key string) string {
 
 func applyNft(t *nftTable, command, kind string, f map[string]json.RawMessage) (*nftTable, error) {
 	if kind == "table" {
+		if command == "delete" {
+			if t == nil {
+				return t, nftErr("No such file or directory")
+			}
+			return nil, nil // the table goes with everything in it
+		}
 		if command != "add" {
-			return t, nftErr("table: only add is simulated")
+			return t, nftErr("table: only add and delete are simulated")
 		}
 		if t == nil {
 			t = &nftTable{sets: map[string]*nftSet{}, maps: map[string]*nftMap{}, counters: map[string]int64{}, chains: map[string]*nftChain{}}

@@ -39,6 +39,8 @@ jobs:
       - run: make check-generated
       - run: make check-clients
       - run: make lint
+      # the scripts that run on the host (M28): the host setup, the update, the smoke tests of the image and of the deployment
+      - run: shellcheck deploy/*.sh deploy/chaosgw-kea-hook
       - run: go vet -tags appliance ./internal/appliance
       - run: go vet -tags testbed,browser ./internal/api
       - run: go vet -tags examples ./internal/api
@@ -53,8 +55,20 @@ jobs:
       - run: make test
       # the example suites for pytest and Jest (M18) against a gateway on the simulated kernel
       - run: make test-examples
-      # 5 minutes of fuzzing on the executor's decoder (plan M3); the nightly run goes longer
+      # 6 minutes of fuzzing on the executor's interface (plan M3, M29: six targets, a minute each); the nightly run goes longer
       - run: make fuzz
+
+  # The examples of the user documentation (M30): the shell examples of docs/*.md run against a gateway on the simulated kernel with the real
+  # engine, their printed output is compared with what the documents show (internal/api/docs_test.go). The lint of the blocks, the checks
+  # against the schemas of the spec and the links are level 0 tests (internal/docscheck, run by `make test`).
+  docs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make test-docs
 
   # Playwright end-to-end tests of the web app.
   e2e:
@@ -98,7 +112,7 @@ jobs:
           if [ -e /dev/kvm ]; then kvm=(--device /dev/kvm); fi
           # The engine package alone needs more than the default 20 minutes since M8b (about 50 minutes under KVM since M10): its measurement
           # tests of the fault engine send thousands of probes through delays of 100 to 600 ms each.
-          docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-vm ARGS="-test-timeout 100m -vm-timeout 3h -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1"
+          docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-vm ARGS="-test-timeout 100m -vm-timeout 3h -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$M27_LEVEL1,$M29_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1"
       # The measurement record (plan §4.3, P2-AUDIT-07): one JSON line per check of every accuracy assertion. It is
       # kept for 90 days; `go run ./tools/measurements <dirs of downloaded artifacts>` compares the runs.
       - name: Summarize the measurement record
@@ -142,7 +156,7 @@ jobs:
         run: grep -E '^[A-Z0-9_]+=' .github/level1-tests.env >> "$GITHUB_ENV"
       # The engine package alone needs more than the default 20 minutes since M10 (about 25 native):
       # its measurement tests send thousands of probes through delays of 100 to 600 ms each.
-      - run: docker run --rm --privileged -v /lib/modules:/lib/modules:ro -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-privileged ARGS="-test-timeout 60m -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1"
+      - run: docker run --rm --privileged -v /lib/modules:/lib/modules:ro -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-privileged ARGS="-test-timeout 60m -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$M27_LEVEL1,$M29_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1"
       # The measurement record (plan §4.3, P2-AUDIT-07): one JSON line per check of every accuracy assertion. It is
       # kept for 90 days; `go run ./tools/measurements <dirs of downloaded artifacts>` compares the runs.
       - name: Summarize the measurement record
@@ -217,8 +231,9 @@ jobs:
           push: false
           cache-from: type=gha,scope=image
           cache-to: type=gha,scope=image,mode=max
-      # issue #57: on a fresh host the API container (user 65532) must be able to write every named
-      # volume it mounts writable; the amd64 image comes from the cache of the build above
+      # issue #57, M28: on a fresh host the API container (user 65532) must be able to write every directory it mounts writable. The
+      # persistent ones are bind mounts of directories the host setup makes (plan §3.6), the directory of Kea's events socket a named
+      # volume that takes its owner from the image; the amd64 image comes from the cache of the build above
       - uses: docker/build-push-action@v7
         with:
           context: .
@@ -227,19 +242,25 @@ jobs:
           load: true
           tags: chaos-gateway:ci
           cache-from: type=gha,scope=image
-      - name: the API container writes its fresh volumes
+      - name: the host setup makes the directories, and the API container writes them
         run: |
+          sudo sh deploy/host-setup.sh --data-only
           for dir in /var/lib/chaosgw/state /var/lib/chaosgw/secrets /var/lib/chaosgw/api /var/lib/chaosgw/service /var/lib/chaosgw/captures /var/lib/chaosgw/tlsca /run/chaosgw-kea-events; do
-            vol="ci-$(basename "$dir")"
-            docker volume rm -f "$vol" >/dev/null
-            docker volume create "$vol" >/dev/null
-            docker run --rm --user 65532:65532 -v "$vol:$dir" --entrypoint sh chaos-gateway:ci \
-              -c "mkdir $dir/probe && touch $dir/probe/file" || { echo "user 65532 cannot write $dir on a fresh volume"; exit 1; }
-            docker volume rm "$vol" >/dev/null
+            case "$dir" in
+            /var/lib/chaosgw/*) mount="$dir:$dir" ;;
+            *)
+              vol="ci-$(basename "$dir")"
+              docker volume rm -f "$vol" >/dev/null
+              docker volume create "$vol" >/dev/null
+              mount="$vol:$dir"
+              ;;
+            esac
+            docker run --rm --user 65532:65532 -v "$mount" --entrypoint sh chaos-gateway:ci \
+              -c "mkdir $dir/probe && touch $dir/probe/file" || { echo "user 65532 cannot write $dir on a fresh host"; exit 1; }
+            case "$dir" in /var/lib/chaosgw/*) sudo rm -rf "$dir/probe" ;; *) docker volume rm "$vol" >/dev/null ;; esac
           done
-          mode=$(docker run --rm -v ci-secrets-mode:/var/lib/chaosgw/secrets --entrypoint stat chaos-gateway:ci -c '%u:%g %a' /var/lib/chaosgw/secrets)
-          docker volume rm ci-secrets-mode >/dev/null
-          test "$mode" = "65532:65532 700" || { echo "the secrets volume is $mode, want 65532:65532 700"; exit 1; }
+          mode=$(stat -c '%u:%g %a' /var/lib/chaosgw/secrets)
+          test "$mode" = "65532:65532 700" || { echo "the secrets directory is $mode, want 65532:65532 700"; exit 1; }
       # issue #57 F3: the API (user 65532) creates the Kea events socket in its own fresh volume, and the
       # Kea container's user (0:65532, here without any capability) sends to it through a read-only mount
       - name: the Kea hook sends to the API's events socket through a read-only mount
@@ -270,6 +291,23 @@ jobs:
           docker rm -f ci-kea-events-api >/dev/null
           docker volume rm ci-kea-events >/dev/null
           test -n "$sent" && test "$got" = "lease" || { echo "the datagram did not arrive: sent=${sent:-no}, the API's side: $got"; exit 1; }
+      # the image smoke tests run before the apt package qemu-user is installed: its binfmt handler has no fix-binary flag, replaces the
+      # one docker/setup-qemu-action registered, and a container then cannot find the emulator ("exec /usr/local/bin/chaosgw: no such file")
+      # M28 (plan §4.4): the arm64 image starts, holds the tools at the pinned versions and runs its binaries under qemu-user, the
+      # amd64 image natively (deploy/smoke-image.sh). The functional smoke test of the arm64 image on a whole machine is the weekly
+      # appliance VM; ARM64 hardware (H1) is not available.
+      - name: the amd64 image passes the image smoke test
+        run: deploy/smoke-image.sh linux/amd64 chaos-gateway:ci
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/arm64
+          load: true
+          tags: chaos-gateway:ci-arm64
+          cache-from: type=gha,scope=image
+      - name: the arm64 image passes the image smoke test under qemu-user
+        run: deploy/smoke-image.sh linux/arm64 chaos-gateway:ci-arm64
       - run: sudo apt-get update && sudo apt-get install -y qemu-user
       - run: make test-arm64
 
@@ -294,6 +332,27 @@ jobs:
         env:
           CHAOSGW_VERSION: ci
 
+  # The deployment (plan §3.8, M28): deploy/compose.yaml starts every container of the gateway from the image on a real Docker host, in the
+  # order of the plan, they become healthy, the setup token is in the log, the privileges are those of the table (read from the container
+  # runtime), the containers stop and start again (deploy/smoke-compose.sh; what the stop removes from the kernel is the recovery test's of level 2). A hosted runner is a
+  # machine with root and the kernel modules; the script assigns no interface and applies no configuration, so the runner's own
+  # connection is not touched. The level 2 test (nightly) does the same on clean Ubuntu hosts with a test interface and a run.
+  deployment:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: chaos-gateway:ci
+          cache-from: type=gha,scope=image
+      - name: compose.yaml starts the gateway
+        run: sudo env CHAOSGW_VERSION=ci deploy/smoke-compose.sh
+
   # issue #57 (F4): the executor container mounts nothing into the host. It shares /run/netns with the
   # host (rshared); a volume mounted inside another volume of the container then propagated into the
   # host's mount table, and `docker compose down -v` failed with "device or resource busy". The executor
@@ -315,6 +374,8 @@ jobs:
       - name: the executor's volumes do not leak into the host's mounts
         working-directory: deploy
         run: |
+          # the compose files bind-mount the directories the host setup makes (plan §3.6)
+          sudo sh host-setup.sh --data-only
           compose="docker compose -p ci-mounts -f compose.executor.yaml"
           $compose run -d --name ci-mounts-exec --entrypoint sleep exec infinity
           sleep 2
@@ -323,5 +384,27 @@ jobs:
           docker exec ci-mounts-exec ls /host/usr/lib/systemd/network || { echo "/host/usr/lib/systemd/network is not readable in the executor container"; fail=1; }
           docker rm -f ci-mounts-exec >/dev/null
           if [ -n "$leaked" ]; then echo "mounts of the executor container in the host's mount table:"; echo "$leaked"; fail=1; fi
+          $compose down -v || { echo "docker compose down -v failed"; fail=1; }
+          exit ${fail:-0}
+      - name: the teardown container is valid, and its volumes and the shared /run/netns do not leak into the host's mounts (M27)
+        working-directory: deploy
+        run: |
+          compose="docker compose -p ci-mounts-td -f compose.teardown.yaml"
+          $compose config -q || { echo "compose.teardown.yaml does not render"; exit 1; }
+          # the container mounts every volume writable and /run/netns with rshared propagation, like issue #57's executor
+          $compose run -d --name ci-mounts-td --entrypoint sleep teardown infinity
+          sleep 2
+          leaked=$(findmnt -rn -o TARGET | grep '/var/lib/docker/volumes/ci-mounts-td_' || true)
+          for d in state secrets api service tlsca captures exec; do
+            # a write, not test -w: the coreutils of Ubuntu 26.04 (uutils) read the mode bits and say no to root in a directory of user 65532
+            docker exec ci-mounts-td sh -c "touch /var/lib/chaosgw/$d/.write-check && rm /var/lib/chaosgw/$d/.write-check" || { echo "/var/lib/chaosgw/$d is not writable in the teardown container"; fail=1; }
+          done
+          docker exec ci-mounts-td sh -c "touch /var/lib/kea/.write-check && rm /var/lib/kea/.write-check" || { echo "/var/lib/kea is not writable in the teardown container"; fail=1; }
+          if [ "${fail:-0}" = 1 ]; then
+            # what the container is: the user, its capabilities, the owners of the directories, and a real write
+            docker exec --privileged ci-mounts-td sh -c 'id; grep -E "^(Cap|NoNewPrivs|Seccomp)" /proc/self/status; ls -ldn /var/lib/chaosgw/* /var/lib/kea; touch /var/lib/chaosgw/state/probe && echo "touch works" && rm /var/lib/chaosgw/state/probe; grep chaosgw /proc/self/mountinfo' || true
+          fi
+          docker rm -f ci-mounts-td >/dev/null
+          if [ -n "$leaked" ]; then echo "mounts of the teardown container in the host's mount table:"; echo "$leaked"; fail=1; fi
           $compose down -v || { echo "docker compose down -v failed"; fail=1; }
           exit ${fail:-0}

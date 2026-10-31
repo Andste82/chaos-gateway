@@ -139,7 +139,7 @@ always taken away again.
 The gateway and its token come from the flags or the environment:
 
   CHAOSGW_URL          address of the gateway, https://host:8443 (default https://127.0.0.1:8443)
-  CHAOSGW_TOKEN        an API token (scope overlays is enough for everything but 'wg export', 'probe add' and 'probe remove', which need full)
+  CHAOSGW_TOKEN        an API token (scope overlays is enough for everything but 'wg export', 'probe add', 'probe remove', 'certificate install' and 'certificate reset', which need full)
   CHAOSGW_TOKEN_FILE   a file that holds the token
   CHAOSGW_CA_CERT      a PEM file with the CA or the certificate of the gateway
   CHAOSGW_FINGERPRINT  the SHA-256 fingerprint of the gateway's certificate (trusts a self-signed one)
@@ -170,7 +170,7 @@ chaosctl failed, 126 when the command cannot be run, 127 when it is not found.`,
 	f.DurationVar(&a.conn.timeout, "request-timeout", 2*time.Minute, "how long one request to the gateway may take")
 	f.BoolVar(&a.asJSON, "json", false, "print the gateway's JSON where a command prints a result")
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return &exitError{code: ExitError, err: err} })
-	root.AddCommand(a.versionCmd(), a.profileCmd(), a.faultCmd(), a.dnsCmd(), a.tlsCmd(), a.dhcpCmd(), a.interceptCmd(), a.probeCmd(), a.overlayCmd(), a.resetCmd(), a.runCmd(), a.abortCmd(), a.waitCmd(), a.withCmd(), a.explainCmd(), a.wgCmd())
+	root.AddCommand(a.versionCmd(), a.profileCmd(), a.faultCmd(), a.dnsCmd(), a.tlsCmd(), a.dhcpCmd(), a.interceptCmd(), a.probeCmd(), a.overlayCmd(), a.resetCmd(), a.runCmd(), a.abortCmd(), a.waitCmd(), a.withCmd(), a.explainCmd(), a.wgCmd(), a.certificateCmd())
 	return root
 }
 

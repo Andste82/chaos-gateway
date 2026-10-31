@@ -65,6 +65,9 @@ type Config struct {
 	// CutWindow is how long the window of "also cut existing connections" stays open; 0 uses
 	// DefaultCutWindow, a negative value closes it again at once (tests).
 	CutWindow time.Duration
+	// RetryDelay is how long the owner waits before it applies again after a failed apply or rollback that nobody waits for,
+	// and so between the two applies of a revision at start (recovery.go); 0 is 10 s (retryDelay).
+	RetryDelay time.Duration
 	// GenerationFile persists the generation counter's high-water mark across restarts (plan
 	// openapi.yaml convention: "monotonic integer, never reused"). Empty keeps it per-process.
 	GenerationFile string
@@ -195,6 +198,11 @@ type Snapshot struct {
 	// ObserveError is why the last read of the observed state (conntrack) failed, empty when it did
 	// not; the devices and flows it reports are then the last ones successfully read, not fresh ones.
 	ObserveError string
+	// SafeMode is set while the gateway runs in safe mode (plan §3.9, recovery.go): neither the active revision nor the last
+	// known good one could be applied. Config is then the safe configuration, management access only and no forwarding, and
+	// SafeModeReason says why. A revision that is applied and verified ends it.
+	SafeMode       bool
+	SafeModeReason string
 }
 
 // ServiceHealth is the last reading of the service namespace's state (WatchService).
@@ -452,8 +460,14 @@ func (e *Engine) initialState(ctx context.Context) (*ownerInit, error) {
 		e.events.publish(e.cfg.Clock.Now(), EventRolledBack, map[string]any{"revision": p.Revision, "reason": "restart"})
 	}
 	rev, cfg, err := e.cfg.Store.Active()
+	var corrupt *store.ErrCorrupt
 	switch {
 	case errors.Is(err, store.ErrNotFound):
+	case errors.As(err, &corrupt):
+		// a damaged file is no reason not to start: the last known good revision is applied instead (recovery.go); any
+		// other failure, a newer schema included (plan §3.9, downgrade), still stops the start
+		e.cfg.Log.Error("the active revision cannot be read", "revision", e.cfg.Store.ActiveID(), "error", err)
+		init.revision, init.failure = e.cfg.Store.ActiveID(), err.Error()
 	case err != nil:
 		return nil, err
 	default:

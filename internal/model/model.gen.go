@@ -291,6 +291,24 @@ func (e CaptureScopeUplink) Valid() bool {
 	}
 }
 
+// Defines values for CertificateInfoSource.
+const (
+	Installed CertificateInfoSource = "installed"
+	Own       CertificateInfoSource = "own"
+)
+
+// Valid indicates whether the value is a known member of the CertificateInfoSource enum.
+func (e CertificateInfoSource) Valid() bool {
+	switch e {
+	case Installed:
+		return true
+	case Own:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CheckResultStatus.
 const (
 	CheckResultStatusError   CheckResultStatus = "error"
@@ -3380,15 +3398,28 @@ type CaptureStorage struct {
 
 // CertificateInfo defines model for CertificateInfo.
 type CertificateInfo struct {
-	DnsNames          *[]string  `json:"dns_names,omitempty"`
+	// ChainLength Number of certificates the listeners send (the leaf and the intermediates).
+	ChainLength *int      `json:"chain_length,omitempty"`
+	DnsNames    *[]string `json:"dns_names,omitempty"`
+
+	// FingerprintSha256 SHA-256 of the leaf certificate (64 lower-case hex digits), what `chaosctl --fingerprint` pins.
 	FingerprintSha256 *string    `json:"fingerprint_sha256,omitempty"`
 	IpAddresses       *[]string  `json:"ip_addresses,omitempty"`
 	Issuer            *string    `json:"issuer,omitempty"`
 	NotAfter          *time.Time `json:"not_after,omitempty"`
 	NotBefore         *time.Time `json:"not_before,omitempty"`
 	SelfSigned        *bool      `json:"self_signed,omitempty"`
-	Subject           *string    `json:"subject,omitempty"`
+
+	// SerialNumber Serial number of the leaf certificate, in hex.
+	SerialNumber *string `json:"serial_number,omitempty"`
+
+	// Source `own`: the gateway's own self-signed certificate; `installed`: one that was put with `PUT /system/certificate`.
+	Source  *CertificateInfoSource `json:"source,omitempty"`
+	Subject *string                `json:"subject,omitempty"`
 }
+
+// CertificateInfoSource `own`: the gateway's own self-signed certificate; `installed`: one that was put with `PUT /system/certificate`.
+type CertificateInfoSource string
 
 // CertificateUpload defines model for CertificateUpload.
 type CertificateUpload struct {

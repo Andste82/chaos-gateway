@@ -13,7 +13,7 @@
 # re-joins the new namespace.
 services:
   svcns:
-    image: chaos-gateway:${CHAOSGW_VERSION:-latest}
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
     command: ["svcns", "--pid-file", "/run/chaosgw-svcns/pid"]
     user: "65532:65532"
     network_mode: none
@@ -24,15 +24,27 @@ services:
       - no-new-privileges:true
     volumes:
       - chaosgw-svcns:/run/chaosgw-svcns
+    depends_on:
+      # start order (plan §3.8): the executor first, then the holder, whose namespace the executor attaches the veth pair to
+      exec:
+        condition: service_healthy
+        required: false
     restart: unless-stopped
     stop_grace_period: 5s
+    healthcheck:
+      # the holder is ready when it has written its PID file
+      test: ["CMD", "test", "-s", "/run/chaosgw-svcns/pid"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     logging:
       driver: json-file
       options:
         max-size: 1m
         max-file: "2"
   dns:
-    image: chaos-gateway:${CHAOSGW_VERSION:-latest}
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
     command: ["dns", "--listen", ":53", "--api", "https://169.254.100.1:${CHAOSGW_UI_PORT:-8443}", "--service-token-file", "/var/lib/chaosgw/service/token", "--api-cert-file", "/var/lib/chaosgw/service/api.pem"]
     user: "65532:65532"
     network_mode: "service:svcns"
@@ -44,16 +56,22 @@ services:
     tmpfs:
       - /tmp:size=4m,mode=0700
     volumes:
-      # the token the proxy authenticates with and the API's certificate: nothing else of the secrets volume
-      - type: volume
-        source: chaosgw-service
+      # the token the proxy authenticates with and the API's certificate: nothing else of the secrets
+      - type: bind
+        source: /var/lib/chaosgw/service
         target: /var/lib/chaosgw/service
         read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       svcns:
-        condition: service_started
+        condition: service_healthy
         # a recreated holder has a new namespace: the proxy has to join it again
         restart: true
+      # the proxy fetches its configuration from the API (169.254.100.1)
+      api:
+        condition: service_healthy
+        required: false
     restart: unless-stopped
     stop_grace_period: 10s
     healthcheck:
@@ -70,4 +88,3 @@ services:
 
 volumes:
   chaosgw-svcns:
-  chaosgw-service:

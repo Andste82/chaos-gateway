@@ -46,6 +46,7 @@ var candidates = map[Tool][]string{
 	ToolBird:      {"/usr/sbin/bird", "/usr/bin/bird", "/sbin/bird"},
 	ToolBirdc:     {"/usr/sbin/birdc", "/usr/bin/birdc", "/sbin/birdc"},
 	ToolConntrack: {"/usr/sbin/conntrack", "/sbin/conntrack", "/usr/bin/conntrack"},
+	ToolModprobe:  {"/usr/sbin/modprobe", "/sbin/modprobe", "/usr/bin/modprobe"},
 }
 
 const (

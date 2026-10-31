@@ -975,7 +975,7 @@ func (o Read) validate() error {
 	if err := o.Target.validate(); err != nil {
 		return err
 	}
-	if err := oneOf("what", o.What, ReadLinks, ReadAddrs, ReadRoutes, ReadRouteGet, ReadRules, ReadNft, ReadNftDup, ReadQdiscs, ReadClasses, ReadFilters, ReadTC, ReadOffloads, ReadSysctl, ReadAssigned, ReadDockerUser, ReadWireGuard, ReadBird, ReadNeighbors, ReadConntrack, ReadServiceNS, ReadHostNet, ReadProbes); err != nil {
+	if err := oneOf("what", o.What, ReadLinks, ReadAddrs, ReadRoutes, ReadRouteGet, ReadRules, ReadNft, ReadNftDup, ReadQdiscs, ReadClasses, ReadFilters, ReadTC, ReadOffloads, ReadSysctl, ReadAssigned, ReadDockerUser, ReadWireGuard, ReadBird, ReadNeighbors, ReadConntrack, ReadServiceNS, ReadHostNet, ReadHostPreflight, ReadProbes); err != nil {
 		return err
 	}
 	if o.What == ReadServiceNS {

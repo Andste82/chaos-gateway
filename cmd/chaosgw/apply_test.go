@@ -21,7 +21,7 @@ func startExecutor(t *testing.T) (*kernelsim.Kernel, string, *executor.Executor)
 }
 
 // startExecutorWithKeys also gives the executor the secrets directory, as `chaosgw exec --secrets-dir` does.
-func startExecutorWithKeys(t *testing.T, secretsDir string) (*kernelsim.Kernel, string, *executor.Executor) {
+func startExecutorWithKeys(t *testing.T, secretsDir string, extra ...executor.Option) (*kernelsim.Kernel, string, *executor.Executor) {
 	t.Helper()
 	k := kernelsim.New()
 	k.AddLink("lan0", "02:00:00:00:00:01", "veth", true)
@@ -32,7 +32,7 @@ func startExecutorWithKeys(t *testing.T, secretsDir string) (*kernelsim.Kernel, 
 	k.SetAddr("mgmt0", "192.168.56.1/24")
 	k.SetMainDefault("192.168.56.254", "mgmt0")
 	k.AddDockerChain()
-	opts := []executor.Option{executor.WithBirdDir(t.TempDir())}
+	opts := append([]executor.Option{executor.WithBirdDir(t.TempDir())}, extra...)
 	if secretsDir != "" {
 		sec, err := secrets.Open(secretsDir)
 		if err != nil {

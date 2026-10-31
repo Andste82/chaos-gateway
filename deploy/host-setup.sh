@@ -6,13 +6,17 @@
 #
 # What it does:
 #   - installs Docker Engine and the compose plugin when they are missing (Ubuntu's packages),
+#   - makes the directories of the gateway's data below /var/lib/chaosgw with their owners (plan §3.6; the compose file mounts
+#     them from the host, and the API container runs as an unprivileged user that could not write a directory Docker made),
 #   - loads the kernel modules Chaos Gateway needs now and at every boot
 #     (/etc/modules-load.d/chaos-gateway.conf),
 #   - enables IPv4 forwarding now and at every boot (/etc/sysctl.d/90-chaos-gateway.conf), and lets every group open
 #     the unprivileged ICMP socket the ping of the diagnostics uses (net.ipv4.ping_group_range, M24),
 #   - for every --test-interface: writes the rule that keeps systemd-networkd off it
 #     (/etc/systemd/network/10-chaosgw-<interface>.network, issue #64) and checks it (as --check),
-#   - prints the netplan changes the test interfaces need.
+#   - with --image, copies compose.yaml, update.sh, host-setup.sh and env.example out of that image into /opt/chaosgw and writes the .env that
+#     names the image (never over an existing one),
+#   - prints the netplan changes the test interfaces need and what to do next.
 # What it never does: touch the uplink or the management configuration, or any netplan file. It refuses a
 # --test-interface that carries the host's own connection (the default route, an IPv4 address, an SSH
 # session, the one that runs it included): the rule would make systemd-networkd drop that interface at once.
@@ -25,6 +29,10 @@
 #                                systemd-networkd file configures it; exits 1 when a step is missing
 #   --remove-test-interface IF   only remove the networkd rule of IF (repeatable), the undo of
 #                                --test-interface
+#   --image REF                  the gateway image (ghcr.io/andste82/chaos-gateway:1.0.0): copy the files of the deployment
+#                                out of it into --install-dir and write the .env that names it
+#   --install-dir DIR            where the deployment lives, default /opt/chaosgw
+#   --data-only                  only make the data directories (a CI job, a repair after a restore)
 # Options for tests and unusual hosts:
 #   --prefix DIR      read and write the files below DIR instead of /, ask no running service, and
 #                     do not need root
@@ -32,6 +40,12 @@
 #   --skip-modprobe   do not load modules or change sysctls of the running system
 #   --help            this text
 set -eu
+
+# The directories of the persistence layout (plan §3.6) the compose file mounts from the host: name:owner:mode, below DATA_DIR.
+# The user 65532 is the API container's; the secrets are its alone. tools/ciconfig keeps this list equal to the Dockerfile's.
+DATA_DIR=/var/lib/chaosgw
+DATA_DIRS="state:65532:0755 secrets:65532:0700 api:65532:0755 service:65532:0755 tlsca:65532:0755 captures:65532:0755 exec:0:0755 kea:0:0755"
+INSTALL_DIR=/opt/chaosgw
 
 # The modules of the preflight (internal/preflight/modules.go; a test keeps the lists equal).
 REQUIRED_MODULES="sch_netem sch_htb cls_fw cls_u32 cls_flower sch_ingress act_mirred ifb nf_conntrack nf_conntrack_netlink nf_nat nf_tables nft_ct nft_nat nft_chain_nat nft_masq nft_redir nft_reject nft_reject_inet nft_dup_netdev nft_numgen veth bridge wireguard"
@@ -44,6 +58,8 @@ MODPROBE=1
 TEST_IFS=""
 CHECK_IFS=""
 REMOVE_IFS=""
+IMAGE=""
+DATA_ONLY=0
 
 # interface_arg refuses a value that is no interface name (at most 15 characters, no "/", no space).
 interface_arg() { # option, value
@@ -76,13 +92,31 @@ while [ $# -gt 0 ]; do
 		esac
 		shift 2
 		;;
+	--image)
+		[ $# -ge 2 ] || { echo "host-setup: --image needs an image reference" >&2; exit 2; }
+		case "$2" in
+		"" | *[!A-Za-z0-9_.:/-]*)
+			echo "host-setup: --image: not an image reference (name[:tag]): $2" >&2
+			exit 2
+			;;
+		esac
+		IMAGE="$2"
+		shift 2
+		;;
+	--install-dir)
+		[ $# -ge 2 ] || { echo "host-setup: --install-dir needs a directory" >&2; exit 2; }
+		INSTALL_DIR="$2"
+		shift 2
+		;;
+	--data-only) DATA_ONLY=1; shift ;;
 	--skip-docker) DOCKER=0; shift ;;
 	--skip-modprobe) MODPROBE=0; shift ;;
 	--help | -h)
 		cat <<'HELP'
 Chaos Gateway host setup: installs Docker if missing, loads the kernel modules and enables
-IPv4 forwarding now and at every boot, keeps systemd-networkd off the test interfaces and
-checks them, and prints the netplan hints for them. It never touches the uplink or the
+IPv4 forwarding now and at every boot, makes the data directories below /var/lib/chaosgw with
+their owners, keeps systemd-networkd off the test interfaces and checks them, and prints the
+netplan hints for them. It never touches the uplink or the
 management configuration, or any netplan file, and refuses a --test-interface that has the
 default route, an IPv4 address or an SSH session (the one that runs the setup included).
 
@@ -93,6 +127,10 @@ default route, an IPv4 address or an SSH session (the one that runs the setup in
                                has a carrier, and no netplan entry, NetworkManager connection or
                                systemd-networkd file configures it; exits 1 when a step is missing
   --remove-test-interface IF   only remove the networkd rule of IF (repeatable)
+  --image REF                  the gateway image: copy compose.yaml, update.sh, host-setup.sh and env.example out of
+                               it into --install-dir and write the .env that names it
+  --install-dir DIR            where the deployment lives (default /opt/chaosgw)
+  --data-only                  only make the data directories below /var/lib/chaosgw
   --prefix DIR                 read and write the files below DIR instead of /, ask no running
                                service, and do not need root
   --skip-docker                do not install or check Docker
@@ -100,7 +138,7 @@ default route, an IPv4 address or an SSH session (the one that runs the setup in
   --help                       this text
 
 From the image:
-  docker run --rm --entrypoint cat chaos-gateway:latest /usr/local/share/chaosgw/host-setup.sh | sudo sh -s -- --check lan0
+  docker run --rm --entrypoint cat IMAGE /usr/local/share/chaosgw/host-setup.sh | sudo sh -s -- --image IMAGE --test-interface lan0
 HELP
 		exit 0
 		;;
@@ -109,6 +147,9 @@ HELP
 done
 
 MODE=setup
+if [ "$DATA_ONLY" = 1 ]; then
+	MODE=data
+fi
 if [ -n "$CHECK_IFS" ]; then
 	MODE=check
 fi
@@ -116,8 +157,16 @@ if [ -n "$REMOVE_IFS" ]; then
 	[ "$MODE" = setup ] || { echo "host-setup: --check and --remove-test-interface do not go together" >&2; exit 2; }
 	MODE=remove
 fi
+if [ "$DATA_ONLY" = 1 ] && { [ -n "$CHECK_IFS" ] || [ -n "$REMOVE_IFS" ]; }; then
+	echo "host-setup: --data-only does not go with --check or --remove-test-interface" >&2
+	exit 2
+fi
 if [ "$MODE" != setup ] && [ -n "$TEST_IFS" ]; then
-	echo "host-setup: --test-interface does not go with --check or --remove-test-interface" >&2
+	echo "host-setup: --test-interface does not go with --check, --remove-test-interface or --data-only" >&2
+	exit 2
+fi
+if [ "$MODE" != setup ] && [ -n "$IMAGE" ]; then
+	echo "host-setup: --image does not go with --check, --remove-test-interface or --data-only" >&2
 	exit 2
 fi
 
@@ -192,6 +241,61 @@ write_if_changed() { # file, content on stdin
 	chmod 644 "$tmp"
 	mv "$tmp" "$1"
 	return 0
+}
+
+# ---- the data directories (plan §3.6)
+
+# make_data_dirs makes the directories the compose file mounts from the host, with the owners the containers need. Docker would
+# make a missing one as root's, which the API container (user 65532, no capability) cannot write; the compose file does not let it
+# (create_host_path: false). An existing directory is put right (owner and mode of the directory itself, never of its content).
+# Without root (--prefix in a test) the owner cannot be set and is left as it is.
+make_data_dirs() {
+	mkdir -p "$PREFIX$DATA_DIR"
+	for spec in $DATA_DIRS; do
+		name=${spec%%:*}
+		rest=${spec#*:}
+		uid=${rest%%:*}
+		mode=${rest#*:}
+		d="$PREFIX$DATA_DIR/$name"
+		new=""
+		[ -d "$d" ] || new=1
+		mkdir -p "$d"
+		if [ "$(id -u)" -eq 0 ]; then
+			[ "$(stat -c %u:%g "$d")" = "$uid:$uid" ] || { chown "$uid:$uid" "$d"; new=1; }
+		fi
+		[ "$(stat -c %a "$d")" = "${mode#0}" ] || { chmod "$mode" "$d"; new=1; }
+		if [ -n "$new" ]; then say "made $DATA_DIR/$name (owner $uid, mode $mode)"; else say "$DATA_DIR/$name is as it should be"; fi
+	done
+}
+
+# install_files copies the files of the deployment out of the image and names the image in .env (an existing .env is kept: it
+# may hold the settings of the administrator).
+install_files() { # image
+	ref=$1
+	command -v docker >/dev/null 2>&1 || { echo "host-setup: --image needs Docker" >&2; return 1; }
+	# name[:tag]: the tag is what follows the last colon unless that colon belongs to a registry's port (a slash follows it)
+	name=$ref tag=latest
+	case "$ref" in
+	*:*)
+		case "${ref##*:}" in
+		*/*) ;;
+		*) name=${ref%:*} tag=${ref##*:} ;;
+		esac
+		;;
+	esac
+	mkdir -p "$PREFIX$INSTALL_DIR"
+	if ! docker run --rm --entrypoint tar "$ref" -C /usr/local/share/chaosgw -cf - compose.yaml update.sh host-setup.sh env.example | tar -xf - -C "$PREFIX$INSTALL_DIR" --no-same-owner; then
+		echo "host-setup: cannot copy the files of the deployment out of $ref" >&2
+		return 1
+	fi
+	chmod 0755 "$PREFIX$INSTALL_DIR/update.sh" "$PREFIX$INSTALL_DIR/host-setup.sh"
+	say "copied compose.yaml, update.sh, host-setup.sh and env.example from $ref to $INSTALL_DIR"
+	if [ -e "$PREFIX$INSTALL_DIR/.env" ]; then
+		say "$INSTALL_DIR/.env is kept; it names the image: check CHAOSGW_IMAGE and CHAOSGW_VERSION"
+	else
+		printf '# Written by the Chaos Gateway host setup; env.example lists the settings.\nCHAOSGW_IMAGE=%s\nCHAOSGW_VERSION=%s\n' "$name" "$tag" >"$PREFIX$INSTALL_DIR/.env"
+		say "wrote $INSTALL_DIR/.env (image $name, version $tag)"
+	fi
 }
 
 # ---- the test interfaces (issue #64): the networkd rule and the check
@@ -493,6 +597,10 @@ check_interfaces() { # interfaces; 1 when a step is missing
 	say "the test interfaces are ready: $*"
 }
 
+if [ "$MODE" = data ]; then
+	make_data_dirs
+	exit 0
+fi
 if [ "$MODE" = check ]; then
 	# shellcheck disable=SC2086 # the names are checked words
 	if check_interfaces $CHECK_IFS; then exit 0; else exit 1; fi
@@ -573,6 +681,12 @@ if [ "$MODPROBE" -eq 1 ]; then
 	fi
 fi
 
+# ---- the data directories, and the files of the deployment
+make_data_dirs
+if [ -n "$IMAGE" ]; then
+	install_files "$IMAGE" || status=1
+fi
+
 # ---- the networkd rules of the test interfaces
 changed=0
 for i in $TEST_IFS; do
@@ -595,6 +709,25 @@ if [ -n "$TEST_IFS" ]; then
 	echo
 	# shellcheck disable=SC2086 # the names are checked words
 	check_interfaces $TEST_IFS || status=1
+fi
+
+if [ "$status" -eq 0 ]; then
+	if [ -n "$IMAGE" ]; then
+		cat <<NEXT
+
+host-setup: next
+  cd $INSTALL_DIR && docker compose up -d
+  docker compose logs api | grep 'Setup token'     the one-time token the setup wizard asks for (https://<management address>:8443)
+  $INSTALL_DIR/update.sh                            later: updates the gateway when no run is active
+NEXT
+	else
+		cat <<'NEXT'
+
+host-setup: next
+  copy compose.yaml out of the image (the host setup does it with --image IMAGE), then `docker compose up -d`, and read the
+  one-time setup token from `docker compose logs api | grep 'Setup token'`
+NEXT
+	fi
 fi
 
 exit "$status"

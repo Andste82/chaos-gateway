@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       fuzz:
-        description: 'run the one-hour fuzz job too'
+        description: 'run the fuzz job too (six targets, 45 minutes each)'
         type: boolean
         default: false
 
@@ -14,8 +14,9 @@ permissions:
   contents: read
 
 jobs:
-  # Long fuzz runs (plan M3): the CI run fuzzes for 5 minutes, this one for an hour per target.
-  # A crashing input is uploaded: it is the reproducer, and belongs in testdata/fuzz.
+  # Long fuzz runs on the executor's interface (plan M3, M29): the CI run fuzzes for 6 minutes, this one for 45 minutes per target
+  # (the six targets of `make fuzz`: the operation decoder, the request handling, the connection, the capture request, its files and the
+  # capture filter). A crashing input is uploaded: it is the reproducer, and belongs in the testdata/fuzz of its package.
   fuzz:
     if: github.event_name == 'schedule' || inputs.fuzz
     runs-on: ubuntu-24.04
@@ -24,24 +25,29 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: make fuzz FUZZTIME=60m
+      - run: make fuzz FUZZTIME=45m
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: fuzz-crashers
-          path: internal/executor/testdata/fuzz
+          path: |
+            internal/executor/testdata/fuzz
+            internal/capture/testdata/fuzz
           if-no-files-found: ignore
 
   # Level 2 (plan §4.5, M5b): the gateway in a QEMU VM from the Ubuntu cloud image, host setup, Docker
   # and the executor container inside, traffic from a client namespace through the VM, and a port forward
   # (M35a) to the client namespace next to a port a container publishes (the go toolchain above builds the
-  # test's listener). Hosted
+  # test's listener); the recovery and the stop (M27); and the container deployment of M28: the host setup
+  # with the image, compose.yaml, the setup wizard, a device that gets its lease from Kea, S7 (netplan,
+  # systemd-networkd, NetworkManager), a reboot and the update script during an idle gateway and during a
+  # run (TestContainerDeploymentOnCleanUbuntuHosts; the device's DHCP client is udhcpc). Hosted
   # runners offer /dev/kvm (plan Q1). Run it by hand on a branch with
   # `gh workflow run nightly.yml --ref <branch>`.
   appliance:
     name: appliance (level 2, Ubuntu ${{ matrix.release }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 210
     strategy:
       fail-fast: false
       matrix:
@@ -54,7 +60,7 @@ jobs:
       - name: Install QEMU and the tools of the harness
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils python3 curl iproute2 iptables
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils python3 curl iproute2 iptables udhcpc
       - name: Allow access to /dev/kvm
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -79,7 +85,7 @@ jobs:
           CHAOSGW_APPLIANCE_ARTIFACTS: ${{ runner.temp }}/appliance-logs
         run: |
           export CHAOSGW_APPLIANCE_CACHE="$HOME/.cache/chaosgw-appliance"
-          go test -tags appliance -count=1 -timeout 80m -v -run TestSmokeOnCleanUbuntuHosts ./internal/appliance
+          go test -tags appliance -count=1 -timeout 200m -v -run 'TestSmokeOnCleanUbuntuHosts|TestRecoveryAndStopOnCleanUbuntuHosts|TestContainerDeploymentOnCleanUbuntuHosts' ./internal/appliance
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -125,7 +131,7 @@ jobs:
           kvm=()
           if [ -e /dev/kvm ]; then kvm=(--device /dev/kvm); fi
           docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev \
-            make test-vm ARGS="-kernel ${{ matrix.kernel }} -test-timeout 100m -vm-timeout 3h -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1"
+            make test-vm ARGS="-kernel ${{ matrix.kernel }} -test-timeout 100m -vm-timeout 3h -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$M27_LEVEL1,$M29_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1"
       # The measurement record (plan §4.3, P2-AUDIT-07): one JSON line per check of every accuracy assertion. It is
       # kept for 90 days; `go run ./tools/measurements <dirs of downloaded artifacts>` compares the nights.
       - name: Summarize the measurement record

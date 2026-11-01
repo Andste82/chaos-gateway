@@ -145,6 +145,19 @@ var (
 )
 
 func TestTheScopesOfTheOperationsAreTheResultOfTheReview(t *testing.T) {
+	// the scopes the spec uses are exactly the ones the code knows: an unknown one would be no requirement at all
+	used := map[string]bool{}
+	for _, o := range allSpecOperations(t) {
+		used[o.Scope] = true
+	}
+	var usedList []string
+	for s := range used {
+		usedList = append(usedList, s)
+	}
+	sort.Strings(usedList)
+	if want := "full,none,overlays,read,service"; strings.Join(usedList, ",") != want {
+		t.Errorf("the scopes of the spec are %v, the code knows %s", usedList, want)
+	}
 	got := map[string][]string{}
 	for _, o := range allSpecOperations(t) {
 		if o.Public || o.Internal {

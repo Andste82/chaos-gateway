@@ -45,7 +45,9 @@ func (s Scope) Allows(need Scope) bool {
 	case need == ScopeService || s == ScopeService:
 		return s == need
 	}
-	return rank[s] >= rank[need] && rank[s] > 0
+	// a requirement that is no scope is not met by anybody (it would rank 0 and be met by every principal)
+	needRank, known := rank[need]
+	return known && rank[s] >= needRank && rank[s] > 0
 }
 
 // Valid reports whether s is a scope a user may give a token.

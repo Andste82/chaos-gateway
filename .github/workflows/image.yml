@@ -13,7 +13,9 @@ name: Image
 # The image is the whole gateway: chaosgw and chaosctl, the tools of the containers, Kea, BIRD, the
 # interception proxy and tcpdump (deploy/Dockerfile). Each platform is built, loaded and started
 # (deploy/smoke-image.sh: the arm64 image under qemu-user) before the multi-arch image is pushed,
-# so a broken image never gets a tag; the builds come from the cache of the build that pushes.
+# so a broken image never gets a tag; the builds come from the cache of the build that pushes. They are still separate builds: a layer
+# the Dockerfile does not pin (the apt packages besides Kea and BIRD, the transitive dependencies of pip) that is not in the cache is
+# built again and could differ, so the smoke test is of the cached build and no proof of the bytes that are pushed.
 # After the push the manifest is read back: both platforms must be in it. The workflow has not run on a release tag yet; the first
 # real run is the first release, which docs/release.md says to make a release candidate (v1.0.0-rc.1) first.
 

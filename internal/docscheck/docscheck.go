@@ -34,6 +34,7 @@ var Documents = []string{
 	"docs/cookbook.md",
 	"docs/troubleshooting.md",
 	"docs/recovery.md",
+	"docs/install.md",
 	"docs/release-notes/v1.0.0.md",
 }
 

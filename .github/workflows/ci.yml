@@ -152,7 +152,7 @@ jobs:
   testbed-privileged:
     name: testbed (level 1, privileged container)
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4

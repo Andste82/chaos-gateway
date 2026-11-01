@@ -160,6 +160,21 @@ func TestHostSetupKeepsAnExistingEnv(t *testing.T) {
 	if !strings.Contains(out, "/opt/chaosgw/.env is kept") {
 		t.Errorf("the setup does not say it kept .env:\n%s", out)
 	}
+	// the files are those of 2.0.0 and .env names 1.0.0: the setup says so and what to do
+	if !strings.Contains(out, "warning: chaos-gateway:2.0.0 is version 2.0.0, but /opt/chaosgw/.env names 1.0.0") || !strings.Contains(out, "update.sh --version 2.0.0") {
+		t.Errorf("no warning for a version that differs from .env:\n%s", out)
+	}
+	// the same version, or no version in .env and an image without a tag (latest), is no reason to warn
+	same := t.TempDir()
+	writeFile(t, filepath.Join(same, "opt/chaosgw/.env"), "CHAOSGW_VERSION=\"2.0.0\"\n")
+	if out, err := runWithDockerStub(t, stub, "--prefix", same, "--skip-docker", "--skip-modprobe", "--image", "chaos-gateway:2.0.0"); err != nil || strings.Contains(out, "warning") {
+		t.Errorf("the same version: %v\n%s", err, out)
+	}
+	unset := t.TempDir()
+	writeFile(t, filepath.Join(unset, "opt/chaosgw/.env"), "CHAOSGW_UI_PORT=9443\n")
+	if out, err := runWithDockerStub(t, stub, "--prefix", unset, "--skip-docker", "--skip-modprobe", "--image", "chaos-gateway"); err != nil || strings.Contains(out, "warning") {
+		t.Errorf("latest for latest: %v\n%s", err, out)
+	}
 	// --install-dir moves the whole deployment
 	other := t.TempDir()
 	if out, err := runWithDockerStub(t, stub, "--prefix", other, "--skip-docker", "--skip-modprobe", "--image", "chaos-gateway", "--install-dir", "/srv/gw"); err != nil {
@@ -167,6 +182,43 @@ func TestHostSetupKeepsAnExistingEnv(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(other, "srv/gw/compose.yaml")); err != nil {
 		t.Error(err)
+	}
+}
+
+// Running the setup again with another image replaces compose.yaml, which update.sh would have kept as compose.yaml.bak: so does the setup,
+// and only when the content differs.
+func TestHostSetupKeepsTheComposeFileItReplaces(t *testing.T) {
+	stub, dir := t.TempDir(), t.TempDir()
+	install := filepath.Join(dir, "opt/chaosgw")
+	writeFile(t, filepath.Join(install, "compose.yaml"), "services: {old: {}}\n")
+	out, err := runWithDockerStub(t, stub, "--prefix", dir, "--skip-docker", "--skip-modprobe", "--image", "chaos-gateway:1.0.0")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if bak, _ := os.ReadFile(filepath.Join(install, "compose.yaml.bak")); string(bak) != "services: {old: {}}\n" {
+		t.Errorf("compose.yaml.bak = %q: the installed file is kept", bak)
+	}
+	if got, _ := os.ReadFile(filepath.Join(install, "compose.yaml")); string(got) != "services: {}\n" {
+		t.Errorf("compose.yaml = %q", got)
+	}
+	if !strings.Contains(out, "the old one is kept as /opt/chaosgw/compose.yaml.bak") {
+		t.Errorf("the setup does not say it kept the old file:\n%s", out)
+	}
+	// the same content again: nothing to keep, and the backup of the first replacement stays
+	out, err = runWithDockerStub(t, stub, "--prefix", dir, "--skip-docker", "--skip-modprobe", "--image", "chaos-gateway:1.0.0")
+	if err != nil || strings.Contains(out, "is kept as") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if bak, _ := os.ReadFile(filepath.Join(install, "compose.yaml.bak")); string(bak) != "services: {old: {}}\n" {
+		t.Errorf("compose.yaml.bak = %q after a run that replaced nothing", bak)
+	}
+	// a first installation has nothing to keep
+	fresh := t.TempDir()
+	if out, err := runWithDockerStub(t, stub, "--prefix", fresh, "--skip-docker", "--skip-modprobe", "--image", "chaos-gateway:1.0.0"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(fresh, "opt/chaosgw/compose.yaml.bak")); err == nil {
+		t.Error("a first installation made a backup")
 	}
 }
 

@@ -90,7 +90,8 @@ It installs Docker if missing, loads the kernel modules now and at boot
 (`/etc/modules-load.d/chaos-gateway.conf`), enables IPv4 forwarding and the unprivileged ICMP socket of the ping of the diagnostics
 (`net.ipv4.ping_group_range`, M24) in `/etc/sysctl.d/90-chaos-gateway.conf`, makes the directories of the gateway's data (below), copies
 `compose.yaml`, `update.sh`, `host-setup.sh` and `env.example` out of the image into `/opt/chaosgw` (`--install-dir` changes it) and writes
-`/opt/chaosgw/.env`, which names the image and its version (an existing `.env` is kept), keeps systemd-networkd off each test interface
+`/opt/chaosgw/.env`, which names the image and its version (an existing `.env` is kept, and the setup warns when it names another version than
+`--image` does; a `compose.yaml` it replaces with other content is kept as `compose.yaml.bak`), keeps systemd-networkd off each test interface
 (below), prints the netplan changes the test interfaces need and ends with the check of each test interface. It never touches the uplink
 or the management configuration, or any netplan file, and it refuses, before it changes anything, a `--test-interface` that has the
 default route, an IPv4 address or an SSH session of the host (the one it runs in included): that is the uplink or the management interface

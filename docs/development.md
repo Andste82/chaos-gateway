@@ -7005,6 +7005,9 @@ at level 2 is the test of M28.
 | Tests: every table of the own range (100 to 109) is empty after the stop | `TestTeardownEmptiesTheRoutingTablesOfTheOwnRange`; level 1 `TestTheStopCleanupLeavesNothingOfTheGatewayOnTheRealKernel` (`ownTablesEmpty`, also for a gateway that was killed with an MTU fault active) |
 | Tests: shutdown order of plan §3.11, observers after the last apply | `TestTheAPIRemovesItsOverlaysWhenItStopsAndRecordsTheStop` (the observers still read while the last apply is held) |
 | Open item "Shutdown and host cleanup" | implemented (stop cleanup, teardown, purge of every volume) |
+| Audit of Phase 7 (P7-AUDIT-02, -04): a restart inside the confirmation window and safe mode are reported and audited | `TestARestartInsideTheConfirmationWindowTellsThatTheRevisionWasRolledBack`, `TestAStartAfterAnUnconfirmedSetupAuditsTheRollbackAndReopensTheSetup`, `TestSafeModeAtStartIsInTheAuditLog`, `TestSafeModeAndItsEndAreInTheAuditLog` |
+| Audit of Phase 7 (P7-AUDIT-03): the fallback revision gets its second try, and a transport error marks no revision | `TestATransientFailureOfTheLastKnownGoodRevisionIsTriedAgainBeforeSafeMode`, `TestAStartThatFailsBecauseTheExecutorIsNotThereMarksNoRevision` |
+| Audit of Phase 7 (P7-AUDIT-05, -06, -07): the stop cleanup on every end of the serving, `teardown --purge` and the API's lock, safe mode in the health report and the metrics | `TestExecRemovesEverythingItCreatedWhenTheListenerFails`, `TestPurgeRefusesWhileTheApiHasTheStoreOpen`, `TestInUseSaysWhetherAProcessHasTheStoreOpenAndCreatesNothing`, `TestSafeModeIsDegradedInTheHealthReportAndInTheMetricsAndStaysReachable` |
 
 ## Container deployment (M28)
 
@@ -7105,6 +7108,8 @@ Not run on the development machine (an unprivileged container without Docker, KV
 | Tests: the PID file reused by another real container process is refused (M6b-10) | level 2 (`holderPIDFileReusedByAnotherProcess`) |
 | Tests: Kea starts from compose, the API configures it, a client gets a lease, the hook posts with the real token (M6a-10) | level 2 |
 | Open items: S7 coexistence | level 2 (`netplan apply`, `systemd-networkd`, NetworkManager) |
+| Audit of Phase 7 (P7-AUDIT-12, -21): `update.sh` and a refused connection while the API container runs, the moved tag | `TestARefusedConnectionWhileTheAPIContainerRunsIsNotAGatewayWithoutARun`, `TestAnUpdateThatStopsAfterThePullSaysThatTheTagMovedAndHowToGoBack` |
+| Audit of Phase 7 (P7-AUDIT-17, -20): `host-setup.sh --image` keeps the file it replaces, Kea's start removes a stale socket and writes its configuration in one step | `TestHostSetupKeepsTheComposeFileItReplaces`, `TestKeaStartRemovesTheStaleControlSocketBeforeKeaStarts`, `TestKeaStartWritesTheFirstConfigurationInOneStep` |
 
 ## Security hardening (M29)
 
@@ -7277,6 +7282,13 @@ Level 2: the existing deployment tests follow the image's new default user (`--u
 | Tests: long fuzz runs on executor operations nightly | the workflow `nightly.yml` (job `fuzz`, `make fuzz FUZZTIME=45m`); `make fuzz` here |
 | Open items: M1 container image has no non-root user | the Dockerfile's `USER`; `TestEveryContainerNamesItsUserAndTheImageDefaultsToTheUnprivilegedOne` |
 | Open items: M5 certificate loaded once at start, SANs fixed | `Certificates` (looked up per handshake); the installed certificate has the names its owner chose |
+| Audit of Phase 7 (P7-AUDIT-27): a `protocol kernel` of BIRD names its table | `TestEveryKernelProtocolNamesItsTable`, `TestDecodeBirdRejects`, `FuzzDecode` (the oracle for a bird operation) |
+| Audit of Phase 7 (P7-AUDIT-28, -36): a secret download is recorded before it is sent | `TestAFailingAuditLogBlocksTheExport`, `TestTheDownloadOfSecretsOfACaptureIsAuditedBeforeItStarts` |
+| Audit of Phase 7 (P7-AUDIT-29, -30): `management.ui_port` from 1024, a scope the spec does not know is refused | `TestAPrivilegedUIPortIsRefused`, `TestTheSpecWithAnUnknownScopeIsRefused`, `TestScopesInclude`, `TestTheScopesOfTheOperationsAreTheResultOfTheReview` |
+| Audit of Phase 7 (P7-AUDIT-31): no string field of an operation takes a metacharacter | `TestNoStringFieldOfAnyOperationTakesAMetacharacter`, `TestEveryStringFieldOfEveryOperationIsInASeed` |
+| Audit of Phase 7 (P7-AUDIT-34, -35): sessions are swept and capped, the certificate files are replaced and not written in place | `TestLoginSweepsExpiredSessionsAndCapsTheirNumber`, `TestTheCertificateFilesAreReplacedAndNotWrittenInPlace` |
+| Audit of Phase 7 (P7-AUDIT-37, -39): the named volumes each container may mount, the paths of the secret search come from the spec | `TestTheContainersMountOnlyTheNamedVolumesTheReviewAllows`, `TestNoSecretIsInAResponseAnEventAnAuditEntryOrALog` |
+| Audit of Phase 7 (P7-AUDIT-32, -60, -61, -62, -67, -68): the wiring of CI and of the release workflow | `TestTheNightlyFuzzJobRunsTheFileTargetAsRootAndKeepsItsCorpus`, `TestTheRegressionTestsOfM4AreInALevel1List`, `TestTheNightlyLevel2JobFailsUnlessEachOfItsTestsPassed`, `TestTheCIRunsOfMainAreNeverCancelled`, `TestEveryJobHasATimeoutAboveTheLimitsInsideIt`, `TestTheActionsOfTheReleaseWorkflowArePinnedToACommit`; the release rules: `TestTheNewestReleaseDecidesWhoGetsLatest`, `TestTheReleaseWorkflowRequiresASuccessfulCIRunOfTheTaggedCommit` |
 
 ## Generated code
 

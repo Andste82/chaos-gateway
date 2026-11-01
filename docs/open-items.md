@@ -56,6 +56,12 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   covers the fix commits and the CI round after the audit and is green in every job. The open items are
   under [Phase 6 open items](#phase-6-open-items) at the end of the file. P6-M24-01 (the destinations of a diagnostic) and P6-M25-01 (probe management in the web UI and with
   `chaosctl`, which is M26a) were decided by the maintainer on 2026-10-28 (option (a) each) and are closed; P6-M26a-01 (whether M26a belongs to V1) was decided by the maintainer on 2026-10-29 (option (a): part of V1) and is closed. No item of Phase 6 is open.
+- **Phase 7** (M27 to M30: recovery, container deployment, security hardening, documents and the V1 release notes; merged to `main` with PR #127 on 2026-10-31, `be6671a`): audited on
+  2026-11-01 at `5d1ed45` by five reviewers. The result is in [Phase 7 audit result](#phase-7-audit-result), right before the Phase 7 open items: 12 items of major and 58 of
+  minor severity, P7-AUDIT-01 to P7-AUDIT-70. The round after the audit closed them in the pull requests #135 to #139 (and the closure that records them): fixed with a test, fixed differently, accepted
+  with a reason, or deferred to M38 (the preflight clauses of §3.3/§3.4 and the expiry warning of the installed certificate), see the verdict table. The five
+  items the phase raised, P7-M27-01, -02, P7-M28-01, P7-M29-01 and -02, were decided by the maintainer on 2026-10-31 and are closed. Two items are open: P7-M27-05 (what the engine does when the active revision fails twice
+  because the executor is not there; needs the maintainer) and P7-CI-01 (three timing tests of the weekly emulated jobs, not caused by Phase 7).
 
 ## Phase 1 audit result
 
@@ -3220,6 +3226,139 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is comple
 - Needs maintainer: yes
 - Effort: S
 
+## Phase 7 audit result
+
+Date: 2026-11-01. Audited on `main` at `5d1ed45` (Phase 7 merged with PR #127 on 2026-10-31 and the follow-up PRs #128 to #134), against `docs/plan.md` §5
+Phase 7 (M27 to M30) and the sections it names, `api/openapi.yaml`, `docs/development.md` (the sections for M27 to M30), the Phase 7 open items and the
+earlier audits in this file. Five independent reviewers read the phase, one per milestone (M27 recovery, M28 container deployment, M29 security
+hardening, M30 documents) and one across them (the coverage of every clause by code, test and CI job; the plan, the open items and the CI wiring).
+The audit changed nothing in the repository; it ran the level 0 tests, `make test-docs`, the six fuzz targets for 20 seconds each and throwaway tests in scratch
+copies. No level 1 or level 2 test was run by the reviewers (no KVM, no network namespaces here); CI ran them. The four findings that looked
+most serious were checked in the code before they were counted (the BIRD kernel table, the secret downloads that fail open, the restart inside the confirmation
+window, the loopback binding of a safe mode without a revision), and all four were real.
+
+**Phase 7 was implemented and its tests passed, but it was not clean.** The audit found 70 items, 12 of major and 58 of minor severity
+(P7-AUDIT-01 to -70; two are duplicates of another item). The core held: the teardown and the stop, the store's fallback, the executor's operation
+decoder and its fuzz targets, the container sandboxes against the table of §3.8, the scripts' token handling, the level 2 deployment test and the
+documents' claims about the spec. The major items were at the edges: a restart inside the confirmation window that nobody was told about
+(P7-AUDIT-02), a safe mode with no revision whose API could be reached from the loopback only (-01), a BIRD configuration that could write the host's main
+routing table (-27), secret downloads that left although the audit log could not be written (-28), release notes and recovery instructions that said
+something the product does not do (-42, -43, -44, -56), status lines that contradicted the CI runs (-57), a weekly job that was red while the documents
+called it done (-58), a release workflow that moved `latest` for any tag (-59), and three preflight clauses the plan promised and nothing delivered (-11).
+
+The maintainer decided four questions on 2026-11-01 (the audit's options (a), as recommended): P7-AUDIT-01 (the API of a safe mode without a readable revision stays
+on the loopback, the documents say how to reach it), P7-AUDIT-11 (the missing preflight clauses move to M38), P7-AUDIT-29 (`management.ui_port` has a
+minimum of 1024) and P7-AUDIT-68 (the actions of `image.yml` are pinned by commit, the other workflows stay as they are).
+
+**Result of the round after the audit (2026-11-01).** The findings were closed in five pull requests, each merged to `main` once its fast CI jobs were
+green: PR #135 (the documents and their tests), #136 (the deployment scripts and the preflight), #137 (the CI and release wiring), #138 (security) and
+#139 (recovery); the scripts and the release workflow of PR #134 answer a part of them. Every fix that is code has a test that failed without it.
+
+| Verdict | Count | Items |
+|---|---|---|
+| Fixed (a test or check that fails without the fix) | 48 | P7-AUDIT-02, 03, 04, 05, 06, 07, 12, 13, 14, 17, 19, 20, 21, 22, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 53, 54, 55, 58, 59, 60, 61, 62, 63, 67, 68 |
+| Fixed differently (the document or the limit changed, not the code) | 6 | P7-AUDIT-01, 16, 24, 25, 33, 69 |
+| Fixed by this closure (plan, README, open items) | 7 | P7-AUDIT-10, 15, 23, 52, 57, 64, 65 |
+| Accepted, with the reason | 5 | P7-AUDIT-08, 09, 18, 40, 70 |
+| Deferred to M38 | 2 | P7-AUDIT-11, 41 |
+| Duplicate of another item | 2 | P7-AUDIT-56, 66 |
+
+Major items: P7-AUDIT-01, P7-AUDIT-02, P7-AUDIT-11, P7-AUDIT-27, P7-AUDIT-28, P7-AUDIT-42, P7-AUDIT-43, P7-AUDIT-44, P7-AUDIT-56, P7-AUDIT-57, P7-AUDIT-58, P7-AUDIT-59.
+
+### Items
+
+| Id | Area | Severity | Finding | Verdict |
+|---|---|---|---|---|
+| P7-AUDIT-01 | M27 | major | Safe mode without a readable revision serves the API on the loopback only, so "management access only" was untrue for that case | fixed differently: decided by the maintainer on 2026-11-01 (the API stays on the loopback, the safe choice for a state that exists only when the store is broken): `docs/recovery.md` and `docs/install.md` say how to reach it (PR #135) |
+| P7-AUDIT-02 | M27 | major | A restart inside the confirmation window gave no `revision_rolled_back` event, no audit entry and no reopened setup (the test restarted on the same store object) | fixed: PR #139: `Store.RolledBackAtOpen`, the engine publishes the event; `TestARestartInsideTheConfirmationWindowTellsThatTheRevisionWasRolledBack`, `TestAStartAfterAnUnconfirmedSetupAuditsTheRollbackAndReopensTheSetup` |
+| P7-AUDIT-03 | M27 | minor | The fallback revision gets no second try and one failed attempt marks it boot-failed for good | fixed: PR #139 (`TestATransientFailureOfTheLastKnownGoodRevisionIsTriedAgainBeforeSafeMode`, `TestAStartThatFailsBecauseTheExecutorIsNotThereMarksNoRevision`); the active revision failing twice with a transport error still falls back, see P7-M27-05 |
+| P7-AUDIT-04 | M27 | minor | The audit subscriber can miss the events of the start; safe mode is never audited | fixed: PR #139: `SubscribeFrom(0)`, `service.safe_mode`, `service.safe_mode_ended` (`TestSafeModeAtStartIsInTheAuditLog`, `TestSafeModeAndItsEndAreInTheAuditLog`) |
+| P7-AUDIT-05 | M27 | minor | A signal during the host checks, and a failed `Serve`, skip the stop cleanup | fixed: PR #139 (`TestExecRemovesEverythingItCreatedWhenTheListenerFails`); a failed Listen stays without cleanup on purpose, another executor may be serving |
+| P7-AUDIT-06 | M27 | minor | `teardown --purge` refuses only while an executor answers, not while the API has the store open | fixed: PR #139: `store.InUse` (`TestPurgeRefusesWhileTheApiHasTheStoreOpen`) |
+| P7-AUDIT-07 | M27 | minor | Safe mode is invisible to the health report and the metrics | fixed: PR #139: `degraded` with the reason, gauge `chaosgw_safe_mode` (`TestSafeModeIsDegradedInTheHealthReportAndInTheMetricsAndStaysReachable`) |
+| P7-AUDIT-08 | M27 | minor | The state removal of an unreadable only revision runs synchronously, up to 30 s before the API is up | accepted: asynchronous removal would race with a revision the administrator applies meanwhile; a hung executor blocks `Engine.Start` earlier anyway |
+| P7-AUDIT-09 | M27 | minor | BIRD routes in tables 100 to 110 survive an unclean BIRD exit; teardown and `Leftovers` act on protocol 201 only | accepted: a protocol bird delete would widen the executor's scope; `persist off` removes the routes on a clean exit; not verified that the next BIRD start prunes them (a level 1 check: SIGKILL BIRD, then teardown) |
+| P7-AUDIT-10 | M27 | minor | Stale status text and a wrong test name in the M27 acceptance map | fixed by the closure: the test name is corrected and `TestEveryTestTheDevelopmentGuideNamesInATableExists` keeps it so (PR #135); the status lines with this closure |
+| P7-AUDIT-11 | M28 | major | The preflight lacks three clauses of §3.3/§3.4: the mark users, the uplink address and gateway, the offloads and `DOCKER-USER` in the report | deferred to M38: decided by the maintainer on 2026-11-01: they move to M38 (After V1); §3.3, §3.4 and the M38 row say so, and `internal/apply/verify.go` checks offloads and `DOCKER-USER` meanwhile |
+| P7-AUDIT-12 | M28 | minor | `update.sh` treats a refused connection as "no run is active" even when the API container runs on another port | fixed: PR #136: it asks `docker compose ps -q api` first |
+| P7-AUDIT-13 | M28 | minor | `update.sh` validates the new `compose.yaml` without `compose.override.yaml` and never checks the bind sources | fixed: PR #136 |
+| P7-AUDIT-14 | M28 | minor | The preflight reports the gateway's own `netdev chaosgw_dup` table as another firewall | fixed: PR #136 |
+| P7-AUDIT-15 | M28 | minor | The documents say the level 2 tests have not run and that Phase 7 is not merged | fixed by the closure: with this closure |
+| P7-AUDIT-16 | M28 | minor | `docs/development.md` says the directory of the service token is 0750; the host setup makes it 0755 | fixed differently: PR #135: the document says what is made (0755 by the host setup); the file's mode 0640 is what protects the token |
+| P7-AUDIT-17 | M28 | minor | `host-setup.sh --image` replaces `compose.yaml` and the scripts without a backup | fixed: PR #136: `compose.yaml.bak`, a warning when the version differs from `.env` |
+| P7-AUDIT-18 | M28 | minor | `image.yml`: the smoke-tested image is not the pushed one (separate builds, unpinned layers) | accepted: a comment in `image.yml` says so (PR #137); building once and pushing that build is a change of the workflow for a later release |
+| P7-AUDIT-19 | M28 | minor | `image.yml`: weak guards on tags and releases (any `v*`, `latest` moves for any tag, a manual run can take `latest`, no CI requirement) | fixed: PR #134 (tag check, manual-run guard, manifest check) and PR #137 (pre-release tags, `latest` only for the newest tag, CI must have passed on the commit) |
+| P7-AUDIT-20 | M28 | minor | Kea: the health check can pass on a stale socket; the first configuration is written in place | fixed: PR #136 (`tools/deployscripts/kea_start_test.go`) |
+| P7-AUDIT-21 | M28 | minor | `update.sh` pulls before it waits: an exit or `--check` leaves the tag on the new image under the old containers | fixed: PR #136: the messages name the moved tag, the old image id and the way back |
+| P7-AUDIT-22 | M28 | minor | `smoke-compose.sh` asserts neither the added capabilities nor `no-new-privileges` | fixed: PR #136; the job `deployment` passed with the new assertions against a real `docker inspect` |
+| P7-AUDIT-23 | M28 | minor | Plan §3.8 gives `tls` the capability `NET_BIND_SERVICE`; the container has none | fixed by the closure: with this closure |
+| P7-AUDIT-24 | M28 | minor | `host-setup.sh` rejects an image reference by digest | fixed differently: PR #135: the documents say an image is named by tag and how to pin one build (`docker tag`) |
+| P7-AUDIT-25 | M28 | minor | Old images are never mentioned or removed | fixed differently: PR #135: `docs/install.md` says that every update leaves one and how to remove it |
+| P7-AUDIT-26 | M28 | minor | `host.data.*` covers only 3 of the 8 data directories | fixed: PR #136: the API checks the directories it owns at start (`checkOwnedDirs`) and names the fix |
+| P7-AUDIT-27 | M29 | major | The BIRD configuration check lets `protocol kernel` through without `kernel table`, which writes the main table 254 | fixed: PR #138 (`TestEveryKernelProtocolNamesItsTable`, `TestDecodeBirdRejects`, `FuzzDecode`) |
+| P7-AUDIT-28 | M29 | major | Three of the five secret downloads are sent although the audit log cannot be written | fixed: PR #138 (`TestAFailingAuditLogBlocksTheExport` covers all five) |
+| P7-AUDIT-29 | M29 | minor | `management.ui_port` below 1024 locks the administrator out (the API has no capabilities) | fixed: PR #138: `minimum: 1024` in the spec (`TestAPrivilegedUIPortIsRefused`) |
+| P7-AUDIT-30 | M29 | minor | An unknown scope in the spec fails open to `read` | fixed: PR #138 (`TestTheSpecWithAnUnknownScopeIsRefused`, `TestScopesInclude`) |
+| P7-AUDIT-31 | M29 | minor | `FuzzDecode` did not find a validator that accepts `;` | fixed: PR #138 (`TestNoStringFieldOfAnyOperationTakesAMetacharacter`, `TestEveryStringFieldOfEveryOperationIsInASeed`; a mutation of `devName` is caught without fuzzing time) |
+| P7-AUDIT-32 | M29 | minor | The nightly fuzz job cannot reach the file path of `FuzzCaptureOpenFiles` and keeps no corpus | fixed: PR #137 (root target, corpus cache); not shown on a runner yet |
+| P7-AUDIT-33 | M29 | minor | The document says 0750 for the service directory | fixed differently: same as P7-AUDIT-16 |
+| P7-AUDIT-34 | M29 | minor | Expired sessions are never swept and their number has no cap | fixed: PR #138 (`TestLoginSweepsExpiredSessionsAndCapsTheirNumber`) |
+| P7-AUDIT-35 | M29 | minor | `key.pem` and `cert.pem` are written in place, `cert.pem` as 0644 | fixed: PR #138 (`TestTheCertificateFilesAreReplacedAndNotWrittenInPlace`) |
+| P7-AUDIT-36 | M29 | minor | The download of a key log or of a sensitive capture is not audited | fixed: PR #138: `capture.download_secret` (`TestTheDownloadOfSecretsOfACaptureIsAuditedBeforeItStarts`) |
+| P7-AUDIT-37 | M29 | minor | The container review does not pin which container mounts which named volume | fixed: PR #138 (`TestTheContainersMountOnlyTheNamedVolumesTheReviewAllows`) |
+| P7-AUDIT-38 | M29 | minor | The level 1 security test has no positive control for the blocked sources | fixed: PR #138; compiled and vetted with `-tags testbed` only, level 1 has to show it |
+| P7-AUDIT-39 | M29 | minor | The secret-free search reads 49 hand-listed paths, not every read operation | fixed: PR #138: 60 paths for the full token and 59 for read, derived from the spec |
+| P7-AUDIT-40 | M29 | minor | The setup token is written to the log | accepted: plan §2.16 prescribes it and the host setup and the level 2 tests read it from there |
+| P7-AUDIT-41 | M29 | minor | An installed HTTPS certificate that expires is neither flagged nor replaced | deferred to M38: a feature, not a defect of M29: a warning in the preflight, the health report and the web app moves to M38 |
+| P7-AUDIT-42 | M30 | major | The release notes say the Kea container runs without `no-new-privileges` | fixed: PR #135 (`TestTheReleaseNotesNameNoContainerExceptionTheComposeFileDoesNotHave`) |
+| P7-AUDIT-43 | M30 | major | The restore instruction cannot work with the backup the document tells you to make (YAML, no `If-Match`, no content type) | fixed: PR #135: a JSON backup and a restore example that runs in `make test-docs` |
+| P7-AUDIT-44 | M30 | major | The list of the files of a whole installation leaves out `service`, `tlsca` and `exec`; the export does not carry the test CAs | fixed: PR #135 |
+| P7-AUDIT-45 | M30 | minor | "Both write the result into their logs" is untrue for the API | fixed: PR #135 |
+| P7-AUDIT-46 | M30 | minor | "The revision's `last_apply`" does not exist | fixed: PR #135 |
+| P7-AUDIT-47 | M30 | minor | The recovery text does not name `last_known_good` | fixed: PR #135 |
+| P7-AUDIT-48 | M30 | minor | "`.env` is never touched" is wrong | fixed: PR #135 |
+| P7-AUDIT-49 | M30 | minor | The document checks do not cover `docs/install.md` | fixed: PR #135: its 24 blocks are labelled and checked |
+| P7-AUDIT-50 | M30 | minor | The uninstall instructions run the teardown while the stack runs | fixed: PR #134: `uninstall.sh` stops the stack first |
+| P7-AUDIT-51 | M30 | minor | `certificate show` is listed under the scope `full` | fixed: PR #135 |
+| P7-AUDIT-52 | M30 | minor | The status paragraph of the README stops at Phase 4 | fixed by the closure: with this closure |
+| P7-AUDIT-53 | M30 | minor | The release notes claim the packet plane of x86-64 is measured | fixed: PR #135 |
+| P7-AUDIT-54 | M30 | minor | The release notes list the generated clients as part of the release | fixed: PR #135 |
+| P7-AUDIT-55 | M30 | minor | Step 1 for a host without Docker leaves `IMAGE` unset | fixed: PR #135 |
+| P7-AUDIT-56 | cross | major | The release notes say the Kea container runs without `no-new-privileges` | duplicate: same as P7-AUDIT-42 |
+| P7-AUDIT-57 | cross | major | The status lines of the plan and of the open items say "not merged yet" and "not run yet" | fixed by the closure: with this closure |
+| P7-AUDIT-58 | cross | major | The weekly arm64 job is red, but the documents call it done | fixed: PR #133 (`ipxe-qemu`); the job passed in Weekly run 41314639507; the Weekly as a whole stays red for another reason, see P7-CI-01 |
+| P7-AUDIT-59 | cross | major | `image.yml` can publish release tags from any ref or commit | fixed: PR #134 and PR #137, see P7-AUDIT-19 |
+| P7-AUDIT-60 | cross | minor | `TestGatewayProtection` and `TestRolesDecideWhoReachesTheControlPlane` are in no `-expect-pass` list | fixed: PR #137: both are in `M29_LEVEL1` |
+| P7-AUDIT-61 | cross | minor | The nightly level 2 job has no equivalent of `-expect-pass`; a skipped test leaves it green | fixed: PR #137: each test must print `--- PASS` (`TestTheNightlyLevel2JobFailsUnlessEachOfItsTestsPassed`); the first nightly run on `main` after it has to show it |
+| P7-AUDIT-62 | cross | minor | A push to `main` cancels the CI run of the commit before it | fixed: PR #137 (`TestTheCIRunsOfMainAreNeverCancelled`) |
+| P7-AUDIT-63 | cross | minor | A test name in the M27 acceptance map does not exist | fixed: PR #135, see P7-AUDIT-10 |
+| P7-AUDIT-64 | cross | minor | Other stale claims: "`image.yml` has not run", the 20-minute budget of `make test` | fixed by the closure: with this closure (and PR #135) |
+| P7-AUDIT-65 | cross | minor | The index at the top of this file has no Phase 7 | fixed by the closure: with this closure |
+| P7-AUDIT-66 | cross | minor | The README status line stops at Phase 4 | duplicate: same as P7-AUDIT-52 |
+| P7-AUDIT-67 | cross | minor | The budget of the VM job is thin (152 of 180 minutes), only 3 jobs have a `timeout-minutes` | fixed: PR #137: every job has one, chosen from the observed maxima |
+| P7-AUDIT-68 | cross | minor | The third-party actions of the release job are pinned by tag only | fixed: PR #137: pinned by commit in `image.yml` |
+| P7-AUDIT-69 | cross | minor | Nothing in the release procedure makes the package public | fixed differently: PR #134: `docs/release.md` says it; the setting in GitHub is the maintainer's |
+| P7-AUDIT-70 | cross | minor | Fuzz crashers are uploaded as public artifacts before triage | accepted: the repository is public and a crasher is a reproducer for the privileged interface: the maintainer triages a failed nightly fuzz run before anyone else fetches the artifact (see the remaining points) |
+
+### Phase 7 audit: what only a run on the real thing can prove
+
+These fixes are tested at level 0 and wait for a run that is not available on the development machine; the CI run on `main` and the nightly run show them
+(the status lines of M27 to M30 in `docs/plan.md` say which have been seen):
+
+- P7-AUDIT-38: the pings from the uplink and from device A to the management address of the test in `internal/api/e2e_security_test.go` (level 1).
+- P7-AUDIT-03, -05, -06: the executor reconnecting after a transport error, a SIGTERM during the host checks, and the lock of the revisions across two containers (levels 1 and 2).
+- P7-AUDIT-20 and -26: Kea started from the real image with the new `kea-start.sh`, and the API with a data directory of the wrong owner (the job `deployment` and the nightly level 2 run).
+- P7-AUDIT-13: the mount check of `update.sh` on a real update.
+- P7-AUDIT-32, -59, -61: `sudo -E` and the corpus cache of the fuzz job on a hosted runner, the CI check and the `gh release` flags on the first tag push, and the `--- PASS` check under a real nightly run.
+- P7-AUDIT-67: the new timeouts are estimates from the observed maxima.
+
+### Phase 7 audit: remaining points
+
+- The active revision that fails twice with a transport error still falls back, and `Restore` then makes the older revision active for good: P7-M27-05 (needs the maintainer).
+- The weekly emulated level 1b jobs are red, for three tests that have nothing to do with Phase 7: P7-CI-01.
+- The reviewers' scratch tests were not kept; the fix tests are the ones listed above.
+- Fuzz crashers of the nightly job are public artifacts of a public repository (P7-AUDIT-70, accepted): triage a failed nightly fuzz run before anyone fetches its artifact.
+
 ## Phase 7 open items
 
 ### P7-M29-01 Who reviews the executor's interface from outside, when, and for how long
@@ -3314,3 +3453,29 @@ Phase 6 (M24 to M26a, diagnostics, observability and probe management) is comple
 - Acceptance: the chosen test kills the process while a request is running and finds the committed revision in the kernel afterwards.
 - Needs maintainer: no
 - Effort: M
+
+### P7-M27-05 The active revision that fails twice because the executor is not there is replaced by an older one for good
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. Found while closing P7-AUDIT-03. At start the engine applies the active revision and tries once more after ten seconds; if the second try fails too, it falls back to the last known good revision, and `Store.Restore` makes that one the active revision for good. The fix of P7-AUDIT-03 treats a transport error (executor not there, connection refused or reset, EOF, deadline) as transient for the *fallback* revision, so it is retried and marks nothing. For the *active* revision a transport error is still counted like a refusal by the kernel. The cause of a transport error is the host (the executor container is restarting, or is not up yet), not the revision, and decision 2 of Phase 7 says that a transient failure must not roll a configuration back. A host whose executor needs longer than the two tries to come up (after a power loss, on a Raspberry Pi with a slow SD card) loses its newest configuration in favour of an older one without a word but the log line and the event.
+- Evidence: `internal/engine/recovery.go` (`bootResult`, `enterSafeMode`), `internal/engine/owner.go` (`retry`), `internal/store/recovery.go` (`Restore`), the report of the recovery fixes of PR #139.
+- Task: decide what the engine does when the active revision fails twice with a transport error.
+- Options: (a) leave it as it is: two tries ten seconds apart, then the fallback; a slow host is rare and the log and the event say what happened; (b) a transport error never leads to the fallback: the engine keeps retrying with a growing delay (up to a minute) and stays in a state that the API reports as "starting" and the health report as degraded, and only a failure the kernel or the tools report (a `RemoteError`, a command failure) falls back after the second try.
+- Recommendation: (b): the fallback is for a revision that does not work, and an executor that is not there says nothing about the revision. The cost is a gateway that has no configuration applied for as long as the executor is down, which is the case anyway.
+- Acceptance: for (b) a test where the executor is down for longer than two tries and comes back applies the active revision and leaves the store as it was; a refusal by the kernel still falls back.
+- Needs maintainer: yes
+- Effort: S to M
+
+### P7-CI-01 The weekly emulated level 1b jobs fail for three tests
+
+- Status: open
+- Severity: minor
+- Reason: not caused by Phase 7, found while closing P7-AUDIT-58. The Weekly run 41314639507 (2026-11-01, on `c2a90c8`) passed the arm64 appliance job and failed both emulated level 1b jobs: `TestDNSQuerySeenDecidesForADeviceOnTheRealKernel` ("no device of the target asked for example.test in the window of 8s"; the same message failed the Weekly run 40177095678 of 2026-10-25, before Phase 7), and `TestADeviceFaultStaysAttachedAfterTheForcedNewIPOnTheRealKernel` and `TestAHostnameFaultStillActsAfterTheForcedNewIPWithoutANewQueryOnTheRealKernel` in the engine job (the engine log shows "an identity update failed: applying everything ... context canceled" after 14 seconds of a full apply under emulation). The tests pass in the VM job of CI (with KVM); the emulated machine has no KVM and is much slower, and each of the three has a window or a deadline that the slowness can miss (not measured; this is the reading of the logs). The weekly jobs are not a gate of the merge rule.
+- Evidence: Weekly runs 41314639507 and 40177095678, `internal/api/e2e_dns_test.go:511`, `internal/api/e2e_checks_test.go:306`, `internal/engine/integration_dhcpactions_test.go:324`.
+- Task: decide what the weekly emulated jobs are for and make them green, or stop them from failing for timing.
+- Options: (a) widen the windows of the three tests when the harness runs emulated; (b) leave the three tests to the KVM jobs and skip them in the emulated ones with a reason (the emulated job exists for the kernel versions and the architecture, not for timing); (c) leave it and read the weekly result as informational.
+- Recommendation: (a) for the DNS test (its window is the one thing the emulation changes), (b) for the two forced-new-IP tests if (a) does not make them stable in two weekly runs.
+- Acceptance: two weekly runs on `main` in a row are green in every job.
+- Needs maintainer: no
+- Effort: S to M

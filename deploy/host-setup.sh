@@ -14,8 +14,9 @@
 #     the unprivileged ICMP socket the ping of the diagnostics uses (net.ipv4.ping_group_range, M24),
 #   - for every --test-interface: writes the rule that keeps systemd-networkd off it
 #     (/etc/systemd/network/10-chaosgw-<interface>.network, issue #64) and checks it (as --check),
-#   - with --image, copies compose.yaml, update.sh, host-setup.sh and env.example out of that image into /opt/chaosgw and writes the .env that
-#     names the image (never over an existing one),
+#   - with --image, copies compose.yaml, update.sh, host-setup.sh and env.example out of that image into /opt/chaosgw (a compose.yaml of
+#     other content than the installed one is kept as compose.yaml.bak) and writes the .env that names the image (never over an
+#     existing one: the setup warns when that one names another version than the image's),
 #   - prints the netplan changes the test interfaces need and what to do next.
 # What it never does: touch the uplink or the management configuration, or any netplan file. It refuses a
 # --test-interface that carries the host's own connection (the default route, an IPv4 address, an SSH
@@ -283,17 +284,41 @@ install_files() { # image
 		esac
 		;;
 	esac
-	mkdir -p "$PREFIX$INSTALL_DIR"
-	if ! docker run --rm --entrypoint tar "$ref" -C /usr/local/share/chaosgw -cf - compose.yaml update.sh host-setup.sh env.example install.sh uninstall.sh | tar -xf - -C "$PREFIX$INSTALL_DIR" --no-same-owner; then
+	dest=$PREFIX$INSTALL_DIR
+	mkdir -p "$dest"
+	# the files are read into a directory of their own first: compose.yaml is compared with the installed one before it is replaced,
+	# and a script is replaced by a rename (this one may be the file that is running)
+	files=$(mktemp -d) || return 1
+	if ! docker run --rm --entrypoint tar "$ref" -C /usr/local/share/chaosgw -cf - compose.yaml update.sh host-setup.sh env.example install.sh uninstall.sh | tar -xf - -C "$files" --no-same-owner; then
+		rm -rf "$files"
 		echo "host-setup: cannot copy the files of the deployment out of $ref" >&2
 		return 1
 	fi
-	chmod 0755 "$PREFIX$INSTALL_DIR/update.sh" "$PREFIX$INSTALL_DIR/host-setup.sh" "$PREFIX$INSTALL_DIR/install.sh" "$PREFIX$INSTALL_DIR/uninstall.sh"
+	# a compose.yaml of another content replaces the installed one: the old one is kept, as update.sh keeps it
+	if [ -f "$dest/compose.yaml" ] && ! cmp -s "$files/compose.yaml" "$dest/compose.yaml"; then
+		cp -p "$dest/compose.yaml" "$dest/compose.yaml.bak"
+		say "the compose.yaml of $INSTALL_DIR differs from the one of $ref: the old one is kept as $INSTALL_DIR/compose.yaml.bak"
+	fi
+	for f in compose.yaml update.sh host-setup.sh env.example install.sh uninstall.sh; do
+		if ! { cp "$files/$f" "$dest/$f.new" && mv -f "$dest/$f.new" "$dest/$f"; }; then
+			rm -rf "$files"
+			echo "host-setup: cannot write $INSTALL_DIR/$f" >&2
+			return 1
+		fi
+	done
+	rm -rf "$files"
+	chmod 0755 "$dest/update.sh" "$dest/host-setup.sh" "$dest/install.sh" "$dest/uninstall.sh"
 	say "copied compose.yaml, update.sh, host-setup.sh, install.sh, uninstall.sh and env.example from $ref to $INSTALL_DIR"
-	if [ -e "$PREFIX$INSTALL_DIR/.env" ]; then
+	if [ -e "$dest/.env" ]; then
 		say "$INSTALL_DIR/.env is kept; it names the image: check CHAOSGW_IMAGE and CHAOSGW_VERSION"
+		# .env keeps naming the version of the earlier setup, and the files just copied are those of this image: docker compose up -d
+		# would start the containers of one version with the compose.yaml of another
+		have=$(sed -n 's/^CHAOSGW_VERSION=//p' "$dest/.env" | tail -n 1 | tr -d ' \t\r"'"'")
+		if [ "${have:-latest}" != "$tag" ]; then
+			echo "host-setup: warning: $ref is version $tag, but $INSTALL_DIR/.env names ${have:-latest} (CHAOSGW_VERSION): compose.yaml is now the one of $tag, and docker compose up -d would start ${have:-latest} with it; set CHAOSGW_VERSION=$tag in .env, or run update.sh --version $tag" >&2
+		fi
 	else
-		printf '# Written by the Chaos Gateway host setup; env.example lists the settings.\nCHAOSGW_IMAGE=%s\nCHAOSGW_VERSION=%s\n' "$name" "$tag" >"$PREFIX$INSTALL_DIR/.env"
+		printf '# Written by the Chaos Gateway host setup; env.example lists the settings.\nCHAOSGW_IMAGE=%s\nCHAOSGW_VERSION=%s\n' "$name" "$tag" >"$dest/.env"
 		say "wrote $INSTALL_DIR/.env (image $name, version $tag)"
 	fi
 }

@@ -278,7 +278,7 @@ func TestTheNightlyLevel2JobFailsUnlessEachOfItsTestsPassed(t *testing.T) {
 			t.Fatal(err)
 		}
 		stub := "cat '" + out + "'\nexit " + strconv.Itoa(c.code) + "\n"
-		got, code := runScript(t, step.Run, nil, map[string]string{"go": stub})
+		got, code := runScript(t, step.Run, nil, map[string]string{"go": stub}, nil)
 		if code != c.want || !strings.Contains(got, c.report) {
 			t.Errorf("%s: exit %d, want %d, with %q\n%s", name, code, c.want, c.report, got)
 		}
@@ -300,18 +300,20 @@ func TestTheInstallationGuideNamesTheFilesAndCommandsOfTheDeployment(t *testing.
 // the files of the deployment are attached to the release of a tag.
 func TestAPreReleaseTagDoesNotMoveLatestAndMakesAPreRelease(t *testing.T) {
 	image := read(t, ".github", "workflows", "image.yml")
+	// :latest is decided by deploy/release-check.sh --is-newest (never for a pre-release, only for the highest release version), and the
+	// version tags that move (:1.2 and :1) are never those of a pre-release
 	latest := regexp.MustCompile(`type=raw,value=latest,enable=(.*)`).FindStringSubmatch(image)
 	if latest == nil {
 		t.Fatal("image.yml does not tag :latest")
 	}
-	for _, want := range []string{"startsWith(github.ref, 'refs/tags/v')", "!contains(github.ref_name, '-')"} {
-		if !strings.Contains(latest[1], want) {
-			t.Errorf(":latest is enabled by %q, which lacks %q: a release candidate would move it", latest[1], want)
-		}
+	if want := "${{ steps.newest.outputs.latest == 'true' }}"; latest[1] != want {
+		t.Errorf(":latest is enabled by %q, want %q: a release candidate or a hotfix of an older line would move it", latest[1], want)
 	}
-	create := regexp.MustCompile(`gh release create .*`).FindString(image)
-	if create == "" || !strings.Contains(create, "$flags") || !strings.Contains(image, `*-*) flags="--prerelease"`) {
-		t.Errorf("image.yml creates the release without --prerelease for a tag with a hyphen: %q", create)
+	for _, pattern := range []string{"{{major}}.{{minor}}", "{{major}}"} {
+		m := regexp.MustCompile(`type=semver,pattern=` + regexp.QuoteMeta(pattern) + `,enable=(.*)`).FindStringSubmatch(image)
+		if m == nil || !strings.Contains(m[1], "!contains(github.ref_name, '-')") {
+			t.Errorf("the tag %s of image.yml is not disabled for a pre-release: %q", pattern, m)
+		}
 	}
 	for _, want := range []string{"gh release upload", "compose.yaml host-setup.sh install.sh update.sh uninstall.sh env.example SHA256SUMS", "if: startsWith(github.ref, 'refs/tags/v')"} {
 		if !strings.Contains(image, want) {

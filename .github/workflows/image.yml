@@ -4,10 +4,11 @@ name: Image
 #
 #   manual     Actions > Image > Run workflow: pushes ghcr.io/<owner>/chaos-gateway:<tag> and
 #              :sha-<commit> from the selected branch; use it for test containers
-#   release    a pushed tag v* pushes :<version> (v1.2.3 gives 1.2.3, 1.2 and 1) and :latest, and
-#              attaches the files of the deployment to the release of the tag; a tag with a pre-release
+#   release    a pushed tag v* pushes :<version> (v1.2.3 gives 1.2.3, 1.2 and 1) and, if it is the highest release version,
+#              :latest, and attaches the files of the deployment to the release of the tag; a tag with a pre-release
 #              part (v1.0.0-rc.1) pushes only :<version> and makes a pre-release of the GitHub release. The tag must be a
-#              version on the history of main (deploy/release-check.sh); nothing is built before that is checked
+#              version on the history of main (deploy/release-check.sh) and the CI workflow must have passed on its commit;
+#              nothing is built before that is checked
 #
 # The image is the whole gateway: chaosgw and chaosctl, the tools of the containers, Kea, BIRD, the
 # interception proxy and tcpdump (deploy/Dockerfile). Each platform is built, loaded and started
@@ -50,6 +51,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+      actions: read # the CI run of the tagged commit is looked up
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -61,6 +63,32 @@ jobs:
       - name: Check the tag
         if: startsWith(github.ref, 'refs/tags/')
         run: deploy/release-check.sh "$GITHUB_REF_NAME"
+
+      # a release is a commit that passed CI: a tag on a commit with no successful run of ci.yml (a red one, one still running, or one that
+      # was cancelled) publishes nothing. When the run of that commit was cancelled (a newer push to a pull request branch does that), open it
+      # in Actions > CI and re-run all its jobs, then re-run this workflow.
+      - name: Check that CI passed on the commit
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          passed=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --status success --json databaseId --jq length)
+          if [ "${passed:-0}" -eq 0 ]; then
+            echo "::error::the CI workflow has no successful run for $GITHUB_SHA: wait for it, or re-run it if it was cancelled or failed by chance"
+            exit 1
+          fi
+
+      # only the highest release version moves :latest: a hotfix tag on an older line (v1.0.1 after v1.1.0) must not move it back
+      - name: Is this the newest release
+        id: newest
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          if deploy/release-check.sh --is-newest "$GITHUB_REF_NAME"; then
+            echo "latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "latest=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # a manual run is for test containers: it must not take a name that a release has or will have (:latest, :1.2.3, :1.2, :1), or move
       # one from a branch that was never reviewed
@@ -128,9 +156,9 @@ jobs:
             type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=sha,prefix=sha-,enable=${{ github.event_name == 'workflow_dispatch' }}
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-') }}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') && !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ steps.newest.outputs.latest == 'true' }}
           labels: |
             org.opencontainers.image.title=Chaos Gateway
             org.opencontainers.image.description=Programmable network test gateway
@@ -170,17 +198,25 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
+          NEWEST: ${{ steps.newest.outputs.latest }}
         run: |
           cd deploy
           sha256sum compose.yaml host-setup.sh install.sh update.sh uninstall.sh env.example > SHA256SUMS
-          # a tag with a pre-release part (v1.0.0-rc.1) is a pre-release on GitHub and does not move :latest
-          flags=""
-          case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
+          # a tag with a pre-release part (v1.0.0-rc.1) is a pre-release on GitHub and does not move :latest; only the newest release is the
+          # "Latest" release of GitHub, as it is the only one with :latest (a hotfix tag of an older line is not)
+          flags="--prerelease=false --latest=$NEWEST"
+          case "$GITHUB_REF_NAME" in *-*) flags="--prerelease=true --latest=false" ;; esac
           # the notes of the release are docs/release-notes/<tag>.md when the tag has one (M30), else generated from the commits
           notes="--generate-notes"
           if [ -f "../docs/release-notes/$GITHUB_REF_NAME.md" ]; then notes="--notes-file ../docs/release-notes/$GITHUB_REF_NAME.md"; fi
+          # a re-run finds the release of the first run: `gh release create` is not called then, so its flags are set on the release itself
+          # (a release made by hand, or by a run before the flags were right, would stay what it was)
           # shellcheck disable=SC2086
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" $notes $flags
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" $flags
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" $notes $flags
+          fi
           gh release upload "$GITHUB_REF_NAME" compose.yaml host-setup.sh install.sh update.sh uninstall.sh env.example SHA256SUMS --clobber
 
       - name: Summary

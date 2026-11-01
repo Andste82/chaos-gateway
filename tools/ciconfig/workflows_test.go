@@ -61,9 +61,9 @@ func stepRunning(t *testing.T, j job, text string) step {
 	return step{}
 }
 
-// runScript runs the script of a step with bash and returns its output and exit status. The stubs are scripts that are put on the PATH
-// in front of the real programs.
-func runScript(t *testing.T, script string, env []string, stubs map[string]string) (string, int) {
+// runScript runs the script of a step with bash in a directory that holds the files, and returns its output and exit status. The stubs are
+// scripts that are put on the PATH in front of the real programs.
+func runScript(t *testing.T, script string, env []string, stubs, files map[string]string) (string, int) {
 	t.Helper()
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "bin")
@@ -72,6 +72,18 @@ func runScript(t *testing.T, script string, env []string, stubs map[string]strin
 	}
 	for name, body := range stubs {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, body := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		mode := os.FileMode(0o644)
+		if strings.HasPrefix(body, "#!") {
+			mode = 0o755 // a script
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), mode); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -112,6 +124,105 @@ func TestEveryJobHasATimeoutAboveTheLimitsInsideIt(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+}
+
+// stepIndex returns the position of the first step of the job for which match is true.
+func stepIndex(t *testing.T, j job, what string, match func(step) bool) int {
+	t.Helper()
+	for i, s := range j.Steps {
+		if match(s) {
+			return i
+		}
+	}
+	t.Fatalf("the job has no step %s", what)
+	return -1
+}
+
+// A tag is published only for a commit that passed CI: the step asks for a successful run of ci.yml on the commit, before the first build, and
+// the job may read the runs of the repository and nothing more than it has to write.
+func TestTheReleaseWorkflowRequiresASuccessfulCIRunOfTheTaggedCommit(t *testing.T) {
+	j := parseWorkflow(t, "image.yml").Jobs["image"]
+	if want := (map[string]string{"contents": "write", "packages": "write", "actions": "read"}); len(j.Permissions) != len(want) || j.Permissions["actions"] != "read" {
+		t.Errorf("the permissions of the job are %v, want %v", j.Permissions, want)
+	}
+	check := stepIndex(t, j, "that checks CI", func(s step) bool { return s.Name == "Check that CI passed on the commit" })
+	tag := stepIndex(t, j, "that checks the tag", func(s step) bool { return strings.Contains(s.Run, "deploy/release-check.sh \"$GITHUB_REF_NAME\"") })
+	build := stepIndex(t, j, "that builds", func(s step) bool { return strings.HasPrefix(s.Uses, "docker/build-push-action@") })
+	if !(tag < check && check < build) {
+		t.Errorf("the check of CI is step %d, the check of the tag %d and the first build %d: it belongs between them", check, tag, build)
+	}
+	s := j.Steps[check]
+	if s.If != "startsWith(github.ref, 'refs/tags/')" {
+		t.Errorf("the check of CI runs for %q, a manual run has no tag to check", s.If)
+	}
+	if !strings.Contains(s.Run, `gh run list --workflow ci.yml --commit "$GITHUB_SHA" --status success`) {
+		t.Errorf("the check does not ask for a successful run of ci.yml on the commit: %s", s.Run)
+	}
+	if !strings.Contains(read(t, ".github", "workflows", "image.yml"), "was cancelled") {
+		t.Error("image.yml does not say what to do when the CI run of the commit was cancelled")
+	}
+	// the check itself, against a gh that finds none or one
+	gh := `echo "$*" >> "$RUNNER_TEMP/gh.log"; echo "$COUNT"`
+	env := []string{"GITHUB_SHA=abc123", "GITHUB_REPOSITORY=o/r"}
+	if out, code := runScript(t, s.Run+"\ncat \"$RUNNER_TEMP/gh.log\"", append(env, "COUNT=1"), map[string]string{"gh": gh}, nil); code != 0 || !strings.Contains(out, "--commit abc123") {
+		t.Errorf("a commit with a successful run: exit %d\n%s", code, out)
+	}
+	for _, count := range []string{"0", ""} {
+		if out, code := runScript(t, s.Run, append(env, "COUNT="+count), map[string]string{"gh": gh}, nil); code != 1 || !strings.Contains(out, "no successful run") {
+			t.Errorf("a commit without a successful run (%q): exit %d\n%s", count, code, out)
+		}
+	}
+}
+
+// :latest and the Latest release of GitHub are for the highest release version only: a step asks deploy/release-check.sh and the tags and the
+// release take its answer.
+func TestTheNewestReleaseDecidesWhoGetsLatest(t *testing.T) {
+	j := parseWorkflow(t, "image.yml").Jobs["image"]
+	newest := stepIndex(t, j, "that asks for the newest release", func(s step) bool { return s.ID == "newest" })
+	meta := stepIndex(t, j, "that makes the metadata", func(s step) bool { return s.ID == "meta" })
+	if newest >= meta {
+		t.Errorf("the newest release is asked in step %d, after the tags are made in step %d", newest, meta)
+	}
+	s := j.Steps[newest]
+	if s.If != "startsWith(github.ref, 'refs/tags/')" || !strings.Contains(s.Run, `deploy/release-check.sh --is-newest "$GITHUB_REF_NAME"`) {
+		t.Errorf("the step does not ask release-check.sh about the pushed tag: %q %s", s.If, s.Run)
+	}
+	for answer, want := range map[string]string{"0": "latest=true", "1": "latest=false"} {
+		out, code := runScript(t, s.Run+"\ncat \"$GITHUB_OUTPUT\"", []string{"GITHUB_OUTPUT=out", "GITHUB_REF_NAME=v1.0.1"}, nil,
+			map[string]string{"deploy/release-check.sh": "#!/bin/sh\nexit " + answer + "\n"})
+		if code != 0 || strings.TrimSpace(out) != want {
+			t.Errorf("release-check.sh answers %s: exit %d, output %q, want %q", answer, code, out, want)
+		}
+	}
+}
+
+// A release is made once and corrected on a re-run: `gh release create` is not called when the release exists, so the flags of a
+// pre-release and of the Latest release are set with `gh release edit`; the files are uploaded in both cases.
+func TestARerunSetsThePreReleaseAndLatestFlagsOfAnExistingRelease(t *testing.T) {
+	j := parseWorkflow(t, "image.yml").Jobs["image"]
+	s := j.Steps[stepIndex(t, j, "that makes the release", func(s step) bool { return strings.Contains(s.Run, "gh release") })]
+	files := map[string]string{}
+	for _, f := range []string{"compose.yaml", "host-setup.sh", "install.sh", "update.sh", "uninstall.sh", "env.example"} {
+		files["deploy/"+f] = f + "\n"
+	}
+	gh := `echo "$*" >> "$RUNNER_TEMP/gh.log"
+if [ "$1 $2" = "release view" ]; then exit "$VIEW"; fi`
+	for _, c := range []struct {
+		name, tag, newest, view string
+		want, not               string
+	}{
+		{"new release", "v1.2.0", "true", "1", "release create v1.2.0 --title v1.2.0 --generate-notes --prerelease=false --latest=true", "release edit"},
+		{"new hotfix of an older line", "v1.0.1", "false", "1", "release create v1.0.1 --title v1.0.1 --generate-notes --prerelease=false --latest=false", "release edit"},
+		{"new candidate", "v1.2.0-rc.1", "false", "1", "release create v1.2.0-rc.1 --title v1.2.0-rc.1 --generate-notes --prerelease=true --latest=false", "release edit"},
+		{"re-run of a candidate", "v1.2.0-rc.1", "false", "0", "release edit v1.2.0-rc.1 --prerelease=true --latest=false", "release create"},
+		{"re-run of the newest release", "v1.2.0", "true", "0", "release edit v1.2.0 --prerelease=false --latest=true", "release create"},
+		{"re-run of a hotfix of an older line", "v1.0.1", "false", "0", "release edit v1.0.1 --prerelease=false --latest=false", "release create"},
+	} {
+		out, code := runScript(t, s.Run+"\ncat \"$RUNNER_TEMP/gh.log\"", []string{"GITHUB_REF_NAME=" + c.tag, "NEWEST=" + c.newest, "VIEW=" + c.view}, map[string]string{"gh": gh}, files)
+		if code != 0 || !strings.Contains(out, c.want+"\n") || strings.Contains(out, c.not) || !strings.Contains(out, "release upload "+c.tag+" compose.yaml") {
+			t.Errorf("%s: exit %d, want %q and no %q\n%s", c.name, code, c.want, c.not, out)
 		}
 	}
 }

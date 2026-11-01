@@ -102,14 +102,21 @@ test: test-web ## level 0: Go unit tests (no root) and the web unit tests
 # decoder, the request handling, the connection with its handshake, the capture request and the capture filter. FUZZTIME is per target:
 # the default 60s makes the six targets 6 minutes in CI; the nightly workflow uses a longer time. Every target runs even when one
 # fails (a crasher in the first must not hide the others); the exit status is 1 if any failed.
+# The targets of FUZZ_ROOT_TARGETS need CAP_NET_RAW to reach what they test (FuzzCaptureOpenFiles: without it a capture fails at the raw
+# socket before it makes a file, so only the check of the directory is fuzzed): they run behind FUZZ_ROOT_CMD, a command that starts
+# its arguments as root, e.g. `sudo -E env PATH=$PATH HOME=$HOME`. It is empty by default, then they run like the others. They come
+# last: root makes files in the Go build cache that the user cannot write to, and a later unprivileged target would meet them.
 FUZZTIME ?= 60s
-FUZZ_TARGETS := ./internal/executor:FuzzDecode ./internal/executor:FuzzFrame ./internal/executor:FuzzConn ./internal/executor:FuzzCaptureOpen ./internal/executor:FuzzCaptureOpenFiles ./internal/capture:FuzzFilter
+FUZZ_TARGETS := ./internal/executor:FuzzDecode ./internal/executor:FuzzFrame ./internal/executor:FuzzConn ./internal/executor:FuzzCaptureOpen ./internal/capture:FuzzFilter ./internal/executor:FuzzCaptureOpenFiles
+FUZZ_ROOT_TARGETS := ./internal/executor:FuzzCaptureOpenFiles
+FUZZ_ROOT_CMD ?=
 
 fuzz: ## fuzz the executor's interface: operation decoder, request handling, connection, capture request and filter (FUZZTIME per target)
 	@rc=0; for t in $(FUZZ_TARGETS); do \
-	  pkg=$${t%%:*}; name=$${t##*:}; \
-	  echo "== $$pkg $$name ($(FUZZTIME))"; \
-	  $(GO) test -run '^$$' -fuzz "^$$name$$" -fuzztime $(FUZZTIME) $$pkg || rc=1; \
+	  pkg=$${t%%:*}; name=$${t##*:}; run=""; \
+	  case " $(FUZZ_ROOT_TARGETS) " in *" $$t "*) run="$(FUZZ_ROOT_CMD)" ;; esac; \
+	  echo "== $$pkg $$name ($(FUZZTIME)) $$run"; \
+	  $$run $(GO) test -run '^$$' -fuzz "^$$name$$" -fuzztime $(FUZZTIME) $$pkg || rc=1; \
 	done; exit $$rc
 
 test-web: $(WEBDEPS)

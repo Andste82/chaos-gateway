@@ -227,6 +227,87 @@ if [ "$1 $2" = "release view" ]; then exit "$VIEW"; fi`
 	}
 }
 
+// makeVars reads the value of a simple assignment of the Makefile as a list of words.
+func makeVars(t *testing.T, name string) []string {
+	t.Helper()
+	m := regexp.MustCompile(`(?m)^` + name + ` :?= (.*)$`).FindStringSubmatch(read(t, "Makefile"))
+	if m == nil {
+		t.Fatalf("the Makefile does not assign %s", name)
+	}
+	return strings.Fields(m[1])
+}
+
+// FuzzCaptureOpenFiles reaches the creation of files only with CAP_NET_RAW: the nightly job runs that target as root and no other, and
+// keeps the corpus from night to night (also after a run that failed), keyed by the fuzz tests so that a changed one starts anew.
+func TestTheNightlyFuzzJobRunsTheFileTargetAsRootAndKeepsItsCorpus(t *testing.T) {
+	targets, root := makeVars(t, "FUZZ_TARGETS"), makeVars(t, "FUZZ_ROOT_TARGETS")
+	if len(root) != 1 || root[0] != "./internal/executor:FuzzCaptureOpenFiles" || targets[len(targets)-1] != root[0] {
+		t.Errorf("FUZZ_ROOT_TARGETS is %v, want the file target, which is the last of %v", root, targets)
+	}
+
+	// the Makefile starts the targets of FUZZ_ROOT_TARGETS behind FUZZ_ROOT_CMD and the others as they are; without the command all alike
+	repo, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stubs := map[string]string{"go": `echo "RUN $*"`, "asroot": `echo ROOT; exec "$@"`}
+	for _, c := range []struct {
+		cmd  string
+		root []string
+	}{{`FUZZ_ROOT_CMD="$PWD/bin/asroot"`, []string{"FuzzCaptureOpenFiles"}}, {"", nil}} {
+		out, code := runScript(t, `make -s -C "$REPO" fuzz GO="$PWD/bin/go" FUZZTIME=1s `+c.cmd, []string{"REPO=" + repo}, stubs, nil)
+		if code != 0 {
+			t.Fatalf("make fuzz: exit %d\n%s", code, out)
+		}
+		var ran, asRoot []string
+		rooted := false
+		for _, l := range strings.Split(out, "\n") {
+			if l == "ROOT" {
+				rooted = true
+			} else if m := regexp.MustCompile(`^RUN test .* -fuzz \^(\w+)\$ `).FindStringSubmatch(l); m != nil {
+				ran = append(ran, m[1])
+				if rooted {
+					asRoot = append(asRoot, m[1])
+				}
+				rooted = false
+			}
+		}
+		if len(ran) != len(targets) || strings.Join(asRoot, " ") != strings.Join(c.root, " ") {
+			t.Errorf("make fuzz %s ran %v, of them as root %v, want %d targets and %v as root\n%s", c.cmd, ran, asRoot, len(targets), c.root, out)
+		}
+	}
+
+	var fuzz job
+	for id, j := range parseWorkflow(t, "nightly.yml").Jobs {
+		if id == "fuzz" {
+			fuzz = j
+		}
+	}
+	run := stepIndex(t, fuzz, "that runs make fuzz", func(s step) bool { return strings.Contains(s.Run, "make fuzz") })
+	if !strings.Contains(fuzz.Steps[run].Run, `FUZZ_ROOT_CMD="sudo -E env PATH=$PATH HOME=$HOME"`) || !strings.Contains(fuzz.Steps[run].Run, "FUZZTIME=45m") {
+		t.Errorf("the fuzz job does not run the file target as root for 45 minutes per target: %s", fuzz.Steps[run].Run)
+	}
+	restore := stepIndex(t, fuzz, "that restores the corpus", func(s step) bool { return strings.HasPrefix(s.Uses, "actions/cache/restore@") })
+	save := stepIndex(t, fuzz, "that saves the corpus", func(s step) bool { return strings.HasPrefix(s.Uses, "actions/cache/save@") })
+	if !(restore < run && run < save) {
+		t.Errorf("the corpus is restored in step %d, the fuzz runs in step %d and the corpus is saved in step %d", restore, run, save)
+	}
+	r, s := fuzz.Steps[restore].With, fuzz.Steps[save].With
+	for _, w := range []map[string]any{r, s} {
+		if w["path"] != "~/.cache/go-build/fuzz" {
+			t.Errorf("the corpus cache holds %v, Go keeps the corpus in GOCACHE/fuzz", w["path"])
+		}
+	}
+	key, ok := s["key"].(string)
+	prefix, _ := r["restore-keys"].(string)
+	if !ok || key != r["key"] || !strings.Contains(key, "${{ github.run_id }}") || prefix == "" || !strings.HasPrefix(key, prefix) || !strings.Contains(prefix, "hashFiles(") {
+		t.Errorf("the keys of the corpus cache are %q (saved) and %q (restored, prefix %q): a key per run and a prefix of the fuzz tests to restore from", key, r["key"], prefix)
+	}
+	if fuzz.Steps[save].If != "always()" {
+		t.Errorf("the corpus is saved if %q: a night with a crasher would lose what it found", fuzz.Steps[save].If)
+	}
+}
+
 // The release workflow is the one that writes to the repository and the registry: its actions are pinned to a commit, the version they stand
 // for is in the comment after the hash (the other workflows keep the version tags, they have no write permission besides contents: read).
 func TestTheActionsOfTheReleaseWorkflowArePinnedToACommit(t *testing.T) {

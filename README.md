@@ -10,7 +10,8 @@ Chaos Gateway is a Linux machine that sits between a test network with IoT devic
 | [`api/openapi.yaml`](api/openapi.yaml) | API and domain model (normative, spec-first); examples and their validator in [`api/examples/`](api/examples/) |
 | [`docs/spikes/REPORT.md`](docs/spikes/REPORT.md) | Phase 0 spike results and the decisions derived from them |
 | [`spikes/`](spikes/) | spike scripts and raw results |
-| [`docs/install.md`](docs/install.md) | installing, updating and removing the gateway on a host |
+| [`docs/install.md`](docs/install.md) | installing (one command, `install.sh`), updating (`update.sh`) and removing (`uninstall.sh`) the gateway on a host |
+| [`docs/release.md`](docs/release.md) | making a release: the tag, the multi-arch image on ghcr.io, the candidate first (for the maintainers) |
 | [`docs/user-guide.md`](docs/user-guide.md) | the user guide: concepts, the web app, faults, scenarios, captures, probes, `chaosctl` |
 | [`docs/api-guide.md`](docs/api-guide.md) | the API guide with examples that run in CI |
 | [`docs/cookbook.md`](docs/cookbook.md) | the scenario cookbook: recipes for the tests a device should survive |

@@ -8,6 +8,45 @@ read-only to read the distribution's systemd-networkd defaults). Everything belo
 `ghcr.io/andste82/chaos-gateway`, and one `compose.yaml` that starts its containers (plan §3.8); the host setup and the update script
 come out of the image.
 
+## Quick start
+
+One command installs the gateway: it installs Docker if it is missing, pulls the image, prepares the host (modules, forwarding, the data
+directories, the rule that keeps systemd-networkd off the test interfaces), starts the containers and waits until they are healthy.
+Name every interface that will carry a test network with `--test-interface` (`ip link` lists the names; never the uplink or the
+management interface, see [the test interfaces](#the-test-interfaces-belong-to-the-gateway-alone)):
+
+```sh
+curl -fsSL https://github.com/Andste82/chaos-gateway/releases/latest/download/install.sh | sudo sh -s -- --test-interface lan0
+```
+
+A particular version is `--version 1.0.0` (`latest` is the newest release that is not a pre-release; a release candidate is
+`--version 1.0.0-rc.1`). If you would rather read the script before it runs as root, or check it against the checksums the release carries:
+
+```sh
+V=1.0.0
+curl -fsSLO "https://github.com/Andste82/chaos-gateway/releases/download/v$V/install.sh"
+curl -fsSLO "https://github.com/Andste82/chaos-gateway/releases/download/v$V/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS      # install.sh: OK
+less install.sh
+sudo sh install.sh --version "$V" --test-interface lan0
+```
+
+The script can be run again whenever it stopped: every step checks what is there. It stops, with the reason, when the host setup finds a
+step missing, most often a test interface that the operating system still configures (a netplan entry); do what it says and run it again.
+When it is done it prints where the setup wizard is (`https://<management address of this host>:8443`) and the command that shows the
+one-time setup token. `sh install.sh --help` lists the options: `--test-interface` (repeatable), `--version`, `--image` (a full reference,
+for a local build or a mirror), `--dir` (default `/opt/chaosgw`), `--no-pull` and `--no-start`.
+
+The two other scripts are in `/opt/chaosgw` afterwards:
+
+```sh
+sudo /opt/chaosgw/update.sh --token-file ~/chaosgw.token     # later: the new version, when no run is active (see "Updating")
+sudo /opt/chaosgw/uninstall.sh                                # take the gateway away, keep the data (see "Uninstall")
+sudo /opt/chaosgw/uninstall.sh --purge                        # and delete the data, the files and the images
+```
+
+The sections below are what `install.sh` does, one step at a time, for a host you want to prepare by hand.
+
 ## 1. Get the image
 
 Docker must be there to take the files out of the image. On a host without it, download `host-setup.sh` from the release (the files of a
@@ -383,7 +422,16 @@ same line in `/etc/sysctl.d/`); until then a ping answers `cannot open an ICMP s
 
 ## Updating
 
-`/opt/chaosgw/update.sh` pulls the image and restarts the containers when no run is active (plan §3.9):
+`/opt/chaosgw/update.sh` pulls the image and restarts the containers when no run is active (plan §3.9). The shortest way, once you have a
+token with the scope `read` in a file (made from the admin session with `POST /api/v1/auth/tokens`, see the
+[API guide](api-guide.md#tokens-and-scopes); the script sends it only to the API of this host):
+
+```sh
+sudo /opt/chaosgw/update.sh --token-file ~/chaosgw.token --version 1.1.0
+```
+
+Without a token the script refuses to guess whether a run is active and says how to give it one; `--no-wait` updates without asking (a
+run that is active then ends as `aborted`). The options in full:
 
 ```sh
 cd /opt/chaosgw
@@ -487,8 +535,26 @@ say what to look at and how to leave safe mode, and also cover the teardown, a f
 ## Uninstall
 
 ```sh
+sudo /opt/chaosgw/uninstall.sh            # stop the gateway and take it out of the kernel; the data and the files stay
+sudo /opt/chaosgw/uninstall.sh --purge    # and delete the data, the files, the images (asks for a yes; --yes does not)
+```
+
+The script stops the containers (the API first, the executor last, which removes everything the gateway created in the kernel, see
+[Stop, restart and recovery](#stop-restart-and-recovery)), runs the teardown service for what a killed executor left, removes the containers and
+the volumes of the sockets, and gives each test interface back to systemd-networkd (it removes the rule `/etc/systemd/network/10-chaosgw-IF.network`). Without `--purge` the revisions,
+secrets, audit log and captures in `/var/lib/chaosgw`, the files in `/opt/chaosgw` and the images stay, so `install.sh` brings the gateway
+back as it was. With `--purge` they are deleted as well, and so are the modules and sysctl files the host setup wrote
+(`/etc/modules-load.d/chaos-gateway.conf`, `/etc/sysctl.d/90-chaos-gateway.conf`). It never removes Docker, touches the uplink or the
+management configuration, or undoes what you changed in netplan for the test interfaces. A step that fails is named, the others go on, the exit
+status is 1, and with `--purge` the data and `/opt/chaosgw` then stay, because a second run needs the executor's state in them.
+`--help` lists the options (`--purge`, `--yes`, `--dir`).
+
+By hand, the same is:
+
+```sh
 cd /opt/chaosgw
-docker compose --profile teardown run --rm teardown --purge   # only needed if the executor was killed; a normal stop did the kernel part
+docker compose stop                                           # the API first, the executor last: it removes what it made in the kernel
+docker compose --profile teardown run --rm teardown --purge   # only needed if the executor was killed; it refuses while one serves
 docker compose down -v
 sudo sh host-setup.sh --remove-test-interface lan0
 sudo rm -f /etc/modules-load.d/chaos-gateway.conf /etc/sysctl.d/90-chaos-gateway.conf
@@ -497,8 +563,6 @@ sudo rm -rf /var/lib/chaosgw /opt/chaosgw                       # the data: revi
 
 The stop removed what the gateway created in the kernel (above). What stays is the host's: the modules and
 `net.ipv4.ip_forward` (a reboot resets them) and the netplan entries you changed for the test interfaces.
-`--remove-test-interface` removes the systemd-networkd rule of a test interface (once per interface). Undo by
-hand what you changed in netplan for the test interfaces.
 
 If `docker compose down -v` fails with `device or resource busy` on the `chaosgw-run` volume, a mount of the
 executor has leaked into the host (issue #57, F4). Unmount it, then run `down -v` again:

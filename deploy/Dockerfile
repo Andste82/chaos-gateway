@@ -4,7 +4,7 @@
 # deploy/compose.yaml. It holds chaosgw and chaosctl, the tools the executor runs (iproute2, nftables, iptables, ethtool,
 # conntrack, WireGuard, kmod for the modules it loads), the pinned Kea and BIRD, the interception proxy (mitmproxy in its own
 # virtualenv with the addon of sidecars/tls-proxy, M22), tcpdump for the administrator's shell, and the files of the deployment
-# the host setup copies out of it (/usr/local/share/chaosgw: compose.yaml, update.sh, host-setup.sh, env.example).
+# the host setup copies out of it (/usr/local/share/chaosgw: compose.yaml, update.sh, host-setup.sh, install.sh, uninstall.sh, env.example).
 #
 #   docker buildx build --platform linux/amd64,linux/arm64 -f deploy/Dockerfile .   (make image)
 
@@ -64,7 +64,7 @@ COPY --from=build /out/chaosgw /out/chaosctl /usr/local/bin/
 # the files of the deployment, for the host: `docker run --rm --entrypoint cat <image> /usr/local/share/chaosgw/host-setup.sh | sudo sh -s -- --image <image>`
 # runs the host setup, which copies the others out of the image (deploy/host-setup.sh). compose.yaml is made from the compose files of
 # deploy/ by tools/composegen and runs this image.
-COPY deploy/host-setup.sh deploy/update.sh deploy/compose.yaml deploy/env.example /usr/local/share/chaosgw/
+COPY deploy/host-setup.sh deploy/update.sh deploy/install.sh deploy/uninstall.sh deploy/compose.yaml deploy/env.example /usr/local/share/chaosgw/
 # Kea: the run_script hook (in the directory Kea allows scripts from) and the start script
 COPY deploy/chaosgw-kea-hook /usr/share/kea/scripts/chaosgw-kea-hook
 COPY deploy/kea-start.sh /usr/local/bin/chaosgw-kea-start

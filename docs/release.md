@@ -31,12 +31,14 @@ What the workflow does for a tag, in this order, and what stops it:
 | Step | Stops the release when |
 |---|---|
 | `deploy/release-check.sh` | the tag is not `vMAJOR.MINOR.PATCH` (with an optional `-rc.1`), or its commit is not on the history of `main` |
+| check of CI | the `CI` workflow has no successful run for the tagged commit (it failed, still runs, or was cancelled: re-run it in *Actions* > *CI*, then re-run the *Image* run) |
 | smoke test of the amd64 image and of the arm64 image (under qemu-user) | a binary or a tool does not start, a pinned version is not the pinned one, Kea does not accept its configuration |
 | build and push of the multi-arch image | the build fails |
 | check of the manifest | the pushed image does not hold both platforms |
-| release and upload | none: the release is made if it does not exist, and the files are replaced if they do |
+| release and upload | none: the release is made if it does not exist, and the files are replaced if they do; a release that exists gets its pre-release and Latest flags set again |
 
-It pushes `:1.0.0-rc.1` for the candidate. For a release `v1.2.3` it pushes `:1.2.3`, `:1.2`, `:1` (no `:0` for a `v0.x`) and `:latest`.
+It pushes `:1.0.0-rc.1` for the candidate. For a release `v1.2.3` it pushes `:1.2.3`, `:1.2`, `:1` (no `:0` for a `v0.x`) and, if it is the highest release version of the tags on `main`,
+`:latest` (a hotfix `v1.0.1` made after `v1.1.0` does not move `:latest` or the *Latest* mark of the GitHub release back; `deploy/release-check.sh --is-newest` decides).
 The files `compose.yaml`, `host-setup.sh`, `install.sh`, `update.sh`, `uninstall.sh`, `env.example` and `SHA256SUMS` are attached to the release.
 
 ### The package must be made public once
@@ -78,7 +80,7 @@ git push origin :refs/tags/v1.0.1
 
 The image versions are deleted on GitHub, under the package's *Package settings* (or with the REST API `DELETE /user/packages/container/chaos-gateway/versions/ID`);
 `:latest` is moved by the next release, and until then a pull of `latest` gives the version you withdrew unless you re-run the workflow of the
-previous tag (*Actions* > *Image* > *Re-run*). Hosts that have the bad version go back with
+previous tag (*Actions* > *Image* > *Re-run*; delete the tag of the withdrawn version first, as above, or the previous tag is not the newest release). Hosts that have the bad version go back with
 `sudo /opt/chaosgw/update.sh --version OLD`, as long as the configuration was not migrated to a newer schema (the update script refuses a
 configuration that the old version cannot read).
 

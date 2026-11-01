@@ -32,9 +32,34 @@ func (s *Store) Login(password, remote string) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.clk.Now()
+	s.sweepSessions(now)
 	sess := &Session{ID: randomString(32), CSRF: randomString(24), ExpiresAt: now.Add(s.lifetime).UTC(), epoch: s.st.Epoch}
 	s.sessions[sess.ID] = sess
 	return sess, nil
+}
+
+// MaxSessions is the number of sessions the store keeps: a login (which takes the password) past it
+// ends the session that expires first.
+const MaxSessions = 100
+
+// sweepSessions drops the sessions that have expired or belong to an earlier epoch, which nobody
+// looks up again, and then the ones that expire first until there is room for one more. The caller
+// holds mu.
+func (s *Store) sweepSessions(now time.Time) {
+	for id, sess := range s.sessions {
+		if !now.Before(sess.ExpiresAt) || sess.epoch != s.st.Epoch {
+			delete(s.sessions, id)
+		}
+	}
+	for len(s.sessions) >= MaxSessions {
+		oldest := ""
+		for id, sess := range s.sessions {
+			if oldest == "" || sess.ExpiresAt.Before(s.sessions[oldest].ExpiresAt) {
+				oldest = id
+			}
+		}
+		delete(s.sessions, oldest)
+	}
 }
 
 // LookupSession returns the session with the given id while it is valid.

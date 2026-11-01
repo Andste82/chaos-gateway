@@ -136,6 +136,49 @@ func TestSessionsAndTheirEnd(t *testing.T) {
 	}
 }
 
+// Nobody looks an expired session up again, and the store used to keep every session ever started
+// (P7-M29 audit S8): a login drops the expired ones and the count has a ceiling.
+func TestLoginSweepsExpiredSessionsAndCapsTheirNumber(t *testing.T) {
+	s, clk, _ := open(t, WithSessionLifetime(time.Hour))
+	_ = s.CompleteSetup("a long enough password")
+	login := func() *Session {
+		t.Helper()
+		sess, err := s.Login("a long enough password", "1.1.1.1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sess
+	}
+	count := func() int { s.mu.Lock(); defer s.mu.Unlock(); return len(s.sessions) }
+	for range 10 {
+		login()
+	}
+	clk.Advance(time.Hour)
+	live := login()
+	if n := count(); n != 1 {
+		t.Fatalf("%d sessions after the others expired, want 1", n)
+	}
+	if _, ok := s.LookupSession(live.ID); !ok {
+		t.Error("the new session is gone")
+	}
+	// the ceiling: the session that expires first makes room, the newest ones stay
+	first := login()
+	for range 2 * MaxSessions {
+		clk.Advance(time.Second)
+		login()
+	}
+	if n := count(); n != MaxSessions {
+		t.Errorf("%d sessions, want %d", n, MaxSessions)
+	}
+	if _, ok := s.LookupSession(first.ID); ok {
+		t.Error("the oldest session survives the ceiling")
+	}
+	last := login()
+	if _, ok := s.LookupSession(last.ID); !ok {
+		t.Error("the newest session is gone")
+	}
+}
+
 func TestChangingThePasswordEndsTheOtherSessions(t *testing.T) {
 	s, _, _ := open(t)
 	_ = s.CompleteSetup("a long enough password")

@@ -17,6 +17,7 @@ func TestASignalDuringTheWaitEndsTheUpdateAndNothingIsRestarted(t *testing.T) {
 	for sig, want := range map[syscall.Signal]int{syscall.SIGTERM: 143, syscall.SIGINT: 130} {
 		d := newDeployment(t)
 		d.set("busy", "200 {\"busy\":true,\"runs_active\":1}")
+		d.set("oldimage", "chaos-gateway:latest")
 		// --force goes on after 3 s: a script that survives the signal restarts the containers then
 		cmd := exec.Command("sh", updateScript, "--dir", d.dir, "--timeout", "3", "--force")
 		cmd.Env = append(os.Environ(), "PATH="+d.bin+string(os.PathListSeparator)+os.Getenv("PATH"), "STUB="+d.stub, "CHAOSGW_UPDATE_POLL=1",
@@ -46,6 +47,12 @@ func TestASignalDuringTheWaitEndsTheUpdateAndNothingIsRestarted(t *testing.T) {
 		}
 		if d.index("compose up") >= 0 {
 			t.Errorf("%v: the containers were restarted after the update was cancelled:\n%s", sig, strings.Join(d.calls(), "\n"))
+		}
+		// the pull moved the tag under the containers that still run the old image: the end says so and how to go back
+		for _, w := range []string{"cancelled; the containers were not touched", "now names the new image", "docker tag sha256:old chaos-gateway:latest"} {
+			if !strings.Contains(out.String(), w) {
+				t.Errorf("%v: the output lacks %q:\n%s", sig, w, out.String())
+			}
 		}
 		if d.index("compose.yaml.bak") >= 0 {
 			t.Errorf("%v: files were replaced after the update was cancelled", sig)
@@ -175,5 +182,67 @@ func TestAnUpdateOfAGatewayThatIsNotSetUpDoesNotWaitForTheServicesThatNeedAConfi
 	d.set("up.all", "1")
 	if out, code := d.run(); code != 5 || !strings.Contains(out, "did not become healthy within 180s") {
 		t.Errorf("a gateway that is set up and whose DNS proxy does not come up: exit %d\n%s", code, out)
+	}
+}
+
+// docker compose up -d reads compose.override.yaml next to compose.yaml (docs/install.md puts the CA mount of the interception proxy
+// there), so the check of the new file has to read it too: the file alone is another configuration than the one that starts.
+func TestTheNewComposeFileIsCheckedTogetherWithTheOverrideOfTheInstallation(t *testing.T) {
+	d := newDeployment(t)
+	d.write(filepath.Join(d.dir, "compose.override.yaml"), "services: {}\n")
+	if out, code := d.run("--check"); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	var check string
+	for _, c := range d.calls() {
+		if strings.HasSuffix(c, " config -q") {
+			check = c
+		}
+	}
+	if !strings.Contains(check, " -f "+filepath.Join(d.dir, "compose.override.yaml")+" ") || strings.Index(check, "/compose.yaml") > strings.Index(check, "compose.override.yaml") {
+		t.Errorf("the check does not read the override after the new file: %s", check)
+	}
+	// an installation without an override is checked with the file alone
+	n := newDeployment(t)
+	if out, code := n.run("--check"); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if n.index("override") >= 0 {
+		t.Errorf("an override that does not exist is named:\n%s", strings.Join(n.calls(), "\n"))
+	}
+}
+
+// Every bind mount of the compose.yaml has create_host_path: false, so a new version that adds a data directory fails at container
+// create, after the old executor was stopped: the directories are checked before anything stops.
+func TestAMountSourceThatTheNewComposeFileNeedsAndTheHostLacksStopsTheUpdateBeforeAnythingStops(t *testing.T) {
+	d := newDeployment(t)
+	have, lacks, made := filepath.Join(d.stub, "exec"), filepath.Join(d.stub, "newdir"), filepath.Join(d.stub, "created")
+	if err := os.MkdirAll(have, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mount := func(src, create string) string {
+		return "      - type: bind\n        source: " + src + "\n        target: /data\n        bind:\n          create_host_path: " + create + "\n"
+	}
+	d.write(filepath.Join(d.stub, "image", "compose.yaml"), "services:\n  exec:\n    volumes:\n      - chaosgw-run:/run/chaosgw\n"+
+		mount(have, "false")+mount(lacks, "false")+mount(made, "true")+"      - type: volume\n        source: chaosgw-svcns\n        target: /x\n")
+	out, code := d.run()
+	if code != 1 || !strings.Contains(out, "mounts directories of the host that do not exist: "+lacks+";") || strings.Contains(out, have) || strings.Contains(out, made) {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "docker run --rm --entrypoint cat chaos-gateway:latest /usr/local/share/chaosgw/host-setup.sh | sudo sh -s -- --data-only") || !strings.Contains(out, "keeps running as it is") {
+		t.Errorf("the way out is not named:\n%s", out)
+	}
+	if d.index("compose up") >= 0 || d.index("busy") >= 0 {
+		t.Errorf("something was started or stopped:\n%s", strings.Join(d.calls(), "\n"))
+	}
+	if raw, _ := os.ReadFile(filepath.Join(d.dir, "compose.yaml")); string(raw) != "services: {}\n" {
+		t.Errorf("compose.yaml = %q after the refusal", raw)
+	}
+	// with the directory made, the update goes on
+	if err := os.MkdirAll(lacks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := d.run(); code != 0 {
+		t.Fatalf("the directory exists: exit %d\n%s", code, out)
 	}
 }

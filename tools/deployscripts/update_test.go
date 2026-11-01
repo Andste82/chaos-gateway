@@ -14,7 +14,8 @@ import (
 const updateScript = "../../deploy/update.sh"
 
 // dockerStub stands for the docker the update script calls. What it answers is in files of $STUB: ps (exists: the executor
-// runs), pull, schema, config (the check of a compose file), up (the start), up.wait (the wait for exec, api, svcns, kea and bird),
+// runs), apips (exists: the API container runs), oldimage (the image the executor runs, default chaos-gateway:old; its id is
+// sha256:old, and the id of the image the tag names after the pull is sha256:new), pull, schema, config (the check of a compose file), up (the start), up.wait (the wait for exec, api, svcns, kea and bird),
 // up.all (the wait for every container) (their exit status, default 0), schema.out (what the schema check prints), image/ (the
 // files of the deployment in the image); every call is appended to calls, with the CHAOSGW_VERSION it saw.
 const dockerStub = `#!/bin/sh
@@ -24,8 +25,11 @@ case "$*" in
 "compose version") echo "Docker Compose version v2.24.6" ;;
 "compose config --images") echo "chaos-gateway:${CHAOSGW_VERSION:-latest}" ;;
 "compose ps -q exec") [ -f "$STUB/ps" ] && echo cid-exec; exit 0 ;;
+"compose ps -q api") [ -f "$STUB/apips" ] && echo cid-api; exit 0 ;;
 "compose ps") echo "NAME STATUS"; exit 0 ;;
-"inspect -f {{.Config.Image}} cid-exec") echo "chaos-gateway:old" ;;
+"inspect -f {{.Config.Image}} cid-exec") if [ -f "$STUB/oldimage" ]; then cat "$STUB/oldimage"; else echo "chaos-gateway:old"; fi ;;
+"inspect -f {{.Image}} cid-exec") echo sha256:old ;;
+"image inspect -f {{.Id}} "*) echo sha256:new ;;
 "pull --quiet "*) exit "$(status pull)" ;;
 "run --rm "*" schema-check "*) [ -f "$STUB/schema.out" ] && cat "$STUB/schema.out" >&2; exit "$(status schema)" ;;
 "run --rm --entrypoint tar "*) tar -C "$STUB/image" -cf - compose.yaml env.example update.sh ;;
@@ -237,7 +241,7 @@ func TestAnUpdateWhileARunIsActiveChangesNothingUnlessForced(t *testing.T) {
 	d := newDeployment(t)
 	d.set("busy", "200 {\"busy\":true,\"runs_active\":1}")
 	out, code := d.run("--timeout", "1")
-	if code != 3 || !strings.Contains(out, "nothing was changed") || !strings.Contains(out, "--force") {
+	if code != 3 || !strings.Contains(out, "containers were not touched") || strings.Contains(out, "nothing was changed") || !strings.Contains(out, "--force") {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	if d.index("compose up") >= 0 {
@@ -335,6 +339,73 @@ func TestAnUpdateOfAGatewayWhoseAPIDoesNotAnswerFindsNoRun(t *testing.T) {
 	raw, _ := os.ReadFile(filepath.Join(d.stub, "curl.calls"))
 	if !strings.Contains(string(raw), "https://127.0.0.1:9443/api/v1/system/busy") {
 		t.Errorf("the port of the installation is not used:\n%s", raw)
+	}
+}
+
+// The API listens on management.ui_port of the configuration when that is set, else on CHAOSGW_UI_PORT (cmd/chaosgw/api.go): a refused
+// connection on the port of the .env is no proof that no run is active while the API container runs.
+func TestARefusedConnectionWhileTheAPIContainerRunsIsNotAGatewayWithoutARun(t *testing.T) {
+	d := newDeployment(t)
+	d.set("busy", "000 ")
+	d.set("apips", "")
+	out, code := d.run()
+	if code != 1 || !strings.Contains(out, "the API container runs, but nothing listens on 127.0.0.1:8443") || !strings.Contains(out, "management.ui_port") || d.index("compose up") >= 0 {
+		t.Errorf("a refused connection and a running API container: exit %d\n%s", code, out)
+	}
+	if d.exact("compose ps -q api") < 0 {
+		t.Errorf("the API container was not asked for:\n%s", strings.Join(d.calls(), "\n"))
+	}
+	if out, code := d.run("--force"); code != 0 || !strings.Contains(out, "--force: going on") || d.index("compose up") < 0 {
+		t.Errorf("--force: exit %d\n%s", code, out)
+	}
+	// --no-wait does not ask, as for every answer that is none
+	if out, code := d.run("--no-wait"); code != 0 {
+		t.Errorf("--no-wait: exit %d\n%s", code, out)
+	}
+	// the API container does not run: nothing listens because nothing runs
+	n := newDeployment(t)
+	n.set("busy", "000 ")
+	if out, code := n.run(); code != 0 || !strings.Contains(out, "nothing listens on 127.0.0.1:8443: no run is active") {
+		t.Errorf("no API container: exit %d\n%s", code, out)
+	}
+}
+
+// The pull moves the tag before the wait (the schema check needs the new image), so a stop leaves the tag on the new image under the
+// old containers: the messages of every way out before the restart say so and how to go back, and none says that nothing was changed.
+func TestAnUpdateThatStopsAfterThePullSaysThatTheTagMovedAndHowToGoBack(t *testing.T) {
+	want := []string{"chaos-gateway:latest now names the new image (sha256:new)", "run the old one (sha256:old)", "docker compose up -d of a single service", "docker tag sha256:old chaos-gateway:latest"}
+	check := func(what, out string) {
+		t.Helper()
+		for _, w := range want {
+			if !strings.Contains(out, w) {
+				t.Errorf("%s: the output lacks %q:\n%s", what, w, out)
+			}
+		}
+		if strings.Contains(out, "nothing was changed") {
+			t.Errorf("%s: claims that nothing was changed:\n%s", what, out)
+		}
+	}
+	busy := newDeployment(t)
+	busy.set("oldimage", "chaos-gateway:latest")
+	busy.set("busy", "200 {\"busy\":true,\"runs_active\":1}")
+	out, code := busy.run("--timeout", "1")
+	if code != 3 {
+		t.Fatalf("a run is active: exit %d\n%s", code, out)
+	}
+	check("exit 3", out)
+
+	chk := newDeployment(t)
+	chk.set("oldimage", "chaos-gateway:latest")
+	out, code = chk.run("--check")
+	if code != 0 {
+		t.Fatalf("--check: exit %d\n%s", code, out)
+	}
+	check("--check", out)
+
+	// the tag the containers run does not move when another version is pulled: .env keeps naming the old one until the update succeeds
+	other := newDeployment(t)
+	if out, code := other.run("--check", "--version", "2.0.0"); code != 0 || strings.Contains(out, "now names the new image") {
+		t.Errorf("another version: exit %d\n%s", code, out)
 	}
 }
 

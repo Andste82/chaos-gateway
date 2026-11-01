@@ -78,6 +78,7 @@ func (s *Server) GetMetrics(c *gin.Context) {
 	m.Gauge("chaosgw_uptime_seconds", "Seconds since the gateway process started.", s.clk.Now().Sub(s.cfg.Started).Seconds())
 	m.Gauge("chaosgw_revision", "The active configuration revision (0 before the first one).", float64(snap.Revision))
 	m.Gauge("chaosgw_apply_ok", "1 while the last apply succeeded, 0 while it failed.", boolValue(snap.LastError == ""))
+	m.Gauge("chaosgw_safe_mode", "1 while the gateway runs in safe mode (management access only, no forwarding), 0 otherwise.", boolValue(snap.SafeMode))
 	m.Gauge("chaosgw_counter_epoch", "The epoch of the counters as a whole: it changes when they start over.", float64(snap.CounterEpoch))
 
 	s.bounded(ctx, func(ctx context.Context) { s.collectCounters(ctx, m, snap) })

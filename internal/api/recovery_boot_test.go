@@ -89,6 +89,51 @@ func TestSafeModeAndItsEndAreInTheAuditLog(t *testing.T) {
 	}
 }
 
+// R7 of the audit of Phase 7: safe mode was invisible to the health report and to the metrics, a gateway that forwards nothing
+// reported itself as it did before. It is degraded and not unhealthy, because the health check of the api container fails on
+// unhealthy (a 503) and the way out of safe mode is a revision applied through that API.
+func TestSafeModeIsDegradedInTheHealthReportAndInTheMetricsAndStaysReachable(t *testing.T) {
+	g := ready(t)
+	if v := g.scrape().val("chaosgw_safe_mode"); v != 0 {
+		t.Errorf("chaosgw_safe_mode is %v on a gateway that is not in safe mode", v)
+	}
+	h := g.do("GET", "/system/health", nil, nil, nil)
+	for _, c := range h.json(t)["components"].([]any) {
+		if comp := c.(map[string]any); comp["name"] == "api" && comp["status"] != "healthy" {
+			t.Errorf("the api component of a gateway that is not in safe mode: %v", comp)
+		}
+	}
+
+	g, _, _ = inSafeMode(t, 0)
+	h = g.do("GET", "/system/health", nil, nil, nil)
+	if h.Status != 200 {
+		t.Fatalf("GET /system/health answers %d in safe mode, which fails the health check of the api container and makes Docker restart the one container the administrator needs: %s", h.Status, h.Body)
+	}
+	body := h.json(t)
+	if body["status"] == "healthy" {
+		t.Errorf("a gateway in safe mode reports healthy: %v", body)
+	}
+	found := false
+	for _, c := range body["components"].([]any) {
+		if comp := c.(map[string]any); comp["name"] == "api" {
+			found = true
+			if detail, _ := comp["detail"].(string); comp["status"] != "degraded" || !strings.Contains(detail, "safe mode") || !strings.Contains(detail, "revision 2 could not be applied") {
+				t.Errorf("the api component: %v", comp)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no api component: %v", body)
+	}
+	m := g.scrape()
+	if v := m.val("chaosgw_safe_mode"); v != 1 {
+		t.Errorf("chaosgw_safe_mode is %v in safe mode", v)
+	}
+	if m.val("chaosgw_health_ok") != 0 || m.val("chaosgw_component_status", "component", "api", "status", "degraded") != 1 {
+		t.Error("the health series do not say degraded")
+	}
+}
+
 // R4: safe mode at the start is published before the server exists, so the server has to replay it.
 func TestSafeModeAtStartIsInTheAuditLog(t *testing.T) {
 	root := t.TempDir()

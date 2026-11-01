@@ -6908,6 +6908,10 @@ and a stop that leaves nothing of the gateway on the host. There is no change of
   (`Store.MarkGood`). A revision that did not apply at start and ended in safe mode, and the fallback that failed too, are marked (`Store.MarkBootFailed`, `boot_failed_at` in the status file): the newer revision that
   is the way out supersedes the failed one with its confirmation still set, and without the mark a later failing start would fall back to a revision that is known not to apply (and stop there, never trying an older
   one). `Fallback` skips a marked revision, `MarkGood` and `Restore` clear the mark.
+- **A revision that waited for confirmation when the process ended** is rolled back by `Store.Open` (`reconcile`), before the engine looks, so the engine finds nothing pending after a real restart. The store keeps which
+  revisions it rolled back (`Store.RolledBackAtOpen`) and `Engine.Start` publishes `revision_rolled_back` (`reason: "restart"`) for them. The API subscribes with a replay of the buffered events (`SubscribeFrom(0)` in `api.New`,
+  the engine starts first), so the event that was published before the server existed reaches the audit log (`revision.rolled_back`, and `service.safe_mode` and `service.safe_mode_ended` for the safe mode) and, for a first
+  revision, reopens the setup (`TestARestartInsideTheConfirmationWindowTellsThatTheRevisionWasRolledBack`, `TestAStartAfterAnUnconfirmedSetupAuditsTheRollbackAndReopensTheSetup`, `TestSafeModeAtStartIsInTheAuditLog`).
 - **Safe mode.** When there is no revision to fall back to or that one fails too, the engine applies `domain.SafeModeConfiguration` of the failed configuration (the uplink, the management interface and its allowed sources
   and port, the settings; no network, device, rule, fault, port forward, probe, profile, scenario or routing): the management network keeps reaching the UI and the API through gateway protection, and with no test
   network there is no bridge, no route between networks and no masquerade (`TestTheSafeModeConfigurationCompilesToNoTestNetworkAtAll`); the management network keeps its normal path to the uplink (plan §2.14), and a

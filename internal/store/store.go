@@ -86,6 +86,8 @@ type Store struct {
 	st   state
 	mig  migrations
 	lock *os.File // holds the lock on the directory
+	// rolledBackAtOpen holds the revisions that Open rolled back because they waited for confirmation (RolledBackAtOpen).
+	rolledBackAtOpen []int64
 }
 
 // Open opens the store in dir and creates it when it is new. It removes the temporary files of

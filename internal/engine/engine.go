@@ -459,6 +459,11 @@ func (e *Engine) initialState(ctx context.Context) (*ownerInit, error) {
 		}
 		e.events.publish(e.cfg.Clock.Now(), EventRolledBack, map[string]any{"revision": p.Revision, "reason": "restart"})
 	}
+	// after a restart of the process Store.Open has done that already (reconcile), so nothing is pending here and the
+	// event is made up for: the audit log and the reopening of the setup (internal/api/server.go) hang on it
+	for _, rev := range e.cfg.Store.RolledBackAtOpen() {
+		e.events.publish(e.cfg.Clock.Now(), EventRolledBack, map[string]any{"revision": rev, "reason": "restart"})
+	}
 	rev, cfg, err := e.cfg.Store.Active()
 	var corrupt *store.ErrCorrupt
 	switch {

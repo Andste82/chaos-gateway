@@ -1,6 +1,7 @@
 package ciconfig
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -93,7 +94,8 @@ func runScript(t *testing.T, script string, env []string, stubs, files map[strin
 	cmd.Dir = dir
 	cmd.Env = append([]string{"PATH=" + bin + ":" + os.Getenv("PATH"), "HOME=" + dir, "RUNNER_TEMP=" + dir}, env...)
 	out, err := cmd.CombinedOutput()
-	if ee, ok := err.(*exec.ExitError); ok {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
 		return string(out), ee.ExitCode()
 	} else if err != nil {
 		t.Fatal(err)
@@ -151,7 +153,7 @@ func TestTheReleaseWorkflowRequiresASuccessfulCIRunOfTheTaggedCommit(t *testing.
 	check := stepIndex(t, j, "that checks CI", func(s step) bool { return s.Name == "Check that CI passed on the commit" })
 	tag := stepIndex(t, j, "that checks the tag", func(s step) bool { return strings.Contains(s.Run, "deploy/release-check.sh \"$GITHUB_REF_NAME\"") })
 	build := stepIndex(t, j, "that builds", func(s step) bool { return strings.HasPrefix(s.Uses, "docker/build-push-action@") })
-	if !(tag < check && check < build) {
+	if tag >= check || check >= build {
 		t.Errorf("the check of CI is step %d, the check of the tag %d and the first build %d: it belongs between them", check, tag, build)
 	}
 	s := j.Steps[check]
@@ -290,7 +292,7 @@ func TestTheNightlyFuzzJobRunsTheFileTargetAsRootAndKeepsItsCorpus(t *testing.T)
 	}
 	restore := stepIndex(t, fuzz, "that restores the corpus", func(s step) bool { return strings.HasPrefix(s.Uses, "actions/cache/restore@") })
 	save := stepIndex(t, fuzz, "that saves the corpus", func(s step) bool { return strings.HasPrefix(s.Uses, "actions/cache/save@") })
-	if !(restore < run && run < save) {
+	if restore >= run || run >= save {
 		t.Errorf("the corpus is restored in step %d, the fuzz runs in step %d and the corpus is saved in step %d", restore, run, save)
 	}
 	r, s := fuzz.Steps[restore].With, fuzz.Steps[save].With

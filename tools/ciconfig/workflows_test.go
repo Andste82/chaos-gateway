@@ -4,8 +4,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -84,6 +86,34 @@ func runScript(t *testing.T, script string, env []string, stubs map[string]strin
 		t.Fatal(err)
 	}
 	return string(out), 0
+}
+
+// Every job has a timeout of its own (a hung job would run for the 6 hours of GitHub's default), and the limits inside a job (the VM of
+// testvm, the test binary, `go test -timeout`) are below it, so that the tool that knows what hung ends the run and not the job's timeout.
+func TestEveryJobHasATimeoutAboveTheLimitsInsideIt(t *testing.T) {
+	limit := regexp.MustCompile(`(-vm-timeout|-test-timeout|-timeout) (\d+h(?:\d+m)?|\d+m)\b`)
+	for _, file := range workflowFiles {
+		for id, j := range parseWorkflow(t, file).Jobs {
+			if j.Timeout <= 0 {
+				t.Errorf("%s: the job %s has no timeout-minutes", file, id)
+				continue
+			}
+			if j.Timeout > 360 {
+				t.Errorf("%s: the job %s has %d minutes, GitHub's own limit is 360", file, id, j.Timeout)
+			}
+			for _, s := range j.Steps {
+				for _, m := range limit.FindAllStringSubmatch(s.Run, -1) {
+					d, err := time.ParseDuration(m[2])
+					if err != nil {
+						t.Fatal(err)
+					}
+					if d >= time.Duration(j.Timeout)*time.Minute {
+						t.Errorf("%s: the job %s has %d minutes, not above its own %s %s", file, id, j.Timeout, m[1], m[2])
+					}
+				}
+			}
+		}
+	}
 }
 
 // A run of CI on main is the verdict on that commit (image.yml asks for it before it publishes a tag): a later push must not cancel it, nor

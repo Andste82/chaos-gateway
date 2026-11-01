@@ -18,11 +18,15 @@ concurrency:
 env:
   GOLANGCI_LINT_VERSION: v2.14.0
 
+# Every job has a timeout-minutes of its own (without one a hung job runs for the 6 hours of GitHub's default), about twice the longest run
+# seen so far (tools/ciconfig checks that none is missing): level0 26 minutes (85.8 once), testbed-vm 152 (-vm-timeout 4h is below its
+# 300), testbed-privileged 54, e2e 18, arm64 21, the others under 10.
 jobs:
   # Level 0 (plan §4.5): everything that needs no root. Generated code is checked here too:
   # the spec lints, the examples validate, the Go code is current and all clients compile.
   level0:
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -66,6 +70,7 @@ jobs:
   # against the schemas of the spec and the links are level 0 tests (internal/docscheck, run by `make test`).
   docs:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -76,6 +81,7 @@ jobs:
   # Playwright end-to-end tests of the web app.
   e2e:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -90,6 +96,7 @@ jobs:
   testbed-vm:
     name: testbed (level 1b, VM)
     runs-on: ubuntu-24.04
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -115,7 +122,7 @@ jobs:
           if [ -e /dev/kvm ]; then kvm=(--device /dev/kvm); fi
           # The engine package alone needs more than the default 20 minutes since M8b (about 50 minutes under KVM since M10): its measurement
           # tests of the fault engine send thousands of probes through delays of 100 to 600 ms each.
-          docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-vm ARGS="-test-timeout 100m -vm-timeout 3h -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$M27_LEVEL1,$M29_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1"
+          docker run --rm "${kvm[@]}" -v "$PWD:/workspace" -w /workspace chaos-gateway-dev make test-vm ARGS="-test-timeout 100m -vm-timeout 4h -measurements measurements.jsonl -expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$M27_LEVEL1,$M29_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1"
       # The measurement record (plan §4.3, P2-AUDIT-07): one JSON line per check of every accuracy assertion. It is
       # kept for 90 days; `go run ./tools/measurements <dirs of downloaded artifacts>` compares the runs.
       - name: Summarize the measurement record
@@ -145,6 +152,7 @@ jobs:
   testbed-privileged:
     name: testbed (level 1, privileged container)
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -198,6 +206,7 @@ jobs:
   testbed-ui:
     name: testbed UI flow (level 1, privileged container)
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -219,6 +228,7 @@ jobs:
   # under qemu-user (functional only; ARM64 measurements need hardware, H1).
   arm64:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -319,6 +329,7 @@ jobs:
   # request (deploy/smoke-tlsproxy.sh). It needs no namespace and no capability, so a hosted runner is enough.
   tlsproxy-image:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -342,6 +353,7 @@ jobs:
   # connection is not touched. The level 2 test (nightly) does the same on clean Ubuntu hosts with a test interface and a run.
   deployment:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -363,6 +375,7 @@ jobs:
   # executor, since the mounts are made before the process runs.
   mounts:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4

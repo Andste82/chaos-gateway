@@ -17,6 +17,7 @@ jobs:
   testbed-no-kvm:
     name: testbed (level 1b, emulated)
     runs-on: ubuntu-24.04
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4

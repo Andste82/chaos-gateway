@@ -132,8 +132,8 @@ Things to know:
   forces software emulation even where `/dev/kvm` exists, so the emulated branches
   (`!testbed.Accurate()`) can be exercised on a KVM-capable machine too, not only implicitly on
   the VPS; a weekly job (`weekly.yml`) runs `make test-vm ARGS=-no-kvm` for exactly that, in two jobs: every
-  testbed package but `internal/engine` (`-test-timeout 100m -vm-timeout 3h`, the limits of `ci.yml` and the
-  nightly matrix), and `internal/engine` alone (`-test-timeout 200m -vm-timeout 4h30m`). The engine job is where
+  testbed package but `internal/engine` (`-test-timeout 100m -vm-timeout 3h`, the test limit of `ci.yml` and the
+  nightly matrix, whose `-vm-timeout` is 4h since the jobs took up to 152 minutes), and `internal/engine` alone (`-test-timeout 200m -vm-timeout 4h30m`). The engine job is where
   the functional assertions of the engine's measurement tests (M8b to M11) run automatically: the package needs
   about 60 minutes under KVM and about 1.5 to 1.7 times that emulated on a hosted runner, which once ran into the
   100-minute test timeout of the shared job (run 38158196621; P2-AUDIT-14). The engine job ran three times on the

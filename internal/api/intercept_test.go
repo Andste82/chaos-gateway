@@ -819,3 +819,57 @@ func TestAKeyLogBatchOfACaseWithoutKeyLogOrOfNoCaseReachesNoCapture(t *testing.T
 		t.Errorf("the key log of the capture: %d %q", r.Status, r.Body)
 	}
 }
+
+// The download of a key log and of a capture that holds secrets is a secret download: it is recorded
+// before the first byte leaves, and a log that cannot be written stops it (P7-M29 audit S10). The
+// download of a capture without secrets is not recorded and does not depend on the log.
+func TestTheDownloadOfSecretsOfACaptureIsAuditedBeforeItStarts(t *testing.T) {
+	g, _ := capGateway(t)
+	svc := tlsServiceToken(g)
+	admin := g.token
+	plain := g.mustStartCapture(map[string]any{"name": "plain", "scope": map[string]any{"network": "lab-hub"}})["id"].(string)
+	secret := g.mustStartCapture(map[string]any{"name": "dev", "scope": map[string]any{"device": "esp32-42"}})["id"].(string)
+	g.token = svc
+	if r := g.postKeylog("10.10.0.31", []string{"CLIENT_RANDOM aa bb"}); r.Status != 204 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	g.token = admin
+	if c := g.capture(secret); c["keylog"] != true || c["sensitive"] != true {
+		t.Fatalf("the capture holds no secrets: %v", c)
+	}
+	downloads := func() (n int) {
+		for _, i := range g.do("GET", "/audit?limit=500", nil, nil, nil).json(t)["items"].([]any) {
+			if e := i.(map[string]any); e["action"] == "capture.download_secret" {
+				if o, _ := e["object"].(map[string]any); o["id"] != secret {
+					t.Errorf("the entry names %v, not %s", o, secret)
+				}
+				n++
+			}
+		}
+		return n
+	}
+	for _, q := range []string{"?part=keylog", ""} {
+		if r := g.do("GET", "/captures/"+secret+"/download"+q, nil, nil, nil); r.Status != 200 {
+			t.Fatalf("%s: %d %s", q, r.Status, r.Body)
+		}
+	}
+	if r := g.do("GET", "/captures/"+plain+"/download", nil, nil, nil); r.Status != 200 {
+		t.Fatalf("%d", r.Status)
+	}
+	if n := downloads(); n != 2 {
+		t.Fatalf("%d entries for two downloads of secrets and one without", n)
+	}
+
+	if err := g.log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{"?part=keylog", ""} {
+		r := g.do("GET", "/captures/"+secret+"/download"+q, nil, nil, nil)
+		if r.Status != 503 || strings.Contains(string(r.Body), "CLIENT_RANDOM") || r.Header.Get("Content-Disposition") != "" {
+			t.Errorf("%s: %d %v %q", q, r.Status, r.Header, r.Body)
+		}
+	}
+	if r := g.do("GET", "/captures/"+plain+"/download", nil, nil, nil); r.Status != 200 {
+		t.Errorf("a capture without secrets does not depend on the audit log: %d %s", r.Status, r.Body)
+	}
+}

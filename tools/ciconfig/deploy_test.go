@@ -328,7 +328,7 @@ func TestTheReleaseWorkflowChecksTheTagBeforeItBuildsAndTheManifestAfterItPushes
 		t.Error("image.yml checks out no history: release-check.sh cannot tell whether the tag is on main")
 	}
 	pos := func(s string) int { return strings.Index(image, s) }
-	check, build, push, manifest, upload := pos(`deploy/release-check.sh "$GITHUB_REF_NAME"`), pos("docker/build-push-action@v7"), pos("push: ${{ github.event_name"), pos("imagetools inspect"), pos("gh release upload")
+	check, build, push, manifest, upload := pos(`deploy/release-check.sh "$GITHUB_REF_NAME"`), pos("docker/build-push-action@"), pos("push: ${{ github.event_name"), pos("imagetools inspect"), pos("gh release upload")
 	for name, p := range map[string]int{"the check of the tag": check, "the first build": build, "the push": push, "the check of the manifest": manifest, "the upload": upload} {
 		if p < 0 {
 			t.Fatalf("image.yml has no %s", name)

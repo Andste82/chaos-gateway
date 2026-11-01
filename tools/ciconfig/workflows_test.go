@@ -116,6 +116,26 @@ func TestEveryJobHasATimeoutAboveTheLimitsInsideIt(t *testing.T) {
 	}
 }
 
+// The release workflow is the one that writes to the repository and the registry: its actions are pinned to a commit, the version they stand
+// for is in the comment after the hash (the other workflows keep the version tags, they have no write permission besides contents: read).
+func TestTheActionsOfTheReleaseWorkflowArePinnedToACommit(t *testing.T) {
+	pinned := regexp.MustCompile(`^[\w.-]+/[\w.-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$`)
+	var uses int
+	for _, l := range strings.Split(read(t, ".github", "workflows", "image.yml"), "\n") {
+		_, after, ok := strings.Cut(strings.TrimSpace(l), "uses: ")
+		if !ok || strings.HasPrefix(strings.TrimSpace(l), "#") {
+			continue
+		}
+		uses++
+		if !pinned.MatchString(after) {
+			t.Errorf("image.yml: %q is not `owner/action@<40 hex characters> # vX.Y.Z`", after)
+		}
+	}
+	if uses < 6 {
+		t.Errorf("found only %d `uses:` lines in image.yml", uses)
+	}
+}
+
 // A run of CI on main is the verdict on that commit (image.yml asks for it before it publishes a tag): a later push must not cancel it, nor
 // replace it while it waits. Only the runs of a pull request are cancelled by a newer push to the same pull request.
 func TestTheCIRunsOfMainAreNeverCancelled(t *testing.T) {

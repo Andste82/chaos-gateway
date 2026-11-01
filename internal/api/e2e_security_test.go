@@ -70,10 +70,16 @@ func TestTheUIAndTheAPIAreReachedFromTheManagementNetworkOnlyOnTheRealKernel(t *
 	go func() { _ = hs.ServeTLS(l, "", "") }()
 	t.Cleanup(func() { _ = hs.Close() })
 
-	// a client of a WireGuard network with the role test, from its tunnel
-	id := g.mustPatch(map[string]any{"networks": map[string]any{hubID: map[string]any{"clients": map[string]any{
-		"6e7f8091-aabb-4c2d-8e3f-4a5b6c7d8e9f": map[string]any{"name": "rC", "address": "10.99.0.4", "keepalive": "1s", "key": map[string]any{"mode": "generated"}},
-	}}}})
+	// a client of a WireGuard network with the role test, from its tunnel, and a second test network on lan1: the configuration of
+	// the bed has only lan0, so device C had no address to reach at the gateway and its refusal below proved nothing (the positive
+	// control of the loop found it)
+	const lab1ID = "5d3a8e6f-2b1c-4d7e-9f08-a1b2c3d4e5f6"
+	id := g.mustPatch(map[string]any{"networks": map[string]any{
+		lab1ID: map[string]any{"type": "lan", "name": "Lab", "address": testbed.LAN1Gateway + "/24",
+			"interfaces": []any{map[string]any{"name": "lan1", "mac": testbed.GWLan1MAC}}},
+		hubID: map[string]any{"clients": map[string]any{
+			"6e7f8091-aabb-4c2d-8e3f-4a5b6c7d8e9f": map[string]any{"name": "rC", "address": "10.99.0.4", "keepalive": "1s", "key": map[string]any{"mode": "generated"}},
+		}}}})
 	if r := g.apply(id); r.Status != 200 {
 		t.Fatalf("%d %s", r.Status, r.Body)
 	}

@@ -445,8 +445,9 @@ newer version wrote is refused with the version that is needed (exit 4), and the
 `--timeout` seconds (600), until `GET /api/v1/system/busy` reports no queued or running run, because an update ends active runs as
 `aborted`; when the time is up it stops (exit 3), and `--force` updates anyway. The question needs a token with the scope `read` (the web
 UI has no screen for tokens: make one with `POST /api/v1/auth/tokens`, see the [API guide](api-guide.md#tokens-and-scopes)): `--token-file FILE` or the variable `CHAOSGW_TOKEN`; the token is sent only to an API that shows the certificate
-it published in `/var/lib/chaosgw/service/api.pem`, never to whatever else listens on the port. Where nothing listens, the gateway is down and has no run; an API that
-listens and does not answer in time may have one, so the update stops (`--force` goes on). Then all containers are replaced together (the executor protocol
+it published in `/var/lib/chaosgw/service/api.pem`, never to whatever else listens on the port. Where nothing listens and the API container does not run, the gateway is down and has no run; an API that
+listens and does not answer in time, or a running API container that nothing answers for on `CHAOSGW_UI_PORT` (its port is
+`management.ui_port` of the configuration when that is set: name it with `CHAOSGW_UI_PORT=PORT ./update.sh`), may have one, so the update stops (`--force` goes on). Then all containers are replaced together (the executor protocol
 version rejects a set of two versions), and the script waits for their health checks and for the API's own health (exit 5 with the way
 back when they do not come; the DNS proxy and the TLS responder cannot be healthy before the first configuration, so a gateway that is not
 set up yet is not waited for with them). The flags, mounts, capabilities and health checks of the containers belong to the version, so the

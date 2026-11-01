@@ -24,7 +24,8 @@
 #
 # The busy question needs a token with the scope `read` (made from the admin session with POST /api/v1/auth/tokens, docs/api-guide.md), from --token-file or the variable
 # CHAOSGW_TOKEN, and it goes only to an API whose certificate is the one in /var/lib/chaosgw/service/api.pem (CHAOSGW_API_CERT), which
-# the API publishes for the other containers. A gateway where nothing listens has no run; one that is not set up yet has none either;
+# the API publishes for the other containers. A gateway where nothing listens and whose API container does not run has no run (the API container may listen on the
+# management.ui_port of the configuration and not on CHAOSGW_UI_PORT: then the update stops, CHAOSGW_UI_PORT=PORT names the right port); one that is not set up yet has none either;
 # one that listens and does not answer in time may have one, so the update stops (--force goes on).
 #
 # Options:
@@ -56,11 +57,20 @@ POLL=${CHAOSGW_UPDATE_POLL:-5}
 HEALTH_WAIT=${CHAOSGW_UPDATE_HEALTH_WAIT:-180}
 
 say() { echo "update: $*"; }
+# MOVED says, once the pull has moved the tag of the image under containers that still run the old one, what that means and the way
+# back; every way out before the restart prints it, so that none of them claims that nothing was changed.
+MOVED=""
 die() { # status, message
 	status=$1
 	shift
 	echo "update: $*" >&2
+	[ -z "$MOVED" ] || echo "update: $MOVED" >&2
 	exit "$status"
+}
+STARTED=0
+cancelled() {
+	[ "$STARTED" = 0 ] || die "$1" "cancelled during the restart: docker compose ps shows what runs"
+	die "$1" "cancelled; the containers were not touched"
 }
 
 usage() { sed -n '2,/^set -eu/p' "$0" | sed -e '/^set -eu/d' -e 's/^# \{0,1\}//' -e '/^#!/d'; }
@@ -125,8 +135,8 @@ esac
 TMP=$(mktemp)
 NEWFILES=$(mktemp -d)
 trap 'rm -rf "$TMP" "$NEWFILES"' EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cancelled 130' INT
+trap 'cancelled 143' TERM
 
 # the port of the web UI and API: the environment's, else the .env's (docker compose reads it from there too), else 8443
 if [ -z "$PORT" ] && [ -f .env ]; then
@@ -145,8 +155,10 @@ fi
 NEW_IMAGE=$(docker compose config --images 2>/dev/null | sort -u | head -n 1)
 [ -n "$NEW_IMAGE" ] || die 1 "docker compose config names no image: is $DIR/.env right?"
 OLD_IMAGE=""
+OLD_ID=""
 if oldid=$(docker compose ps -q exec 2>/dev/null) && [ -n "$oldid" ]; then
 	OLD_IMAGE=$(docker inspect -f '{{.Config.Image}}' "$oldid" 2>/dev/null || true)
+	OLD_ID=$(docker inspect -f '{{.Image}}' "$oldid" 2>/dev/null || true)
 fi
 if [ -n "$OLD_IMAGE" ]; then
 	say "running: $OLD_IMAGE; target: $NEW_IMAGE"
@@ -158,6 +170,15 @@ fi
 if [ "$PULL" = 1 ]; then
 	say "pulling $NEW_IMAGE"
 	docker pull --quiet "$NEW_IMAGE" >/dev/null || die 1 "cannot pull $NEW_IMAGE (an image that is loaded already: --no-pull)"
+fi
+# The pull has to come first (the schema check needs the new image before anything stops), and it moves the tag. When the
+# containers run the image under that very tag (latest), a later `docker compose up -d SERVICE` creates that one container from the
+# new image: a set of two versions. The way back names the old image by its id, which a running container keeps alive.
+if [ -n "$OLD_ID" ] && [ "$OLD_IMAGE" = "$NEW_IMAGE" ]; then
+	new_id=$(docker image inspect -f '{{.Id}}' "$NEW_IMAGE" 2>/dev/null || true)
+	if [ -n "$new_id" ] && [ "$new_id" != "$OLD_ID" ]; then
+		MOVED="note: $NEW_IMAGE now names the new image ($new_id), but the containers run the old one ($OLD_ID) until this update is finished, and docker compose up -d of a single service would start it from the new image: run this script again to finish the update, or go back with: docker tag $OLD_ID $NEW_IMAGE"
+	fi
 fi
 
 # ---- 2. the schema of the configuration, asked of the new image: it is the one that would have to read it
@@ -175,8 +196,31 @@ fi
 if ! docker run --rm --entrypoint tar "$NEW_IMAGE" -C /usr/local/share/chaosgw -cf - compose.yaml env.example update.sh | tar -xf - -C "$NEWFILES" --no-same-owner 2>/dev/null; then
 	die 1 "cannot read compose.yaml out of $NEW_IMAGE (/usr/local/share/chaosgw): is it an image of Chaos Gateway of this release line? The gateway keeps running as it is"
 fi
-docker compose -f "$NEWFILES/compose.yaml" --project-directory "$DIR" config -q >/dev/null 2>&1 ||
-	die 1 "the compose.yaml of $NEW_IMAGE is not valid with $DIR/.env (docker compose -f FILE --project-directory $DIR config shows why); the gateway keeps running as it is"
+# the file set of `docker compose up -d` here: compose.yaml and the override of the administrator (docs/install.md puts the mount of
+# the CA of the interception proxy there), so the new file is checked together with it
+FILES="-f $NEWFILES/compose.yaml"
+for override in compose.override.yaml compose.override.yml; do
+	if [ -f "$override" ]; then
+		FILES="$FILES -f $DIR/$override"
+		break
+	fi
+done
+# shellcheck disable=SC2086 # FILES is a list of options; the paths in it have no blanks (a mktemp directory, the installation's)
+docker compose $FILES --project-directory "$DIR" config -q >/dev/null 2>&1 ||
+	die 1 "the compose.yaml of $NEW_IMAGE is not valid with $DIR/.env and the override file (docker compose $FILES --project-directory $DIR config shows why); the gateway keeps running as it is"
+# The mounts of the new file whose source must exist (create_host_path: false, so that a directory the host setup did not make is
+# an error and not a directory of root on the host): a version that adds a data directory fails at container create, after the old
+# executor was stopped, unless the directory is there. The compose files of the repository write a mount as a list entry with
+# `source:` and `bind: {create_host_path: false}`.
+missing=$(awk '
+	function flush() { if (src != "" && nocreate) print src; src = ""; nocreate = 0 }
+	/^ *- / { flush() }
+	/^ *source: \// { src = $2 }
+	/^ *create_host_path: false/ { nocreate = 1 }
+	END { flush() }' "$NEWFILES/compose.yaml" | while read -r src; do [ -d "$src" ] || printf ' %s' "$src"; done)
+if [ -n "$missing" ]; then
+	die 1 "the compose.yaml of $NEW_IMAGE mounts directories of the host that do not exist:$missing; the gateway keeps running as it is. Make them with the host setup of the new image: docker run --rm --entrypoint cat $NEW_IMAGE /usr/local/share/chaosgw/host-setup.sh | sudo sh -s -- --data-only"
+fi
 
 # ---- 3. no run active
 
@@ -216,7 +260,11 @@ busy() {
 			echo no
 		fi
 		;;
-	000) echo unreachable ;;
+	000)
+		# nothing answers on the port of the .env, but the API container may listen on another one: management.ui_port of the
+		# configuration wins over --port (cmd/chaosgw/api.go). Only a gateway whose API container does not run has no run.
+		if [ -n "$(docker compose ps -q api 2>/dev/null)" ]; then echo refused; else echo unreachable; fi
+		;;
 	fail) echo noanswer ;;
 	401 | 403)
 		# without a token (or with one that may not read, or none sent for want of the certificate) the API says nothing about
@@ -234,9 +282,13 @@ while :; do
 	case "$state" in
 	no) say "no run is active"; break ;;
 	unreachable) say "nothing listens on 127.0.0.1:$PORT: no run is active"; break ;;
+	refused)
+		[ "$FORCE" = 1 ] && { say "the API container runs and nothing listens on 127.0.0.1:$PORT; --force: going on"; break; }
+		die 1 "the API container runs, but nothing listens on 127.0.0.1:$PORT: the API listens on management.ui_port of the configuration when that is set, else on CHAOSGW_UI_PORT; it may have a run active, so the containers were not touched. Ask on the right port (CHAOSGW_UI_PORT=PORT $0 ...), or --force goes on anyway"
+		;;
 	noanswer)
 		[ "$FORCE" = 1 ] && { say "the API did not answer the question for the runs; --force: going on"; break; }
-		die 1 "the API listens on 127.0.0.1:$PORT and did not answer in time (or its certificate is not the published one): it may have a run active, so nothing was changed; --force goes on anyway"
+		die 1 "the API listens on 127.0.0.1:$PORT and did not answer in time (or its certificate is not the published one): it may have a run active, so the containers were not touched; --force goes on anyway"
 		;;
 	unauthorized)
 		[ "$TIMEOUT" = 0 ] && [ "$FORCE" = 1 ] && { say "not asking whether a run is active (--no-wait)"; break; }
@@ -250,7 +302,7 @@ while :; do
 		fi
 		if [ $(($(date +%s) - start)) -ge "$TIMEOUT" ]; then
 			[ "$FORCE" = 1 ] && { say "a run is still active after ${TIMEOUT}s; --force: it ends aborted"; break; }
-			die 3 "a run is still active after ${TIMEOUT}s; nothing was changed (--force updates anyway and the run ends aborted, --timeout waits longer)"
+			die 3 "a run is still active after ${TIMEOUT}s; the containers were not touched (--force updates anyway and the run ends aborted, --timeout waits longer)"
 		fi
 		;;
 	*)
@@ -263,10 +315,13 @@ done
 
 if [ "$CHECK" = 1 ]; then
 	say "--check: the containers would be restarted with $NEW_IMAGE now; the test networks are rebuilt from the confirmed revision afterwards"
+	[ -z "$MOVED" ] || say "$MOVED"
 	exit 0
 fi
 
 # ---- 4. the files of the new image, then the restart of all containers together
+MOVED=""
+STARTED=1
 REPLACED=0
 if ! cmp -s "$NEWFILES/compose.yaml" compose.yaml; then
 	if ! { cp -p compose.yaml compose.yaml.bak && cp "$NEWFILES/compose.yaml" compose.yaml.new && mv -f compose.yaml.new compose.yaml; }; then

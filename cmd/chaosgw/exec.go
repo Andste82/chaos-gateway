@@ -93,34 +93,47 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer ex.Close()
-	logPreflight(ex.HostPreflight(context.Background()), log)
+	// a signal that comes while the executor starts (the host checks take a moment) ends the start the same way as one that
+	// comes while it serves, with the cleanup: the checks make namespaces
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	logPreflight(ex.HostPreflight(ctx), log)
 	if err := ex.EnsureBirdConfig(compiler.BirdInstance); err != nil {
 		fmt.Fprintf(stderr, "chaosgw exec: %v\n", err)
 		return 1
+	}
+	if ctx.Err() != nil {
+		return stopExec(ex, *serviceNS, log, stderr, nil)
 	}
 	l, err := executor.Listen(*socket, 0o660, *owner)
 	if err != nil {
 		fmt.Fprintf(stderr, "chaosgw exec: %v\n", err)
 		return 1
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer stop()
 	srv := &executor.Server{Exec: ex, Auth: executor.AllowUIDs(allow...), Log: log}
 	log.Info("executor ready", "socket", *socket, "protocol", executor.ProtocolVersion, "allowed_uids", []uint32(allow))
-	if err := srv.Serve(ctx, l); err != nil {
-		fmt.Fprintf(stderr, "chaosgw exec: %v\n", err)
-		return 1
+	return stopExec(ex, *serviceNS, log, stderr, srv.Serve(ctx, l))
+}
+
+// stopExec is the end of the executor, whatever ended the serving (serveErr: the listener failed, nil: the signal). The stop
+// (plan §3.8, D35, variant A): the API container stopped first and removed the overlays; everything the gateway created in the
+// kernel goes now, so that a stopped gateway leaves nothing that changes the host's or the devices' traffic, and a listener that
+// failed does not leave it behind either. The connections are closed, so nothing queues behind this.
+func stopExec(ex *executor.Executor, serviceNS string, log *slog.Logger, stderr io.Writer, serveErr error) int {
+	code := 0
+	if serveErr != nil {
+		fmt.Fprintf(stderr, "chaosgw exec: %v\n", serveErr)
+		code = 1
 	}
-	// the stop (plan §3.8, D35, variant A): the API container stopped first and removed the overlays; everything the
-	// gateway created in the kernel goes now, so that a stopped gateway leaves nothing that changes the host's or the
-	// devices' traffic. The connections are closed, so nothing queues behind this.
 	log.Info("executor stopping: removing everything it created in the kernel")
-	if err := stopCleanup(ex, *serviceNS, log); err != nil {
+	if err := stopCleanup(ex, serviceNS, log); err != nil {
 		fmt.Fprintf(stderr, "chaosgw exec: the stop cleanup failed: %v\n", err)
 		return 1
 	}
-	log.Info("executor stopped")
-	return 0
+	if code == 0 {
+		log.Info("executor stopped")
+	}
+	return code
 }
 
 // preflightDirs are the directories of the persistence layout (plan §3.6) the executor's container mounts, for the preflight: the

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -108,6 +109,38 @@ func TestExecRemovesEverythingItCreatedWhenItStops(t *testing.T) {
 	}
 	if !strings.Contains(errb.String(), "stop cleanup") {
 		t.Errorf("the log does not name the cleanup:\n%s", errb.String())
+	}
+}
+
+// R5 of the audit of Phase 7: a listener that fails while the executor serves ended the process with exit code 1 and without the
+// cleanup, so what the gateway made in the kernel stayed until the next stop.
+func TestExecRemovesEverythingItCreatedWhenTheListenerFails(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("the executor refuses to run unprivileged")
+	}
+	dir, err := os.MkdirTemp("", "cgx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	state := filepath.Join(dir, "state.json")
+	k, _, left := appliedGateway(t, state)
+	ex, err := executor.New(k, executor.WithStateFile(state))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ex.Close()
+
+	var errb bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&errb, nil))
+	if code := stopExec(ex, "", log, &errb, errors.New("accept unix e.sock: too many open files")); code != 1 {
+		t.Errorf("exit code %d, want 1", code)
+	}
+	if l := left(); len(l) != 0 {
+		t.Errorf("left after the failed listener: %v\nlog: %s", l, errb.String())
+	}
+	if !strings.Contains(errb.String(), "too many open files") {
+		t.Errorf("the error is not reported:\n%s", errb.String())
 	}
 }
 

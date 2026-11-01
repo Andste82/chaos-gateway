@@ -6902,11 +6902,13 @@ and a stop that leaves nothing of the gateway on the host. There is no change of
   revision are replaced by those of the committed one. When the apply fails it is tried once more after `retryDelay` (10 s, `Config.RetryDelay`; a failure that only a moment caused must not roll a configuration back),
   and when that fails too, or when the revision's file is damaged (`store.ErrCorrupt`: a checksum, a JSON error, a missing status file; a newer schema still stops the start, plan §3.9 "Downgrade"), the engine applies
   the last revision that worked: `Store.Fallback` is the last known good revision when it is another one than the active, else the newest revision that was confirmed and then replaced (`superseded`). When that
-  applies, `Store.Restore` makes it the active and the last known good revision and the failed one `rolled_back` (the pointer moves last, so a crash in between is repaired by the next start); the event
+  applies, `Store.Restore` makes it the active and the last known good revision and the failed one `rolled_back` (the pointer moves last, so a crash in between is repaired by the next start); the fallback gets the same second try after `retryDelay` as the
+  active revision (`TestATransientFailureOfTheLastKnownGoodRevisionIsTriedAgainBeforeSafeMode`); the event
   `revision_rolled_back` carries `reason: "boot: <why>"` and `restored`, `last_apply.result` says `rolled_back`, and the audit log records it. A revision that applies at start becomes the last known good one
   (`Store.MarkGood`). A revision that did not apply at start and ended in safe mode, and the fallback that failed too, are marked (`Store.MarkBootFailed`, `boot_failed_at` in the status file): the newer revision that
   is the way out supersedes the failed one with its confirmation still set, and without the mark a later failing start would fall back to a revision that is known not to apply (and stop there, never trying an older
-  one). `Fallback` skips a marked revision, `MarkGood` and `Restore` clear the mark.
+  one). `Fallback` skips a marked revision, `MarkGood` and `Restore` clear the mark. A revision whose last failure came from the way to the executor (the socket gone, the connection broken, a call out of time:
+  `isTransportError`) is not marked, because that failure says nothing about the revision and the next start, with the executor back, must try it again (`TestAStartThatFailsBecauseTheExecutorIsNotThereMarksNoRevision`).
 - **A revision that waited for confirmation when the process ended** is rolled back by `Store.Open` (`reconcile`), before the engine looks, so the engine finds nothing pending after a real restart. The store keeps which
   revisions it rolled back (`Store.RolledBackAtOpen`) and `Engine.Start` publishes `revision_rolled_back` (`reason: "restart"`) for them. The API subscribes with a replay of the buffered events (`SubscribeFrom(0)` in `api.New`,
   the engine starts first), so the event that was published before the server existed reaches the audit log (`revision.rolled_back`, and `service.safe_mode` and `service.safe_mode_ended` for the safe mode) and, for a first

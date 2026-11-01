@@ -352,7 +352,10 @@ func (o *owner) retry() {
 	if o.snap.LastError == "" || o.running != nil || o.current == nil {
 		return
 	}
-	o.converge(o.nextDesired(o.current.Config, o.current.Revision))
+	d := o.nextDesired(o.current.Config, o.current.Revision)
+	// the second try of the last known good revision at start is still the apply that rolled back
+	d.RolledBack = o.boot != nil && o.boot.fallback
+	o.converge(d)
 }
 
 func (o *owner) scheduleRetry() {

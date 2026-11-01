@@ -18,6 +18,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/executor"
+	"github.com/Andste82/chaos-gateway/internal/store"
 )
 
 // dataDirs are the directories of the volumes (plan §3.6) `teardown --purge` empties, with what each holds.
@@ -62,6 +63,9 @@ func runTeardown(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "chaosgw teardown: an executor is serving on %s: stop the gateway first (docker compose stop), which removes everything as well\n", *socket)
 		return 1
 	}
+	if *purge && volumesInUse(dataDirs, stderr) {
+		return 1
+	}
 	log := slog.New(slog.NewTextHandler(stderr, nil))
 	opts := []executor.Option{executor.WithLogger(log), executor.WithStateFile(*state)}
 	if *birdDir != "" {
@@ -100,10 +104,33 @@ func runTeardown(args []string, stdout, stderr io.Writer) int {
 	return purgeVolumes(dataDirs, stdout, stderr)
 }
 
+// volumesInUse reports, and says on stderr, whether a process has the store in one of the directories open: the API container
+// holds the lock of the revisions for as long as it runs, and it runs while the executor restarts, which is when the executor
+// is not answering on the socket. Emptying the revisions, the secrets and the audit log under a running API would leave it with
+// a store that is not there.
+func volumesInUse(dirs []struct{ path, what string }, stderr io.Writer) bool {
+	inUse := false
+	for _, d := range dirs {
+		used, err := store.InUse(d.path)
+		switch {
+		case err != nil:
+			fmt.Fprintf(stderr, "chaosgw teardown: cannot tell whether %s is in use: %v\n", d.path, err)
+			inUse = true
+		case used:
+			fmt.Fprintf(stderr, "chaosgw teardown: %s (%s) is in use: the api container has it open: stop the gateway first (docker compose stop), then purge\n", d.path, d.what)
+			inUse = true
+		}
+	}
+	return inUse
+}
+
 // purgeVolumes empties the data directories that are mounted here and says which are not. They are directories of the host
 // (plan §3.6, bind mounts): `docker compose down -v` removes named volumes only and leaves them, so a directory that is not
-// mounted writable here is named, to be removed on the host.
+// mounted writable here is named, to be removed on the host. It empties nothing while a store is open in one of them.
 func purgeVolumes(dirs []struct{ path, what string }, stdout, stderr io.Writer) int {
+	if volumesInUse(dirs, stderr) {
+		return 1
+	}
 	code := 0
 	var absent []string
 	for _, d := range dirs {

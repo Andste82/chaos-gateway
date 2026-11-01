@@ -159,7 +159,7 @@ touches an interface that was not assigned to the gateway.
 
 `--purge` also empties the data: the revisions, the secrets, the audit log, the service token, the TLS CAs, the captures, Kea's leases
 and the executor's state. That is irreversible and meant for starting from nothing (the directories stay, with their owners). It
-empties them only when the kernel is clean; when the teardown reports leftovers the data stays, because a second run needs the
+refuses while the `api` container is running (`docker compose stop` first), and empties the data only when the kernel is clean; when the teardown reports leftovers the data stays, because a second run needs the
 executor's state, and you run it again after the cause is gone:
 
 ```sh host

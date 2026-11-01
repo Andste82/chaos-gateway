@@ -220,6 +220,71 @@ func TestTheSmokeTestsOfTheDeploymentAreRunByTheJobs(t *testing.T) {
 	}
 }
 
+// level2Tests are the tests of the nightly level 2 job. Each of them skips without an image tar or without /dev/kvm, and `go test` is green
+// for a skip, so the job must see each of them end with PASS.
+var level2Tests = []string{"TestSmokeOnCleanUbuntuHosts", "TestRecoveryAndStopOnCleanUbuntuHosts", "TestContainerDeploymentOnCleanUbuntuHosts"}
+
+// The nightly level 2 job has the equivalent of -expect-pass: the step lists the three tests, selects exactly them with -run, and fails unless
+// each ended with PASS. The check is run here against the output of a `go test` that passes, skips, lacks or fails a test.
+func TestTheNightlyLevel2JobFailsUnlessEachOfItsTestsPassed(t *testing.T) {
+	var src string
+	for _, f := range []string{"deployment_test.go", "appliance_test.go", "recovery_test.go"} {
+		src += read(t, "internal", "appliance", f)
+	}
+	for _, name := range level2Tests {
+		if !strings.Contains(src, "func "+name+"(t *testing.T)") {
+			t.Errorf("internal/appliance has no test %s", name)
+		}
+	}
+	j, ok := parseWorkflow(t, "nightly.yml").Jobs["appliance"]
+	if !ok {
+		t.Fatal("nightly.yml has no job appliance")
+	}
+	step := stepRunning(t, j, "go test -tags appliance")
+	m := regexp.MustCompile(`(?m)^\s*tests="([^"]*)"$`).FindStringSubmatch(step.Run)
+	if m == nil || strings.Join(strings.Fields(m[1]), " ") != strings.Join(level2Tests, " ") {
+		t.Errorf("the step lists the tests %v, want %v", m, level2Tests)
+	}
+	for _, want := range []string{"set -o pipefail", `-v -run "$pattern"`, "tee ", `for name in $tests; do`, `grep -q -- "--- PASS: $name "`} {
+		if !strings.Contains(step.Run, want) {
+			t.Errorf("the step lacks %q", want)
+		}
+	}
+	if !regexp.MustCompile(`pattern="\^\(.*\$tests.*\)\\\$"`).MatchString(step.Run) {
+		t.Errorf("the -run pattern is not made from the list of tests: %s", step.Run)
+	}
+
+	// the check itself, against a stub of go that prints what the test run printed
+	all := ""
+	for _, name := range level2Tests {
+		all += "=== RUN   " + name + "\n    x_test.go:1: log\n--- PASS: " + name + " (12.30s)\n"
+	}
+	skipped := strings.Replace(all, "--- PASS: TestRecoveryAndStopOnCleanUbuntuHosts", "--- SKIP: TestRecoveryAndStopOnCleanUbuntuHosts", 1)
+	for name, c := range map[string]struct {
+		out    string
+		code   int
+		want   int
+		report string
+	}{
+		"all pass":                      {out: all + "PASS\n", want: 0},
+		"one skipped":                   {out: skipped + "PASS\n", want: 1, report: "TestRecoveryAndStopOnCleanUbuntuHosts did not end with PASS"},
+		"one renamed or not selected":   {out: strings.Replace(all, "TestSmokeOnCleanUbuntuHosts", "TestSmokeOnTheCleanHosts", 2) + "PASS\n", want: 1, report: "TestSmokeOnCleanUbuntuHosts did not end with PASS"},
+		"only a subtest passed":         {out: strings.Replace(all, "--- PASS: TestContainerDeploymentOnCleanUbuntuHosts (", "--- PASS: TestContainerDeploymentOnCleanUbuntuHosts/24.04 (", 1) + "PASS\n", want: 1, report: "TestContainerDeploymentOnCleanUbuntuHosts did not end with PASS"},
+		"no test ran":                   {out: "testing: warning: no tests to run\nPASS\n", want: 1, report: "TestSmokeOnCleanUbuntuHosts did not end with PASS"},
+		"a failed run keeps its status": {out: all + "FAIL\n", code: 1, want: 1},
+	} {
+		out := filepath.Join(t.TempDir(), "go-output")
+		if err := os.WriteFile(out, []byte(c.out), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		stub := "cat '" + out + "'\nexit " + strconv.Itoa(c.code) + "\n"
+		got, code := runScript(t, step.Run, nil, map[string]string{"go": stub})
+		if code != c.want || !strings.Contains(got, c.report) {
+			t.Errorf("%s: exit %d, want %d, with %q\n%s", name, code, c.want, c.report, got)
+		}
+	}
+}
+
 // The installation guide describes the deployment that is shipped: the host setup with the image, the compose file, the update script, the
 // data directory, the optional profile and the teardown service.
 func TestTheInstallationGuideNamesTheFilesAndCommandsOfTheDeployment(t *testing.T) {

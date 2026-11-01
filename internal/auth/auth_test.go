@@ -35,6 +35,9 @@ func TestScopesInclude(t *testing.T) {
 		{ScopeRead, ScopeOverlays, false}, {ScopeRead, ScopeRead, true},
 		{ScopeService, ScopeRead, false}, {ScopeFull, ScopeService, false}, {ScopeService, ScopeService, true},
 		{"", ScopeRead, false}, {ScopeRead, ScopeNone, true}, {"", ScopeNone, true},
+		// a requirement that is no scope is met by nobody (P7-M29 audit S4)
+		{ScopeRead, "reed", false}, {ScopeFull, "reed", false}, {ScopeFull, "", false}, {"", "reed", false},
+		{ScopeService, "reed", false}, {"reed", ScopeRead, false},
 	}
 	for _, c := range cases {
 		if got := c.have.Allows(c.need); got != c.want {

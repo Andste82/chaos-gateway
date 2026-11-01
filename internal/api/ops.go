@@ -27,11 +27,14 @@ type op struct {
 
 // loadOps reads the operations from the embedded spec, keyed by "METHOD /gin/path" with the
 // /api/v1 prefix, which is how gin reports the matched route.
-func loadOps() (map[string]*op, error) {
+func loadOps() (map[string]*op, error) { return parseOps(api.Spec) }
+
+// parseOps is loadOps for the text of a spec.
+func parseOps(text []byte) (map[string]*op, error) {
 	var spec struct {
 		Paths map[string]map[string]yaml.Node `yaml:"paths"`
 	}
-	if err := yaml.Unmarshal(api.Spec, &spec); err != nil {
+	if err := yaml.Unmarshal(text, &spec); err != nil {
 		return nil, fmt.Errorf("api: read the spec: %w", err)
 	}
 	methods := map[string]string{"get": "GET", "put": "PUT", "post": "POST", "delete": "DELETE", "patch": "PATCH"}
@@ -55,6 +58,11 @@ func loadOps() (map[string]*op, error) {
 			o := &op{ID: raw.OperationID, Method: m, Path: path, Milestone: raw.Milestone, Scope: auth.Scope(raw.Scope), Internal: raw.Internal}
 			if o.Scope == "" {
 				return nil, fmt.Errorf("api: %s %s has no x-required-scope", m, path)
+			}
+			switch o.Scope {
+			case auth.ScopeRead, auth.ScopeOverlays, auth.ScopeFull, auth.ScopeService, auth.ScopeNone:
+			default: // a misspelled scope must not turn into the weakest requirement
+				return nil, fmt.Errorf("api: %s %s has the unknown x-required-scope %q", m, path, raw.Scope)
 			}
 			if raw.Security != nil { // `security: []` or a list of schemes that are not session or token
 				o.Public = true

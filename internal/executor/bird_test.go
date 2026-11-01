@@ -28,6 +28,8 @@ func TestDecodeBirdRejects(t *testing.T) {
 		"log to a file":       birdOp("apply", "log \"/etc/x\" all;\n"),
 		"mrtdump":             birdOp("apply", "mrtdump \"/x\";\n"),
 		"foreign table":       birdOp("apply", "protocol kernel { kernel table 254; ipv4; }\n"),
+		"no table, the main":  birdOp("apply", "protocol kernel k { ipv4 { export all; }; }\nprotocol static s { ipv4; route 0.0.0.0/0 via 10.0.0.1; }\n"),
+		"template, no table":  birdOp("check", "template kernel t { ipv4 { export all; }; }\nprotocol kernel k from t { kernel table 100; }\n"),
 		"import table in own": `{"type":"bird","action":"check","instance":"chaosgw","config":"x","import_tables":[100]}`,
 		"import table 0":      `{"type":"bird","action":"check","instance":"chaosgw","config":"x","import_tables":[0]}`,
 	} {

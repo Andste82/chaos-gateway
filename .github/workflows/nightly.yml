@@ -83,9 +83,23 @@ jobs:
           CHAOSGW_APPLIANCE_RELEASES: ${{ matrix.release }}
           CHAOSGW_APPLIANCE_CACHE: ~/.cache/chaosgw-appliance
           CHAOSGW_APPLIANCE_ARTIFACTS: ${{ runner.temp }}/appliance-logs
+        # A level 2 test that finds no image tar or no /dev/kvm skips and leaves `go test` green, and so does a name that is missing in the
+        # -run pattern or was renamed. Like -expect-pass of the level 1 jobs, the step fails unless each test of the list ended with PASS
+        # in the verbose output (the -run pattern is made from the same list).
         run: |
+          set -o pipefail
           export CHAOSGW_APPLIANCE_CACHE="$HOME/.cache/chaosgw-appliance"
-          go test -tags appliance -count=1 -timeout 200m -v -run 'TestSmokeOnCleanUbuntuHosts|TestRecoveryAndStopOnCleanUbuntuHosts|TestContainerDeploymentOnCleanUbuntuHosts' ./internal/appliance
+          tests="TestSmokeOnCleanUbuntuHosts TestRecoveryAndStopOnCleanUbuntuHosts TestContainerDeploymentOnCleanUbuntuHosts"
+          pattern="^($(echo $tests | tr ' ' '|'))\$"
+          go test -tags appliance -count=1 -timeout 200m -v -run "$pattern" ./internal/appliance 2>&1 | tee "$RUNNER_TEMP/appliance-test.log"
+          missing=0
+          for name in $tests; do
+            if ! grep -q -- "--- PASS: $name " "$RUNNER_TEMP/appliance-test.log"; then
+              echo "::error title=Level 2 test did not pass::$name did not end with PASS (it skipped, did not run or was renamed)"
+              missing=1
+            fi
+          done
+          exit $missing
       - uses: actions/upload-artifact@v7
         if: always()
         with:

@@ -165,9 +165,13 @@ func (s *Server) ExportWireGuardNetwork(c *gin.Context, networkId model.NetworkI
 				s.write(c, s.problemFromExport(err))
 				return
 			}
+			// the remote side's configuration holds its private key: recorded before it is sent (M5-16)
+			if err := s.tryRecord(c, "wireguard.export", &audit.Object{Kind: "network", ID: netID, Name: wg.Name}, 0, "remote side of the link"); err != nil {
+				s.write(c, newProblem(model.ErrorCodeUnavailable, "the audit log cannot be written"))
+				return
+			}
 			attachment(c, wg.Name, "conf")
 			c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(e.Conf))
-			s.record(c, "wireguard.export", &audit.Object{Kind: "network", ID: netID, Name: wg.Name}, 0, "remote side of the link")
 		case "bird":
 			text, err := linkexport.RemoteBird(in.Config, s.cfg.Secrets, netID, "wg0")
 			switch {
@@ -219,6 +223,12 @@ func (s *Server) ExportWireGuardNetwork(c *gin.Context, networkId model.NetworkI
 		s.fail(c, err)
 		return
 	}
+	// the entry is written before the keys are sent and before they are consumed, so a failing audit
+	// log neither lets a key out unrecorded nor deletes one that was not delivered (M5-16)
+	if err := s.tryRecord(c, "wireguard.export", &audit.Object{Kind: "network", ID: netID, Name: wg.Name}, 0, fmt.Sprintf("%d client configurations", len(ids))); err != nil {
+		s.write(c, newProblem(model.ErrorCodeUnavailable, "the audit log cannot be written"))
+		return
+	}
 	attachment(c, wg.Name, "zip")
 	c.Data(http.StatusOK, "application/zip", zipped)
 	for _, id := range ids {
@@ -226,5 +236,4 @@ func (s *Server) ExportWireGuardNetwork(c *gin.Context, networkId model.NetworkI
 			s.log.Error("cannot delete the private key after the export", "client", id, "error", err)
 		}
 	}
-	s.record(c, "wireguard.export", &audit.Object{Kind: "network", ID: netID, Name: wg.Name}, 0, fmt.Sprintf("%d client configurations", len(ids)))
 }

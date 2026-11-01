@@ -513,7 +513,11 @@ func (s *Server) ExportRevision(c *gin.Context, revisionId model.RevisionId, par
 		cp := *cfg
 		cp.Secrets = sec
 		cfg = &cp
-		s.record(c, "revision.export_secrets", &audit.Object{Kind: "revision", ID: itoa(revisionId)}, revisionId, "")
+		// recorded before the secrets are sent: a failing audit log lets none out unrecorded (M5-16)
+		if err := s.tryRecord(c, "revision.export_secrets", &audit.Object{Kind: "revision", ID: itoa(revisionId)}, revisionId, ""); err != nil {
+			s.write(c, newProblem(model.ErrorCodeUnavailable, "the audit log cannot be written"))
+			return
+		}
 		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="chaosgw-revision-%d-secret.%s"`, revisionId, formatExt(params.Format)))
 	} else {
 		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="chaosgw-revision-%d.%s"`, revisionId, formatExt(params.Format)))

@@ -234,11 +234,21 @@ func TestAFailingAuditLogBlocksTheExport(t *testing.T) {
 	if err := g.log.Close(); err != nil {
 		t.Fatal(err)
 	}
-	r := g.do("GET", "/networks/lab-hub/clients/rC/export", nil, nil, nil)
-	if r.Status != 503 || strings.Contains(string(r.Body), "PrivateKey") {
-		t.Fatalf("%d %s", r.Status, r.Body)
+	// every deliberate secret download: the client's configuration, the zip of the hub, the remote side of a
+	// link and the revision with its secrets
+	for _, p := range []string{
+		"/networks/lab-hub/clients/rC/export",
+		"/networks/lab-hub/export",
+		"/networks/site-b/export",
+		"/revisions/1/export?include_secrets=true&format=json",
+		"/revisions/1/export?include_secrets=true",
+	} {
+		r := g.do("GET", p, nil, nil, nil)
+		if r.Status != 503 || strings.Contains(string(r.Body), "PrivateKey") || strings.Contains(string(r.Body), "private_key") || r.Header.Get("Content-Disposition") != "" {
+			t.Fatalf("%s: %d %v %s", p, r.Status, r.Header, r.Body)
+		}
 	}
-	// the key is still stored: export once did not consume it on a failed export
+	// the key is still stored: export once did not consume it on a failed export, the zip did not either
 	c := g.do("GET", "/networks/lab-hub/clients/rC", nil, nil, nil).json(t)
 	if c["private_key_stored"] != true {
 		t.Errorf("%v", c)

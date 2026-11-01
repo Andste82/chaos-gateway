@@ -2804,9 +2804,11 @@ components:
           items: {$ref: '#/components/schemas/Ipv4Cidr'}
         ui_port:
           type: integer
-          minimum: 1
+          minimum: 1024
           maximum: 65535
-          description: Default - the port the API listens on (8443 in the shipped compose files).
+          description: >-
+            Default - the port the API listens on (8443 in the shipped compose files). Not below 1024: the API container
+            has no capabilities and cannot bind a privileged port, so the API would be unreachable.
 
     NetworkType:
       type: string

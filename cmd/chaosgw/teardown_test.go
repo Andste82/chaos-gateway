@@ -29,6 +29,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/apply/kernelsim"
 	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/probe"
+	"github.com/Andste82/chaos-gateway/internal/store"
 )
 
 // appliedGateway applies the compiler's test configuration to a simulated kernel through an executor that keeps its state in
@@ -222,6 +223,54 @@ func TestPurgeLeavesTheVolumesWhenTheKernelCleanupFails(t *testing.T) {
 	}
 	if l := left(); len(l) != 0 {
 		t.Errorf("left: %v", l)
+	}
+}
+
+// R6 of the audit of Phase 7: with the executor down and the api container up (the usual state while the executor restarts),
+// --purge saw no executor on the socket and emptied the revisions, the secrets and the audit log under the open store of the
+// running API. It refuses while the store is open, before it touches the kernel, and purges once the API has stopped.
+func TestPurgeRefusesWhileTheApiHasTheStoreOpen(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("teardown refuses to run unprivileged")
+	}
+	root := t.TempDir()
+	state := filepath.Join(root, "exec", "state.json")
+	_, _, left := appliedGateway(t, state)
+	data := filepath.Join(root, "state")
+	st, err := store.Open(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	old := dataDirs
+	dataDirs = []struct{ path, what string }{{data, "the revisions"}}
+	t.Cleanup(func() { dataDirs = old })
+
+	none := filepath.Join(t.TempDir(), "none.sock")
+	code, out, errOut := runCmd("teardown", "-purge", "-socket", none, "-state", state)
+	if code != 1 || !strings.Contains(errOut, "is in use") || strings.Contains(out, "Removed ") {
+		t.Fatalf("code %d\nstdout %s\nstderr %s", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(data, "config.json")); err != nil {
+		t.Errorf("the revisions were emptied under the open store: %v", err)
+	}
+	if len(left()) == 0 {
+		t.Error("the refused purge removed the gateway from the kernel first")
+	}
+
+	// without --purge the teardown is the same as before: the kernel is cleaned, the store is not touched
+	if code, _, errOut := runCmd("teardown", "-socket", none, "-state", state); code != 0 {
+		t.Fatalf("teardown without purge: code %d: %s", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(data, "config.json")); err != nil {
+		t.Errorf("the teardown without purge touched the store: %v", err)
+	}
+
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, errOut := runCmd("teardown", "-purge", "-socket", none, "-state", state); code != 0 || !strings.Contains(out, "Removed "+data) {
+		t.Fatalf("code %d\nstdout %s\nstderr %s", code, out, errOut)
 	}
 }
 

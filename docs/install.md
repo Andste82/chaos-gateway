@@ -521,7 +521,8 @@ docker compose --profile teardown run --rm teardown
 
 The `teardown` service mounts every data directory writable, and `--purge` empties them all: the revisions, the secrets, the audit log, the
 service token, the TLS CAs, the captures, Kea's leases and the executor's state (irreversible; the directories stay, with their owners).
-It refuses while an executor is serving, and `--purge` empties the directories only once the kernel is clean: when the teardown reports
+It refuses while an executor is serving, and `--purge` also refuses while the `api` container has the revisions open (it holds a lock on the directory
+for as long as it runs, also while the executor restarts): stop the gateway first. `--purge` empties the directories only once the kernel is clean: when the teardown reports
 what it could not remove (it exits with 1), the directories stay, because a second run needs the executor's state in them; run it again
 after the cause is gone.
 

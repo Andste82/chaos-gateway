@@ -224,6 +224,35 @@ func TestALostPointerIsRebuiltFromTheRevisions(t *testing.T) {
 	}
 }
 
+func TestInUseSaysWhetherAProcessHasTheStoreOpenAndCreatesNothing(t *testing.T) {
+	empty := t.TempDir()
+	if used, err := InUse(empty); err != nil || used {
+		t.Fatalf("a directory that never held a store: %v %v", used, err)
+	}
+	if entries, _ := os.ReadDir(empty); len(entries) != 0 {
+		t.Fatalf("InUse created %v", entries)
+	}
+	if used, err := InUse(filepath.Join(empty, "absent")); err != nil || used {
+		t.Fatalf("a directory that is not there: %v %v", used, err)
+	}
+	s, dir := openStore(t)
+	if used, err := InUse(dir); err != nil || !used {
+		t.Fatalf("an open store: %v %v", used, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if used, err := InUse(dir); err != nil || used {
+		t.Fatalf("a closed store: %v %v", used, err)
+	}
+	// the check did not keep the lock
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s2.Close()
+}
+
 func TestOnlyOneProcessMayHaveTheStoreOpen(t *testing.T) {
 	s, dir := openStore(t)
 	if _, err := Open(dir); !errors.Is(err, ErrLocked) {

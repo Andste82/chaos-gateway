@@ -129,7 +129,9 @@ jobs:
       - name: Install QEMU and the tools of the harness
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-arm qemu-efi-aarch64 qemu-utils cloud-image-utils python3 curl iproute2 iptables
+          # ipxe-qemu holds efi-virtio.rom, the option ROM of the virtio NIC: qemu-system-x86 depends on it, qemu-system-arm only recommends
+          # it, and without it qemu-system-aarch64 stops at once with 'failed to find romfile "efi-virtio.rom"' (weekly run 41222994170)
+          sudo apt-get install -y --no-install-recommends qemu-system-arm qemu-efi-aarch64 ipxe-qemu qemu-utils cloud-image-utils python3 curl iproute2 iptables
       - name: Build the arm64 image
         run: |
           docker buildx build --platform linux/arm64 -f deploy/Dockerfile -t chaos-gateway:appliance \

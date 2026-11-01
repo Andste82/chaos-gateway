@@ -74,7 +74,7 @@ The plan (§4.5) defines levels; this is how they map to commands.
 | Level | Command | What runs | Needs |
 |---|---|---|---|
 | 0 | `make test` | Go unit tests (`-race` when a C compiler is installed), web unit tests | no root; the web dependencies (installed by make) |
-| 1 | `make test-privileged` | the testbed tests directly | root, kernel modules (a privileged container, or a VM) |
+| 1 | `make test-privileged` | the testbed tests directly, one package at a time (they share the kernel's named namespaces, and a probe namespace that another package is just making looks like a leftover to the executor) | root, kernel modules (a privileged container, or a VM) |
 | 1b | `make test-vm` | the testbed tests in a QEMU VM with a stock Ubuntu kernel | `vng`, QEMU, the kernels in `/boot` (all in the devcontainer) |
 | – | `make test-testbed` | level 1 if the preflight allows it, else level 1b | |
 | – | `make test-arm64` | the unit tests as arm64 binaries under `qemu-user` | `qemu-aarch64` |

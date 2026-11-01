@@ -187,7 +187,12 @@ func runDirect(ctx context.Context, cfg vmrun.Config, stdout, stderr io.Writer) 
 		fmt.Fprintf(stderr, "testvm: no package with tests under the tags %q matches %v\n", tags, cfg.Packages)
 		return 2
 	}
-	goArgs := []string{"test", "-count=1", "-tags", tags, "-v"}
+	// One package at a time (-p 1): the packages share the container's kernel and its list of named namespaces, and the executor
+	// reads `ip netns list` for the namespaces of probes whose pair is gone. A probe namespace that another package's test is
+	// just making or deleting, with the same fixed id, is such a namespace for a moment: `apply verify: probes: cgp-3a1f7c52 is
+	// not wanted` failed TestADeviceFaultStaysAttachedAfterTheForcedNewIPOnTheRealKernel in CI run 41344903641, which is the
+	// likely cause (not proved: the packages' logs carry no common clock).
+	goArgs := []string{"test", "-count=1", "-p", "1", "-tags", tags, "-v"}
 	if cfg.TestTimeout > 0 {
 		// go test stops a package after 10 minutes unless told otherwise: -test-timeout is for this mode too
 		goArgs = append(goArgs, "-timeout", cfg.TestTimeout.String())

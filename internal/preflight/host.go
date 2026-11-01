@@ -336,8 +336,10 @@ func firewallChecks(ctx context.Context, p HostProbe) []HostCheck {
 			continue
 		}
 		switch f[2] {
-		case "chaosgw", "filter", "nat", "mangle", "raw", "security", "docker-bridges":
-			continue // Chaos Gateway's own, and the tables of iptables-nft and of Docker
+		case "chaosgw", "chaosgw_dup", "filter", "nat", "mangle", "raw", "security", "docker-bridges":
+			// Chaos Gateway's own (chaosgw_dup is the netdev table of an active duplication fault, executor.NftDupTable, which this
+			// package cannot import), and the tables of iptables-nft and of Docker
+			continue
 		}
 		others = append(others, f[1]+" "+f[2])
 	}

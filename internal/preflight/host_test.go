@@ -264,7 +264,8 @@ func TestOtherFirewallsAreReportedAndDockersTablesAreNot(t *testing.T) {
 			}
 		})
 	}
-	h := versions(map[string]string{"nft list tables": "table ip docker-bridges\ntable inet chaosgw\ntable ip nat\n"})
+	// the netdev table of an active duplication fault (executor.NftDupTable) is the gateway's own
+	h := versions(map[string]string{"nft list tables": "table ip docker-bridges\ntable inet chaosgw\ntable netdev chaosgw_dup\ntable ip nat\n"})
 	if c := byID(t, HostChecks(context.Background(), probe(hostFS(nil), h)), "host.firewall"); c.Status != "ok" {
 		t.Errorf("Docker's and the gateway's own tables are no conflict: %+v", c)
 	}

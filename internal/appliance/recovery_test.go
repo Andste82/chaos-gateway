@@ -140,6 +140,19 @@ func recovery(t *testing.T, rel appliance.Release, imageTar string) {
 	if out, err := vm.Must(ctx, "sudo sh /opt/chaosgw/host-setup.sh 2>&1"); err != nil {
 		t.Fatalf("the host setup failed: %v\n%s", err, out)
 	}
+	// The test port is not managed by systemd-networkd, as the host setup makes it on a customer's host (docs/install.md: `networkctl list`
+	// shows it unmanaged). cloud-init gave lan0 a netplan entry; with it networkd configures the port again when the gateway releases it
+	// from a bridge, and drops the gateway's policy rule 925 and the prohibit route of table 101 as foreign (nightly run 41250852203:
+	// the offline apply of revision 2 renames the network and so moves the port, and could not verify what it had made).
+	if err := vm.Put(ctx, "/opt/chaosgw/remove-lan0.py", 0o644, strings.NewReader(removeLan0)); err != nil {
+		t.Fatal(err)
+	}
+	must("sudo python3 /opt/chaosgw/remove-lan0.py")
+	must("printf '[Match]\\nMACAddress=" + appliance.MACs.LAN + "\\n\\n[Link]\\nName=lan0\\n' | sudo tee /etc/systemd/network/05-lan0.link >/dev/null")
+	must("sudo netplan apply")
+	if out := must("sudo sh /opt/chaosgw/host-setup.sh --test-interface lan0 2>&1"); !strings.Contains(out, "the test interfaces are ready: lan0") {
+		t.Fatalf("the test interface is not ready:\n%s", out)
+	}
 	if err := vm.PutFile(ctx, imageTar, "/opt/chaosgw/image.tar.gz", 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -247,9 +260,20 @@ func recovery(t *testing.T, rel appliance.Release, imageTar string) {
 		t.Fatal(err)
 	}
 	must(compose + " stop api")
-	out := must("sudo docker run --rm --user 65532:65532 --network host -v chaosgw_chaosgw-run:/run/chaosgw -v /var/lib/chaosgw/state:/var/lib/chaosgw/state " +
-		"-v /opt/chaosgw/gateway2.yaml:/gateway.yaml:ro " + tag +
-		" apply --file /gateway.yaml --socket /run/chaosgw/exec.sock --state-dir /var/lib/chaosgw/state --executor-uid 0 2>&1")
+	// the routing the gateway made, before and after the offline apply: when the apply cannot verify what it made, this says what the kernel holds
+	routing := func(when string) {
+		t.Helper()
+		t.Logf("%s:\n%s", when, output("sh -c 'ip -4 route show table all; ip -4 rule show; ip -br link; ip -4 -br addr'"))
+	}
+	routing("the routing before the offline apply of revision 2")
+	r2, err := vm.Run(ctx, "sudo docker run --rm --user 65532:65532 --network host -v chaosgw_chaosgw-run:/run/chaosgw -v /var/lib/chaosgw/state:/var/lib/chaosgw/state "+
+		"-v /opt/chaosgw/gateway2.yaml:/gateway.yaml:ro "+tag+
+		" apply --file /gateway.yaml --socket /run/chaosgw/exec.sock --state-dir /var/lib/chaosgw/state --executor-uid 0 2>&1", nil)
+	if err != nil || r2.Exit != 0 {
+		routing("the routing after the failed offline apply of revision 2")
+		t.Fatalf("the offline apply of revision 2: %v, exit %d\n%s", err, r2.Exit, r2.Stdout)
+	}
+	out := r2.Stdout
 	t.Logf("apply 2: %s", strings.TrimSpace(out))
 	stateDir := "/var/lib/chaosgw/state" // a bind mount of the host since M28 (plan §3.6)
 	if out := must("sudo cat " + stateDir + "/config.json"); !regexp.MustCompile(`"active": 2`).MatchString(out) {

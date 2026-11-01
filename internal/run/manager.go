@@ -64,9 +64,10 @@ type runState struct {
 	recorded     chan struct{} // closed when run_finished is in the event file
 	recordedOnce sync.Once
 
-	fileMu  sync.Mutex
-	seq     uint64 // of the last record handed to save, written is the last one on disk
-	written uint64
+	fileMu     sync.Mutex
+	seq        uint64 // of the last record handed to save, written is the last one on disk
+	written    uint64
+	recordGone bool // under fileMu: prune deleted the record, a late save does not write it again
 
 	// overlays maps a step to the overlay it wrote or replaced, owned has every overlay the run wrote (in
 	// the order of ownedOrder) with its counters; the goroutine of the run only
@@ -834,20 +835,25 @@ func artifactsOf(r *runState) *[]model.Artifact {
 func (m *Manager) prune() {
 	cut := m.clk.Now().Add(-m.retention())
 	m.mu.Lock()
-	var gone []uuid.UUID
+	var gone []*runState
 	for id, r := range m.runs {
 		if endedBefore(r.rec, cut) {
-			gone = append(gone, id)
+			gone = append(gone, r)
 			delete(m.runs, id)
 		}
 	}
 	m.mu.Unlock()
-	for _, id := range gone {
-		if err := removeRun(m.cfg.Dir, id); err != nil {
-			m.log.Warn("cannot delete an expired run", "run", id, "error", err)
+	for _, r := range gone {
+		// a save that comes late (the run's own goroutines may still write once more) must not bring the directory back
+		r.fileMu.Lock()
+		r.recordGone = true
+		err := removeRun(m.cfg.Dir, r.id)
+		r.fileMu.Unlock()
+		if err != nil {
+			m.log.Warn("cannot delete an expired run", "run", r.id, "error", err)
 		}
 		if m.cfg.Captures != nil {
-			m.cfg.Captures.DeleteRun(id)
+			m.cfg.Captures.DeleteRun(r.id)
 		}
 	}
 }
@@ -869,7 +875,7 @@ func (m *Manager) save(r *runState) {
 	}
 	r.fileMu.Lock()
 	defer r.fileMu.Unlock()
-	if seq < r.written {
+	if seq < r.written || r.recordGone {
 		return
 	}
 	if err := os.MkdirAll(runDir(m.cfg.Dir, r.id), 0o700); err != nil {

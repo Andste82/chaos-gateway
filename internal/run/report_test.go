@@ -381,12 +381,16 @@ func TestOldRecordsAreDeletedAsRunsEnd(t *testing.T) {
 	h.clk.Advance(31 * 24 * time.Hour)
 	r2 := h.start(basicShort)
 	h.waitStatus(r2.Id, model.RunStatusPassed)
-	if _, err := h.m.Get(r.Id); !errors.Is(err, run.ErrNotFound) {
-		t.Errorf("%v", err)
-	}
-	if _, err := os.Stat(filepath.Join(h.dir, r.Id.String())); !os.IsNotExist(err) {
-		t.Errorf("%v", err)
-	}
+	// the old records go when the run ends, after its end is saved and announced: the test waits for that (it saw a run that was
+	// gone one moment late under qemu-user, CI run 41257228366)
+	eventually(t, "the record of the old run to be deleted", func() bool {
+		_, err := h.m.Get(r.Id)
+		return errors.Is(err, run.ErrNotFound)
+	})
+	eventually(t, "the files of the old run to be deleted", func() bool {
+		_, err := os.Stat(filepath.Join(h.dir, r.Id.String()))
+		return os.IsNotExist(err)
+	})
 }
 
 // ---- revisions

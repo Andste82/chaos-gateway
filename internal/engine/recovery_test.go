@@ -109,6 +109,19 @@ func (h *harness) retryOnce() {
 	h.clk.Advance(11 * time.Second)
 }
 
+// retryUntil lets the owner try again, as often as it takes, until cond holds: the retries wait retryDelay on the engine's clock.
+func (h *harness) retryUntil(cond func() bool, what string) {
+	h.t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			h.t.Fatalf("timeout: %s", what)
+		}
+		h.clk.Advance(11 * time.Second)
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestABrokenRevisionAtStartLeadsToTheLastKnownGoodRevision(t *testing.T) {
 	h := newHarness(t)
 	r1, r2 := twoRevisions(h)
@@ -195,8 +208,8 @@ func TestWhenTheLastKnownGoodRevisionFailsToo_TheGatewayRunsInSafeMode(t *testin
 	h.start()
 	events, stop := h.e.Subscribe()
 	defer stop()
-	h.retryOnce()
-	h.wait(func() bool { return h.e.Snapshot().SafeMode }, "safe mode")
+	// revision 2 is tried twice, then revision 1 twice
+	h.retryUntil(func() bool { return h.e.Snapshot().SafeMode }, "safe mode")
 
 	s := h.e.Snapshot()
 	for _, want := range []string{"revision 2 could not be applied", "neither could revision 1", "last known good"} {
@@ -326,8 +339,7 @@ func TestARevisionThatFailedAtStartIsNotTheFallbackOfALaterStart(t *testing.T) {
 	h = reboot(h)
 	failBridges(h)
 	h.start()
-	h.retryOnce()
-	h.wait(func() bool { return h.e.Snapshot().SafeMode }, "safe mode")
+	h.retryUntil(func() bool { return h.e.Snapshot().SafeMode }, "safe mode")
 	h.wait(func() bool { s := h.e.Snapshot(); return s.Applied != nil && s.LastError == "" }, "the safe configuration is applied")
 
 	// the administrator's way out: revision 1 with another gateway, which works once the kernel does

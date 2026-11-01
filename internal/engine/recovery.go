@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/apply"
 	"github.com/Andste82/chaos-gateway/internal/domain"
+	"github.com/Andste82/chaos-gateway/internal/executor"
 	"github.com/Andste82/chaos-gateway/internal/model"
 	"github.com/Andste82/chaos-gateway/internal/store"
 )
@@ -40,6 +44,9 @@ type bootState struct {
 	fallback bool
 	failed   int64
 	failure  string
+	// transient says that failure, the reason the fallback was started, came from the way to the executor and not from the
+	// revision (isTransportError).
+	transient bool
 	// failedCfg is the configuration of failed, nil when it could not be read.
 	failedCfg *model.Configuration
 }
@@ -48,15 +55,15 @@ type bootState struct {
 // the last known good revision at once.
 func (o *owner) recoverUnreadable(init *ownerInit) {
 	o.snap.Revision = init.revision
-	if o.startFallback(init.revision, init.failure, nil) {
+	if o.startFallback(init.revision, init.failure, nil, false) {
 		return
 	}
-	o.enterSafeMode(&bootState{failed: init.revision, failure: init.failure}, fmt.Sprintf("revision %d cannot be read (%s) and there is no earlier revision that worked", init.revision, init.failure))
+	o.enterSafeMode(&bootState{failed: init.revision, failure: init.failure}, fmt.Sprintf("revision %d cannot be read (%s) and there is no earlier revision that worked", init.revision, init.failure), true, false)
 }
 
-// startFallback applies the last known good revision because failed could not be applied or read. It reports whether there
-// is one.
-func (o *owner) startFallback(failed int64, failure string, failedCfg *model.Configuration) bool {
+// startFallback applies the last known good revision because failed could not be applied or read (transient: the failure
+// came from the way to the executor). It reports whether there is one.
+func (o *owner) startFallback(failed int64, failure string, failedCfg *model.Configuration, transient bool) bool {
 	rev, cfg, err := o.e.cfg.Store.Fallback()
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
@@ -67,7 +74,7 @@ func (o *owner) startFallback(failed int64, failure string, failedCfg *model.Con
 	o.e.cfg.Log.Warn("revision cannot be applied at start: applying the last known good revision", "revision", failed, "reason", failure, "fallback", rev.Id)
 	d := o.nextDesired(cfg, rev.Id)
 	d.RolledBack = true
-	o.boot = &bootState{revision: rev.Id, cfg: cfg, gen: d.Generation, fallback: true, failed: failed, failure: failure, failedCfg: failedCfg}
+	o.boot = &bootState{revision: rev.Id, cfg: cfg, gen: d.Generation, fallback: true, failed: failed, failure: failure, transient: transient, failedCfg: failedCfg}
 	o.committed = d
 	o.snap.Revision, o.snap.Config = rev.Id, cfg
 	o.converge(d)
@@ -100,24 +107,43 @@ func (o *owner) bootResult(r applyResult) bool {
 		return true
 	}
 	b.attempts++
+	transport := isTransportError(r.err)
 	switch {
+	case b.attempts < bootApplyAttempts:
+		// scheduleRetry applies it again; the last known good revision gets the same second try as the active one
+		if !b.fallback {
+			b.failure = r.err.Error()
+		}
 	case b.fallback:
 		o.enterSafeMode(b, fmt.Sprintf("revision %d could not be applied (%s), and neither could revision %d, the last known good one (%s)",
-			b.failed, firstLine(b.failure), b.revision, firstLine(r.err.Error())))
-	case b.attempts < bootApplyAttempts:
-		// scheduleRetry applies it again
-		b.failure = r.err.Error()
-	case o.startFallback(b.revision, r.err.Error(), b.cfg):
+			b.failed, firstLine(b.failure), b.revision, firstLine(r.err.Error())), !b.transient, !transport)
+	case o.startFallback(b.revision, r.err.Error(), b.cfg, transport):
 	default:
 		b.failure = r.err.Error()
-		o.enterSafeMode(b, fmt.Sprintf("revision %d could not be applied (%s) and there is no earlier revision that worked", b.revision, firstLine(r.err.Error())))
+		o.enterSafeMode(b, fmt.Sprintf("revision %d could not be applied (%s) and there is no earlier revision that worked", b.revision, firstLine(r.err.Error())), false, !transport)
 	}
 	return true
 }
 
+// isTransportError tells a failure of the way to the executor (the socket is gone, the connection broke, the call ran out of
+// time) from one of the revision (a command that exited non-zero, a configuration the kernel refuses): the first says nothing
+// about the revision, so it is not held against it.
+func isTransportError(err error) bool {
+	var re *executor.RemoteError
+	if errors.As(err, &re) {
+		return false
+	}
+	var ne net.Error
+	return errors.Is(err, executor.ErrClosed) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENOENT) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) || errors.As(err, &ne)
+}
+
 // enterSafeMode runs the gateway in safe mode: the configuration of domain.SafeModeConfiguration made of the failed revision
 // (else of the last known good one) is applied, the snapshot says why. Nothing is applied when no configuration could be read.
-func (o *owner) enterSafeMode(b *bootState, reason string) {
+// markFailed and markRevision say whether b.failed and b.revision are recorded as not applying at start: a failure of the way to
+// the executor is no fault of the revision, and the next start tries it again.
+func (o *owner) enterSafeMode(b *bootState, reason string, markFailed, markRevision bool) {
 	o.boot = nil
 	src := b.failedCfg
 	if src == nil {
@@ -128,8 +154,12 @@ func (o *owner) enterSafeMode(b *bootState, reason string) {
 	o.snap.Revision = o.e.cfg.Store.ActiveID()
 	// the revisions that did not apply must not be the fallback of a later start: the way out of safe mode is a newer revision,
 	// which supersedes the failed one with its confirmation still set
-	for _, id := range []int64{b.failed, b.revision} {
-		if id == 0 {
+	for _, m := range []struct {
+		id   int64
+		mark bool
+	}{{b.failed, markFailed}, {b.revision, markRevision}} {
+		id := m.id
+		if id == 0 || !m.mark {
 			continue
 		}
 		var corrupt *store.ErrCorrupt

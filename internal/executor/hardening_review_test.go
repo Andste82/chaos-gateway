@@ -86,6 +86,75 @@ func (s reviewedService) binds(t *testing.T) []string {
 	return out
 }
 
+// namedVolumes lists the named volumes of a service as "volume -> target ro|rw", in the short form ("name:/target[:ro]") and in the long
+// form with `type: volume`; a bind or tmpfs mount is not one.
+func (s reviewedService) namedVolumes(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, v := range s.Volumes {
+		var source, target string
+		readOnly := false
+		switch v.Kind {
+		case yaml.ScalarNode:
+			parts := strings.Split(v.Value, ":")
+			if len(parts) < 2 || strings.HasPrefix(parts[0], "/") || strings.HasPrefix(parts[0], ".") {
+				t.Fatalf("the volume %q is no named volume of the short form", v.Value)
+			}
+			source, target = parts[0], parts[1]
+			readOnly = len(parts) > 2 && slices.Contains(strings.Split(parts[2], ","), "ro")
+		case yaml.MappingNode:
+			var m struct {
+				Type     string `yaml:"type"`
+				Source   string `yaml:"source"`
+				Target   string `yaml:"target"`
+				ReadOnly bool   `yaml:"read_only"`
+			}
+			if err := v.Decode(&m); err != nil {
+				t.Fatal(err)
+			}
+			if m.Type != "volume" {
+				continue
+			}
+			source, target, readOnly = m.Source, m.Target, m.ReadOnly
+		}
+		mode := "rw"
+		if readOnly {
+			mode = "ro"
+		}
+		out = append(out, source+" -> "+target+" "+mode)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Which container mounts which named volume. The volumes hold the sockets between the containers: the executor's socket (chaosgw-run) is
+// the way to the privileged container and belongs to the executor, the API and the teardown only; a service that mounted it could talk to
+// the executor. A volume mounted by another container is a change of the review.
+func TestTheContainersMountOnlyTheNamedVolumesTheReviewAllows(t *testing.T) {
+	want := map[string][]string{
+		"exec":      {"chaosgw-bird -> /run/chaosgw-bird rw", "chaosgw-run -> /run/chaosgw rw"},
+		"api":       {"chaosgw-kea-events -> /run/chaosgw-kea-events rw", "chaosgw-kea-run -> /run/kea rw", "chaosgw-run -> /run/chaosgw rw", "chaosgw-svcns -> /run/chaosgw-svcns ro"},
+		"kea":       {"chaosgw-kea-events -> /run/chaosgw-kea-events ro", "chaosgw-kea-run -> /run/kea rw"},
+		"bird":      {"chaosgw-bird -> /run/chaosgw-bird rw"},
+		"svcns":     {"chaosgw-svcns -> /run/chaosgw-svcns rw"},
+		"dns":       nil,
+		"tls":       nil,
+		"tls-proxy": nil,
+		"teardown":  {"chaosgw-bird -> /run/chaosgw-bird rw", "chaosgw-run -> /run/chaosgw rw"},
+	}
+	for name, s := range loadComposeYAML(t) {
+		w, known := want[name]
+		if !known {
+			t.Errorf("%s is a container the review does not know", name)
+			continue
+		}
+		sort.Strings(w)
+		if got := s.namedVolumes(t); !slices.Equal(got, w) {
+			t.Errorf("%s mounts the named volumes\n  %v\nthe review allows\n  %v", name, got, w)
+		}
+	}
+}
+
 // Every container names the user it runs as, and the image's own default is the unprivileged one: a container started from the
 // image without a `user` (a manual `docker run`, a new service whose author forgot it) is not root.
 func TestEveryContainerNamesItsUserAndTheImageDefaultsToTheUnprivilegedOne(t *testing.T) {

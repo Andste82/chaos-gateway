@@ -30,9 +30,11 @@ func builtinIPs() []net.IP {
 	return []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1"), net.IP(compiler.ServiceHostCIDR.Addr().AsSlice())}
 }
 
-// LoadOrCreateCertificate returns the HTTPS certificate of the API: the one in dir (cert.pem and
-// key.pem, the key with mode 0600) or, on the first start, a self-signed one for the host name and
-// addresses given (plan §2.16: self-signed by default, replaceable). Replacing the files replaces the certificate.
+// LoadOrCreateCertificate returns the gateway's own certificate of the API: the one in dir (cert.pem and
+// key.pem, both mode 0600 and written through a temporary file and a rename) or, on the first start, a
+// self-signed one for the host name and addresses given (plan §2.16). It is what the service containers
+// verify (PublishCertificate); the certificate an operator installs is another one, kept by Certificates
+// beside it (M29), and the files here are not the place to replace the certificate of the UI.
 // A self-signed certificate of an earlier version that lacks one of the built-in addresses (the service
 // address, issue #64) is issued again with the same key, names and addresses plus the missing ones; a
 // certificate someone installed is never changed.
@@ -57,7 +59,7 @@ func LoadOrCreateCertificate(dir string, names []string, ips []net.IP, now time.
 	if err := writeSelfSigned(cert, priv, append([]string{"localhost"}, names...), append(builtinIPs(), ips...), now); err != nil {
 		return tls.Certificate{}, err
 	}
-	if err := os.WriteFile(key, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+	if err := writeSecretFile(key, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})); err != nil {
 		return tls.Certificate{}, err
 	}
 	return tls.LoadX509KeyPair(cert, key)
@@ -110,7 +112,9 @@ func writeSelfSigned(path string, priv *ecdsa.PrivateKey, names []string, ips []
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644)
+	// through a temporary file and a rename like every file of secrets/: a torn cert.pem or key.pem makes the
+	// next start fail for good, and the certificate is read by this process alone (the services get a copy)
+	return writeSecretFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
 
 // PublishCertificate copies the API's certificate (never the key) from dir's cert.pem to path, so the

@@ -116,6 +116,73 @@ func TestAnOlderSelfSignedCertificateGetsTheServiceAddress(t *testing.T) {
 	}
 }
 
+// cert.pem and key.pem are written through a temporary file and a rename (P7-M29 audit S9): a file that
+// somebody else holds open or has a second name for keeps its old content, so a start that is killed in
+// the middle of a write leaves the old file or the new one and never half of one.
+func TestTheCertificateFilesAreReplacedAndNotWrittenInPlace(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := LoadOrCreateCertificate(dir, nil, nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"cert.pem", "key.pem"} {
+		if info, err := os.Stat(filepath.Join(dir, f)); err != nil || info.Mode().Perm() != 0o600 {
+			t.Errorf("%s: %v %v", f, info, err)
+		}
+	}
+	// the files exist: a hard link keeps the content of the inode they had
+	hold := func(name string) (link string, content []byte) {
+		t.Helper()
+		link = filepath.Join(t.TempDir(), name)
+		if err := os.Link(filepath.Join(dir, name), link); err != nil {
+			t.Fatal(err)
+		}
+		content, _ = os.ReadFile(link)
+		return link, content
+	}
+	// the certificate of an earlier version that lacks the service address is issued again
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, _ := x509.MarshalECPrivateKey(priv)
+	if err := writeSecretFile(filepath.Join(dir, "key.pem"), pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})); err != nil {
+		t.Fatal(err)
+	}
+	old := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	if err := writeSelfSigned(filepath.Join(dir, "cert.pem"), priv, []string{"localhost"}, old, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	certLink, certBefore := hold("cert.pem")
+	if _, err := LoadOrCreateCertificate(dir, nil, nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if now, _ := os.ReadFile(filepath.Join(dir, "cert.pem")); string(now) == string(certBefore) {
+		t.Fatal("the certificate was not issued again")
+	}
+	if kept, _ := os.ReadFile(certLink); string(kept) != string(certBefore) {
+		t.Error("the certificate was written in place")
+	}
+	// a key without its certificate: both are made again, the key by a rename too
+	if err := os.Remove(filepath.Join(dir, "cert.pem")); err != nil {
+		t.Fatal(err)
+	}
+	keyLink, keyBefore := hold("key.pem")
+	if _, err := LoadOrCreateCertificate(dir, nil, nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if now, _ := os.ReadFile(filepath.Join(dir, "key.pem")); string(now) == string(keyBefore) {
+		t.Fatal("the key was not made again")
+	}
+	if kept, _ := os.ReadFile(keyLink); string(kept) != string(keyBefore) {
+		t.Error("the key was written in place")
+	}
+	// no temporary file stays behind
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 2 {
+		t.Errorf("%d files in %s, want cert.pem and key.pem", len(entries), dir)
+	}
+}
+
 func TestPublishCertificateCopiesOnlyTheCertificate(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := LoadOrCreateCertificate(dir, nil, nil, time.Now()); err != nil {

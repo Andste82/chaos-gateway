@@ -130,7 +130,45 @@ type apiOptions struct {
 	holderPIDFile string
 }
 
+// checkOwnedDirs makes sure the API can write the data directories it owns (the revisions, the audit log and runs, the directory of the
+// service token, the CAs of the TLS responder): after a restore as root they belong to root, and the first write would end the
+// start with an error of the file system that names no cause. A directory that is not there is left to the code that makes it.
+func checkOwnedDirs(o apiOptions) error {
+	dirs := []struct{ path, what string }{{o.stateDir, "the revisions"}, {o.dataDir, "the audit log and the runs"}, {o.tlsCADir, "the CAs of the TLS responder"}}
+	if o.serviceToken != "" {
+		dirs = append(dirs, struct{ path, what string }{filepath.Dir(o.serviceToken), "the token of the service containers"})
+	}
+	for _, d := range dirs {
+		if d.path == "" {
+			continue
+		}
+		fi, err := os.Stat(d.path)
+		if err != nil {
+			continue
+		}
+		if !fi.IsDir() {
+			return fmt.Errorf("%s (%s) is not a directory", d.path, d.what)
+		}
+		f, err := os.CreateTemp(d.path, ".write-check-*")
+		if err == nil {
+			_ = f.Close()
+			_ = os.Remove(f.Name())
+			continue
+		}
+		owner := "an owner that cannot be read"
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+			owner = fmt.Sprintf("user %d, group %d, mode %04o", st.Uid, st.Gid, fi.Mode().Perm())
+		}
+		return fmt.Errorf("%s (%s) cannot be written by user %d of this process (it belongs to %s): %w; make the host setup put it right: sudo sh /opt/chaosgw/host-setup.sh --data-only",
+			d.path, d.what, os.Geteuid(), owner, err)
+	}
+	return nil
+}
+
 func serveAPI(ctx context.Context, log *slog.Logger, stderr io.Writer, o apiOptions) error {
+	if err := checkOwnedDirs(o); err != nil {
+		return err
+	}
 	sec, err := secrets.Open(o.secretsDir)
 	if err != nil {
 		return err

@@ -201,22 +201,13 @@ func TestNoSecretIsInAResponseAnEventAnAuditEntryOrALog(t *testing.T) {
 		assertNone(t, p, string(r.Body), map[string]string{"the admin password": adminPassword, "the hash": secretValues["the hash of the admin password"], "a full token": full})
 	}
 
-	// every read the full scope may make, with the ids of the fixture
-	paths := []string{"/state", "/state/linux", "/capabilities", "/system/info", "/system/preflight", "/system/interfaces", "/system/busy", "/system/health",
-		"/system/certificate", "/auth/session", "/auth/tokens", "/revisions", "/revisions/active", "/revisions/1", "/revisions/1/diff?base=1", "/revisions/1/export",
-		"/revisions/1/export?format=json", "/uplink", "/uplink/traffic", "/networks", "/networks/" + hubID, "/networks/" + hubID + "/clients",
-		"/networks/" + hubID + "/clients/" + rAID, "/networks/" + hubID + "/leases", "/routing", "/routing/status", "/routing/routes", "/devices", "/flows", "/groups",
-		"/rules", "/port-forwards", "/faults", "/profiles", "/scenarios", "/probes", "/overlays", "/runs", "/captures", "/captures/storage", "/tls/ca",
-		"/dns/queries", "/intercept/flows", "/audit?limit=500", "/metrics", "/explain?src=10.10.0.5&dst=203.0.113.9"}
+	// every read of the spec, with the ids of the fixture (secretReads): the scope full makes all of them, the scope read its own
 	g.badRequest = true // a few of the reads answer a 4xx for the fixture; the body is searched all the same
 	for _, scope := range []string{"full", "read"} {
 		if scope == "read" {
 			g.token = readTok
 		}
-		for _, p := range paths {
-			if scope == "read" && p == "/auth/tokens" {
-				continue
-			}
+		for _, p := range secretReads(t, scope) {
 			r := g.do("GET", p, nil, nil, nil)
 			if r.Status >= 500 {
 				t.Errorf("GET %s: %d", p, r.Status)

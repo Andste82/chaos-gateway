@@ -228,11 +228,60 @@ func TestLexicalChecks(t *testing.T) {
 			t.Errorf("%q accepted", bad)
 		}
 	}
+	// every configuration the product renders passes, the idle one and one with mirror tables too
+	idle := Idle(100)
+	if err := CheckText(idle, []int{100}); err != nil {
+		t.Errorf("the idle configuration passes: %v", err)
+	}
+	withMirrors := sample()
+	withMirrors.Mirrors = []Mirror{{Table: 103, MTU: 1280}, {Table: 104, MTU: 1400}}
+	mtext, err := withMirrors.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckText(mtext, []int{100, 103, 104, 200}); err != nil {
+		t.Errorf("a configuration with mirror tables passes: %v", err)
+	}
 	if err := CheckText("# kernel table 254 in a comment\nprotocol device { }", []int{100}); err != nil {
 		t.Errorf("a comment is no statement: %v", err)
 	}
 	if err := CheckText(strings.Repeat("a", maxConfigBytes+1), nil); err == nil {
 		t.Error("too long")
+	}
+}
+
+// Without `kernel table` a BIRD 2 kernel protocol syncs the host's main table (254), so every kernel
+// protocol and kernel template has to name an allowed table itself (P7-M29 audit S1).
+func TestEveryKernelProtocolNamesItsTable(t *testing.T) {
+	for name, tc := range map[string]struct {
+		text string
+		ok   bool
+	}{
+		"own table":                    {"protocol kernel k { kernel table 100; ipv4 { export all; }; }", true},
+		"unnamed protocol":             {"protocol kernel { kernel table 100; ipv4; }", true},
+		"table after the ipv4 block":   {"protocol kernel k { ipv4 { export all; }; kernel table 100; }", true},
+		"no table":                     {"protocol kernel k { ipv4 { export all; }; }", false},
+		"no table, unnamed":            {"protocol kernel { ipv4; }", false},
+		"empty block":                  {"protocol kernel k { }", false},
+		"table of the protocol before": {"protocol kernel a { kernel table 100; ipv4; }\nprotocol kernel b { ipv4 { export all; }; }", false},
+		"table of the protocol after":  {"protocol kernel a { ipv4; }\nprotocol kernel b { kernel table 100; ipv4; }", false},
+		"table in a comment":           {"protocol kernel k { # kernel table 100;\n ipv4; }", false},
+		"table in a string":            {"protocol kernel k { description \"kernel table 100\"; ipv4; }", false},
+		"table of a later block":       {"protocol kernel k { ipv4; }\nprotocol static s { ipv4; route 192.0.2.0/24 reject; }\n# kernel table 100\n", false},
+		"newlines in the head":         {"protocol\n  kernel\nk {\n ipv4;\n}", false},
+		"no block":                     {"protocol kernel k;", false},
+		"template with a table":        {"template kernel t { kernel table 100; }\nprotocol kernel k from t { ipv4; }", false},
+		"template and protocol":        {"template kernel t { kernel table 100; }\nprotocol kernel k from t { kernel table 100; ipv4; }", true},
+		"template without a table":     {"template kernel t { ipv4 { export all; }; }", false},
+		"template, protocol has one":   {"template kernel t { ipv4; }\nprotocol kernel k from t { kernel table 100; }", false},
+		"table outside the set":        {"protocol kernel k { kernel table 254; }", false},
+		"other protocols need none":    {"protocol device { }\nprotocol static s { ipv4; }\nprotocol bgp b { local as 1; }", true},
+		"the word kernel elsewhere":    {"protocol static s { ipv4; route 192.0.2.0/24 via 10.0.0.1; } # protocol kernel", true},
+	} {
+		err := CheckText(tc.text, []int{100})
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: %q: %v", name, tc.text, err)
+		}
 	}
 }
 

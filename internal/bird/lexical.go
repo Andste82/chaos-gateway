@@ -12,6 +12,9 @@ const maxConfigBytes = 1 << 20
 
 var kernelTableRE = regexp.MustCompile(`\bkernel\s+table\s+(\d+)`)
 
+// kernelBlockRE finds the head of a kernel protocol or template; its block starts at the next brace.
+var kernelBlockRE = regexp.MustCompile(`\b(protocol|template)\s+kernel\b`)
+
 // strip removes comments and string contents so that keywords can be looked for in what BIRD
 // actually reads. It fails on an unterminated string or comment.
 func strip(s string) (string, error) {
@@ -102,6 +105,8 @@ func CheckSnippet(s string) error {
 
 // CheckText checks a whole configuration before the executor writes it: printable text, balanced
 // braces, no `include` (BIRD would read any file), and `kernel table` only for the given tables.
+// Every kernel protocol and kernel template has to name one of them itself: without it BIRD 2 syncs
+// the host's main table.
 func CheckText(text string, allowedTables []int) error {
 	if len(text) > maxConfigBytes {
 		return errors.New("configuration too long")
@@ -133,6 +138,40 @@ func CheckText(text string, allowedTables []int) error {
 		}
 		if !ok {
 			return fmt.Errorf("`kernel table %d` is outside Chaos Gateway's tables", n)
+		}
+	}
+	return checkKernelBlocks(code)
+}
+
+// checkKernelBlocks requires every `protocol kernel` and `template kernel` block of the stripped
+// configuration to carry a `kernel table` of its own (CheckText has checked that the number is an
+// allowed one). A protocol that inherits from a template is no exception: the table has to stand in
+// the block that BIRD reads, not in a template that may be another one than it looks like.
+func checkKernelBlocks(code string) error {
+	for _, m := range kernelBlockRE.FindAllStringIndex(code, -1) {
+		head := code[m[0]:m[1]]
+		open := strings.IndexByte(code[m[1]:], '{')
+		if open < 0 {
+			return fmt.Errorf("`%s` without a block", head)
+		}
+		open += m[1]
+		depth, end := 0, -1
+		for i := open; i < len(code) && end < 0; i++ {
+			switch code[i] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					end = i
+				}
+			}
+		}
+		if end < 0 {
+			return fmt.Errorf("`%s` block is not closed", head)
+		}
+		if !kernelTableRE.MatchString(code[open:end]) {
+			return fmt.Errorf("`%s` has to name its table with `kernel table`: without it BIRD syncs the host's main table", head)
 		}
 	}
 	return nil

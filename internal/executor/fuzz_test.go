@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +40,9 @@ var fuzzSeeds = []string{
 	`{"type":"bird","action":"apply","instance":"chaosgw","config":"router id 10.10.0.1;\nprotocol device { }\n","import_tables":[10]}`,
 	`{"type":"bird","action":"check","instance":"chaosgw","config":"include \"/etc/shadow\";"}`,
 	`{"type":"read","what":"bird","instance":"chaosgw"}`,
+	`{"type":"bird","action":"apply","instance":"chaosgw","config":"router id 10.10.0.1;\nprotocol kernel k { kernel table 100; learn off; ipv4 { export all; }; }\n"}`,
+	`{"type":"bird","action":"apply","instance":"chaosgw","config":"protocol kernel k { ipv4 { export all; }; }\nprotocol static s { ipv4; route 0.0.0.0/0 via 10.0.0.1; }\n"}`,
+	`{"type":"bird","action":"check","instance":"chaosgw","config":"template kernel t { ipv4; }\nprotocol kernel k from t { kernel table 254; }\n"}`,
 	// the operations the seeds above did not start from (M29, TestEveryOperationTypeHasAFuzzSeedThatTheDecoderAccepts): the elements of
 	// the maps, the deletion of connections, the service namespace and its pair
 	`{"type":"nft_add_map_elements","namespace":"ns1","map":"ident4_ab12cd","elements":[{"key":"10.10.0.5","value":"3"},{"key":"10.10.0.31 . 203.0.113.10 . 6 . 443","value":"mark_7"},{"key":"10.0.0.5-10.0.0.9 . 198.51.100.0-198.51.100.77 . tcp . 80-443","value":"mark_0"}]}`,
@@ -119,6 +125,9 @@ func FuzzDecode(f *testing.F) {
 			}
 			checkStdin(t, op, s.Cmd)
 		}
+		if _, ok := op.(*Bird); ok {
+			checkStdin(t, op, Command{}) // the bird operation has no step: its input is the configuration
+		}
 	})
 }
 
@@ -136,6 +145,10 @@ func checkInert(t *testing.T, c Command) {
 
 func checkStdin(t *testing.T, op Operation, c Command) {
 	t.Helper()
+	if b, ok := op.(*Bird); ok {
+		checkBirdConfig(t, b)
+		return
+	}
 	switch c.Tool {
 	case ToolNft:
 		if _, ok := op.(*NftDup); ok {
@@ -168,6 +181,48 @@ func checkStdin(t *testing.T, op Operation, c Command) {
 					t.Fatalf("routing line outside Chaos Gateway's tables: %q", l)
 				}
 			}
+		}
+	}
+}
+
+// birdUncommented removes what BIRD does not read; birdKernelHead is the head of a kernel protocol or
+// template. The oracle reads the text on its own, not through the checker it tests.
+var (
+	birdUncommented = regexp.MustCompile(`(?s)/\*.*?\*/|#[^\n]*|"[^"\n]*"`)
+	birdKernelHead  = regexp.MustCompile(`\b(?:protocol|template)\s+kernel\b`)
+	birdKernelTable = regexp.MustCompile(`\bkernel\s+table\s+(\d+)\b`)
+)
+
+// checkBirdConfig: whatever the bird operation is given, every kernel protocol and kernel template of
+// the configuration it writes names a table of Chaos Gateway or an import table itself; BIRD 2 syncs the
+// host's main table for one that does not.
+func checkBirdConfig(t *testing.T, b *Bird) {
+	t.Helper()
+	code := birdUncommented.ReplaceAllString(b.Config, " ")
+	for _, h := range birdKernelHead.FindAllStringIndex(code, -1) {
+		open := strings.IndexByte(code[h[1]:], '{')
+		if open < 0 {
+			t.Fatalf("a kernel protocol without a block was accepted:\n%s", b.Config)
+		}
+		open += h[1]
+		depth, end := 0, len(code)
+		for i := open; i < len(code); i++ {
+			if code[i] == '{' {
+				depth++
+			} else if code[i] == '}' {
+				if depth--; depth == 0 {
+					end = i
+					break
+				}
+			}
+		}
+		m := birdKernelTable.FindStringSubmatch(code[open:end])
+		if m == nil {
+			t.Fatalf("a kernel protocol without a table was accepted:\n%s", b.Config)
+		}
+		n, _ := strconv.Atoi(m[1])
+		if !slices.Contains(b.allowedTables(), n) {
+			t.Fatalf("a kernel protocol on table %d was accepted:\n%s", n, b.Config)
 		}
 	}
 }

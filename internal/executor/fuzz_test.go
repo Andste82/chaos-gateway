@@ -43,6 +43,25 @@ var fuzzSeeds = []string{
 	`{"type":"bird","action":"apply","instance":"chaosgw","config":"router id 10.10.0.1;\nprotocol kernel k { kernel table 100; learn off; ipv4 { export all; }; }\n"}`,
 	`{"type":"bird","action":"apply","instance":"chaosgw","config":"protocol kernel k { ipv4 { export all; }; }\nprotocol static s { ipv4; route 0.0.0.0/0 via 10.0.0.1; }\n"}`,
 	`{"type":"bird","action":"check","instance":"chaosgw","config":"template kernel t { ipv4; }\nprotocol kernel k from t { kernel table 254; }\n"}`,
+	// the string fields no seed above has (TestEveryStringFieldOfEveryOperationIsInASeed): the namespace of every operation that takes
+	// one, and the fields of the diagnostics, the rules and the reads that the seeds left out. metacharSeeds makes the variants of each
+	// field with ; $ ` + "`" + ` a space, a line break and a leading '-' (TestNoStringFieldOfAnyOperationTakesAMetacharacter)
+	`{"type":"routing","namespace":"gw","routes":[{"action":"replace","family":4,"table":100,"dst":"default","via":"10.0.0.1","dev":"wan0"}],"rules":[{"action":"add","family":4,"priority":1000,"from":"10.10.0.0/24","to":"203.0.113.0/24","fwmark":"0x10/0xff","iif":"lan0","oif":"wan0","table":100}]}`,
+	`{"type":"docker_user","namespace":"gw","action":"ensure","devs":["br-lan0"]}`,
+	`{"type":"sysctl","namespace":"gw","entries":[{"name":"accept_ra","dev":"br-lan0","value":0}]}`,
+	`{"type":"wireguard","namespace":"gw","action":"ensure","name":"wg-hub","listen_port":51820,"key_ref":"0b7c6a3e-1f2d-4c5b-9a8e-7d6c5b4a3f21","peers":[{"public_key":"FHQNDwQocDIBvHWRCNqB4itfFryYORwJaqSuvgYzoUo=","preshared_key_ref":"1c8d7b4f-2a3e-4d6c-8b9f-0e1d2c3b4a59","allowed_ips":["10.99.0.2/32"],"endpoint":"203.0.113.40:51821"}]}`,
+	`{"type":"nft_del_elements","namespace":"gw","set":"dev_a","elements":["10.10.0.5"]}`,
+	`{"type":"nft_del_map_elements","namespace":"gw","map":"ident4","keys":["10.10.0.31"]}`,
+	`{"type":"offloads","namespace":"gw","devs":["wan0"]}`,
+	`{"type":"assign_interfaces","namespace":"gw","devs":["wan0","lan0"]}`,
+	`{"type":"nft_apply","namespace":"gw","ruleset":` + goodNft + `}`,
+	`{"type":"probe_ns","namespace":"gw","action":"ensure","name":"cgp-3a1f7c52","host_if":"pv3a1f7c52","bridge":"br-iot","mac":"02:28:b4:ce:f6:08","hostname":"probe-a"}`,
+	`{"type":"probe_run","probe":"cgp-3a1f7c52","kind":"diagnostic","request":{"type":"http","host":"203.0.113.10","port":80,"url":"http://203.0.113.10/status","timeout":"5s","from":{"probe":"probe-a"}},"user_agent":"chaosgw-diagnostic","proxy":"10.10.0.1:53"}`,
+	`{"type":"probe_run","probe":"cgp-3a1f7c52","kind":"diagnostic","request":{"type":"tls","host":"203.0.113.10","port":443,"sni":"broker.example.com"}}`,
+	`{"type":"probe_run","probe":"cgp-3a1f7c52","kind":"diagnostic","request":{"type":"udp","host":"203.0.113.10","port":7,"payload":"hello"}}`,
+	`{"type":"probe_run","probe":"cgp-3a1f7c52","kind":"diagnostic","request":{"type":"dns","host":"10.10.0.1","port":53,"dns_name":"broker.example.com"}}`,
+	`{"type":"read","what":"sysctl","name":"accept_ra","dev":"wan0"}`,
+	`{"type":"read","what":"service_ns","service":"cgsvc","pid":4242}`,
 	// the operations the seeds above did not start from (M29, TestEveryOperationTypeHasAFuzzSeedThatTheDecoderAccepts): the elements of
 	// the maps, the deletion of connections, the service namespace and its pair
 	`{"type":"nft_add_map_elements","namespace":"ns1","map":"ident4_ab12cd","elements":[{"key":"10.10.0.5","value":"3"},{"key":"10.10.0.31 . 203.0.113.10 . 6 . 443","value":"mark_7"},{"key":"10.0.0.5-10.0.0.9 . 198.51.100.0-198.51.100.77 . tcp . 80-443","value":"mark_0"}]}`,
@@ -92,6 +111,10 @@ var fuzzSeeds = []string{
 // form is stable.
 func FuzzDecode(f *testing.F) {
 	for _, s := range fuzzSeeds {
+		f.Add([]byte(s))
+	}
+	// every string field with a metacharacter in it: a validator that lets one through fails the seed run
+	for _, s := range metacharSeeds(f) {
 		f.Add([]byte(s))
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {

@@ -85,3 +85,16 @@ func runScript(t *testing.T, script string, env []string, stubs map[string]strin
 	}
 	return string(out), 0
 }
+
+// A run of CI on main is the verdict on that commit (image.yml asks for it before it publishes a tag): a later push must not cancel it, nor
+// replace it while it waits. Only the runs of a pull request are cancelled by a newer push to the same pull request.
+func TestTheCIRunsOfMainAreNeverCancelled(t *testing.T) {
+	w := parseWorkflow(t, "ci.yml")
+	if got := w.Concurrency.CancelInProgress; got != "${{ github.event_name == 'pull_request' }}" {
+		t.Errorf("cancel-in-progress is %v: it cancels the runs of pushes to main", got)
+	}
+	// the group of a push is the commit, the group of a pull request its ref
+	if g := w.Concurrency.Group; !strings.Contains(g, "github.event_name == 'pull_request' && github.ref || github.sha") {
+		t.Errorf("the concurrency group %q lets a push to main wait in the group of the branch, where a later push replaces it", g)
+	}
+}

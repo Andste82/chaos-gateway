@@ -8,9 +8,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request makes the run of the older one pointless. A push to main is never cancelled, neither by a later push nor
+# while it waits (every commit of main has its own group): the run is the verdict on that commit, and image.yml asks for it before a tag
+# is published.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   GOLANGCI_LINT_VERSION: v2.14.0

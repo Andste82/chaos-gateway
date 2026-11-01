@@ -117,6 +117,13 @@ func TestTheUIAndTheAPIAreReachedFromTheManagementNetworkOnlyOnTheRealKernel(t *
 		{"the test-role WireGuard client", top.RC, "10.99.0.1"},
 		{"the server behind the uplink", top.Server, testbed.UplinkGateway},
 	} {
+		// the positive control: the source reaches the gateway at this address with something that is allowed (the gateway answers
+		// ICMP echo to the test networks and the uplink), so that a failed connection below is the firewall's refusal of the port and
+		// not a source without a path, a missing address or a namespace that is down
+		if !pingOK(c.ns, "", c.host) {
+			t.Errorf("%s does not reach the gateway at %s with a ping: the refusal of the port below would prove nothing", c.name, c.host)
+			continue
+		}
 		if status, _, err := httpsGet(c.ns, c.host, port); err == nil {
 			t.Errorf("%s reached the API at %s:%d: HTTP %d\n%s", c.name, c.host, port, status, top.GW.Must("nft", "list", "chain", "inet", "chaosgw", "input"))
 		}

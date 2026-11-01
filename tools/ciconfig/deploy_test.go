@@ -280,6 +280,12 @@ func TestTheReleaseWorkflowChecksTheTagBeforeItBuildsAndTheManifestAfterItPushes
 	if !strings.Contains(image, "if: startsWith(github.ref, 'refs/tags/')\n        run: deploy/release-check.sh") {
 		t.Error("the check of the tag does not run for a pushed tag only")
 	}
+	// a manual run cannot take the name of a release
+	for _, want := range []string{"if: github.event_name == 'workflow_dispatch' && inputs.push", "latest | v[0-9]* | [0-9]*)"} {
+		if !strings.Contains(image, want) {
+			t.Errorf("image.yml lacks %q: a manual run could push :latest or a version from a branch", want)
+		}
+	}
 }
 
 // The functional smoke test of the arm64 image is the weekly emulated run of level 2: the job exists, builds the arm64 image, sets the

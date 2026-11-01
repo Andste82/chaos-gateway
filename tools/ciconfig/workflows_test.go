@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -305,6 +306,22 @@ func TestTheNightlyFuzzJobRunsTheFileTargetAsRootAndKeepsItsCorpus(t *testing.T)
 	}
 	if fuzz.Steps[save].If != "always()" {
 		t.Errorf("the corpus is saved if %q: a night with a crasher would lose what it found", fuzz.Steps[save].If)
+	}
+}
+
+// The development guide says the older level 1 tests of M4 and M4b stay in the lists of the testbed jobs; a test that is in no list can be
+// renamed or lose its build tag and leave every job green.
+func TestTheRegressionTestsOfM4AreInALevel1List(t *testing.T) {
+	var m29 []string
+	for _, l := range strings.Split(read(t, ".github", "level1-tests.env"), "\n") {
+		if names, ok := strings.CutPrefix(l, "M29_LEVEL1="); ok {
+			m29 = strings.Split(names, ",")
+		}
+	}
+	for _, name := range []string{"TestGatewayProtection", "TestRolesDecideWhoReachesTheControlPlane"} {
+		if !slices.Contains(m29, name) {
+			t.Errorf("%s is in no level 1 list: M29_LEVEL1 is %v", name, m29)
+		}
 	}
 }
 

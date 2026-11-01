@@ -2408,7 +2408,8 @@ paths:
         - System: `chaosgw_health_ok`, `chaosgw_component_status{component,status}` (1 for the status a component has),
           `chaosgw_system_cpus`, `chaosgw_system_load{1,5,15}`, `chaosgw_system_memory_{total,available}_bytes`,
           `chaosgw_disk_{free,total}_bytes{volume}` (`state`, `captures`), `chaosgw_build_info`,
-          `chaosgw_start_time_seconds`, `chaosgw_uptime_seconds`, `chaosgw_revision` and `chaosgw_apply_ok`.
+          `chaosgw_start_time_seconds`, `chaosgw_uptime_seconds`, `chaosgw_revision`, `chaosgw_apply_ok` and
+          `chaosgw_safe_mode` (1 while the gateway runs in safe mode).
         - `chaosgw_collector_up{source}` is 0 for a source that could not be read at this scrape (`counters`,
           `queues`, `interfaces`); the series that come from it are left out then, they are not reported as 0. Each
           source is read within 3 seconds: a read that hangs leaves its source out like one that fails, and the

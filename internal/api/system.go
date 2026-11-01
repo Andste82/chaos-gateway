@@ -387,6 +387,14 @@ func (s *Server) healthReport(parent context.Context) (string, []healthComponent
 		}
 		comps = append(comps, b)
 	}
+	// safe mode (M27) is degraded and not unhealthy: the API container's health check fails on unhealthy, and the safe mode is
+	// the state in which the administrator still has to reach the API to apply a revision that works
+	if snap.SafeMode {
+		worse("degraded")
+		if comps[0].Status == "healthy" {
+			comps[0].Status, comps[0].Detail = "degraded", "safe mode, management access only and no forwarding: "+firstLine(snap.SafeModeReason)
+		}
+	}
 	if snap.LastError != "" {
 		worse("degraded")
 		if comps[0].Status == "healthy" {

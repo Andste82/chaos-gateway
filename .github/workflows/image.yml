@@ -6,13 +6,15 @@ name: Image
 #              :sha-<commit> from the selected branch; use it for test containers
 #   release    a pushed tag v* pushes :<version> (v1.2.3 gives 1.2.3, 1.2 and 1) and :latest, and
 #              attaches the files of the deployment to the release of the tag; a tag with a pre-release
-#              part (v1.0.0-rc.1) pushes only :<version> and makes a pre-release of the GitHub release
+#              part (v1.0.0-rc.1) pushes only :<version> and makes a pre-release of the GitHub release. The tag must be a
+#              version on the history of main (deploy/release-check.sh); nothing is built before that is checked
 #
 # The image is the whole gateway: chaosgw and chaosctl, the tools of the containers, Kea, BIRD, the
 # interception proxy and tcpdump (deploy/Dockerfile). Each platform is built, loaded and started
 # (deploy/smoke-image.sh: the arm64 image under qemu-user) before the multi-arch image is pushed,
 # so a broken image never gets a tag; the builds come from the cache of the build that pushes.
-# This workflow has not run on a release tag yet: the first release (M30) is its first real run.
+# After the push the manifest is read back: both platforms must be in it. The workflow has not run on a release tag yet; the first
+# real run is the first release, which docs/release.md says to make a release candidate (v1.0.0-rc.1) first.
 
 on:
   workflow_dispatch:
@@ -46,8 +48,15 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
+
+      # a tag is published only when it is a version on the history of main (deploy/release-check.sh)
+      - name: Check the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: deploy/release-check.sh "$GITHUB_REF_NAME"
 
       # registry paths must be lowercase; the owner name may not be
       - name: Image name
@@ -126,6 +135,19 @@ jobs:
           cache-from: type=gha,scope=image
           cache-to: type=gha,scope=image,mode=max
 
+      # what was pushed is what was meant: one manifest with both platforms (a build that lost a platform would install fine on
+      # the machine of whoever tested it and fail on the other architecture)
+      - name: Check the manifest
+        if: github.event_name != 'workflow_dispatch' || inputs.push
+        env:
+          IMAGE_NAME: ${{ steps.name.outputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          docker buildx imagetools inspect "$IMAGE_NAME@$DIGEST" | tee manifest.txt
+          for platform in linux/amd64 linux/arm64; do
+            grep -q "Platform: *$platform\$" manifest.txt || { echo "::error::the pushed image has no $platform"; exit 1; }
+          done
+
       # the files of the deployment, for an installation that has no Docker yet to take them out of the image
       # (docs/install.md): compose.yaml, the host setup and the update script of this release
       - name: Attach the files of the deployment to the release
@@ -134,7 +156,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd deploy
-          sha256sum compose.yaml host-setup.sh update.sh env.example > SHA256SUMS
+          sha256sum compose.yaml host-setup.sh install.sh update.sh uninstall.sh env.example > SHA256SUMS
           # a tag with a pre-release part (v1.0.0-rc.1) is a pre-release on GitHub and does not move :latest
           flags=""
           case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
@@ -143,7 +165,7 @@ jobs:
           if [ -f "../docs/release-notes/$GITHUB_REF_NAME.md" ]; then notes="--notes-file ../docs/release-notes/$GITHUB_REF_NAME.md"; fi
           # shellcheck disable=SC2086
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" $notes $flags
-          gh release upload "$GITHUB_REF_NAME" compose.yaml host-setup.sh update.sh env.example SHA256SUMS --clobber
+          gh release upload "$GITHUB_REF_NAME" compose.yaml host-setup.sh install.sh update.sh uninstall.sh env.example SHA256SUMS --clobber
 
       - name: Summary
         run: |
@@ -154,4 +176,8 @@ jobs:
             echo "${{ steps.meta.outputs.tags }}"
             echo '```'
             echo "digest: \`${{ steps.push.outputs.digest }}\`"
+            if [ "${{ github.event_name }}" != workflow_dispatch ]; then
+              echo
+              echo "install: \`curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/install.sh | sudo sh -s -- --version ${GITHUB_REF_NAME#v} --test-interface lan0\`"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

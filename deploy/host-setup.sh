@@ -284,12 +284,12 @@ install_files() { # image
 		;;
 	esac
 	mkdir -p "$PREFIX$INSTALL_DIR"
-	if ! docker run --rm --entrypoint tar "$ref" -C /usr/local/share/chaosgw -cf - compose.yaml update.sh host-setup.sh env.example | tar -xf - -C "$PREFIX$INSTALL_DIR" --no-same-owner; then
+	if ! docker run --rm --entrypoint tar "$ref" -C /usr/local/share/chaosgw -cf - compose.yaml update.sh host-setup.sh env.example install.sh uninstall.sh | tar -xf - -C "$PREFIX$INSTALL_DIR" --no-same-owner; then
 		echo "host-setup: cannot copy the files of the deployment out of $ref" >&2
 		return 1
 	fi
-	chmod 0755 "$PREFIX$INSTALL_DIR/update.sh" "$PREFIX$INSTALL_DIR/host-setup.sh"
-	say "copied compose.yaml, update.sh, host-setup.sh and env.example from $ref to $INSTALL_DIR"
+	chmod 0755 "$PREFIX$INSTALL_DIR/update.sh" "$PREFIX$INSTALL_DIR/host-setup.sh" "$PREFIX$INSTALL_DIR/install.sh" "$PREFIX$INSTALL_DIR/uninstall.sh"
+	say "copied compose.yaml, update.sh, host-setup.sh, install.sh, uninstall.sh and env.example from $ref to $INSTALL_DIR"
 	if [ -e "$PREFIX$INSTALL_DIR/.env" ]; then
 		say "$INSTALL_DIR/.env is kept; it names the image: check CHAOSGW_IMAGE and CHAOSGW_VERSION"
 	else
@@ -719,6 +719,7 @@ host-setup: next
   cd $INSTALL_DIR && docker compose up -d
   docker compose logs api | grep 'Setup token'     the one-time token the setup wizard asks for (https://<management address>:8443)
   $INSTALL_DIR/update.sh                            later: updates the gateway when no run is active
+  $INSTALL_DIR/uninstall.sh                         takes the gateway away again (--purge deletes the data too)
 NEXT
 	else
 		cat <<'NEXT'

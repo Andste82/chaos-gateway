@@ -7007,8 +7007,17 @@ There is no change of the spec and none of the HTTP API: the preflight adds chec
 ### How it works
 
 - **The image** (`deploy/Dockerfile`). One multi-arch image (amd64, arm64) for every container. M28 adds `tcpdump` (for the administrator's shell: `docker compose exec exec tcpdump -i br-iot`; the gateway's own captures are
-  AF_PACKET sockets, M17) and `kmod` (`modprobe`, for the executor's preflight), the files of the deployment under `/usr/local/share/chaosgw` (`compose.yaml`, `update.sh`, `host-setup.sh`, `env.example`) and the
-  labels `org.opencontainers.image.source` and `.documentation`. The description of the image that still said the full image follows with M28 (P5-AUDIT-22) is replaced. `.dockerignore` lets the four files in.
+  AF_PACKET sockets, M17) and `kmod` (`modprobe`, for the executor's preflight), the files of the deployment under `/usr/local/share/chaosgw` (`compose.yaml`, `update.sh`, `host-setup.sh`, `install.sh`, `uninstall.sh`, `env.example`) and the
+  labels `org.opencontainers.image.source` and `.documentation`. The description of the image that still said the full image follows with M28 (P5-AUDIT-22) is replaced. `.dockerignore` lets the six files in (`TestTheFilesOfTheDeploymentAreInTheImage` fails when one is missing).
+- **The scripts of the host** (`deploy/install.sh`, `update.sh`, `uninstall.sh`; the host setup copies all of them into `/opt/chaosgw`, and the release carries them). `install.sh`
+  is the one command from a host to a running gateway: Docker if it is missing (the host setup of the release, fetched with curl), `docker pull`, the host setup *out of the pulled image* (so
+  script and gateway are of one version), `docker compose up -d` and the wait for the health checks of exec, api, svcns, kea and bird (exit 5 when they do not come). It can be run again; a test
+  interface that is still in netplan stops it with the host setup's hint. `uninstall.sh` stops the stack (`compose stop`: the executor removes what it made), runs the teardown service (which
+  makes the volumes of the sockets again, so `compose down -v` comes after it), gives each test interface back to networkd (`host-setup.sh --remove-test-interface`), and with `--purge` and a yes also
+  deletes the images, the host configuration files, the data and the deployment directory; a failed step is named, the others go on, and the data stay when a step failed. `uninstall.sh`
+  refuses a wrong `--dir` (the root, a relative path, `..`) before it changes anything and never deletes a directory that holds neither `compose.yaml` nor `.env`. They are tested at level 0 against stubs of docker, curl and id
+  (`tools/deployscripts/install_test.go`, `uninstall_test.go`; `--prefix` makes `uninstall.sh` work below a directory without root) and checked with shellcheck in CI. The level 2 deployment test does not call
+  them: it tests the steps one by one (host setup, `compose up`), which is the same code.
 - **`deploy/compose.yaml`** is made from the compose files of the containers (`compose.executor.yaml`, `compose.api.yaml`, `compose.kea.yaml`, `compose.dns.yaml`: the holder `svcns` and the DNS proxy, `compose.tls.yaml`, `compose.bird.yaml`,
   `compose.tlsproxy.yaml`, `compose.teardown.yaml`) by `tools/composegen` (`make compose`; `make check-compose`, part of `make check-generated`, and a Go test fail when it is not current). The files stay what the lower levels start
   (the executor alone, with BIRD, the proxy of the interception alone), so there is one definition of every container. The union has three changes: a dependency on a service of another file that is optional in its file
@@ -7326,6 +7335,9 @@ the testbed tests directly in 12 s.
   GitHub if it should be pulled without login. Pulling a private image needs
   `docker login ghcr.io` with a token that has `read:packages`.
 - The workflow needs no secret: it logs in with the job's `GITHUB_TOKEN`.
+- **A tag is checked before anything is built** (`deploy/release-check.sh`: a version `vMAJOR.MINOR.PATCH` with an optional `-rc.1`, on the history of `main`; the job checks out the whole
+  history for it; `tools/deployscripts/release_check_test.go` runs it on real git repositories), and **after the push the manifest is read back** for both platforms. The release gets
+  `install.sh` and `uninstall.sh` next to `compose.yaml`, `host-setup.sh`, `update.sh` and `env.example`. How to make a release, the candidate first, is [release.md](release.md).
 
 For a host without the registry, `make image-local` builds the image for the machine's own architecture with
 the version build arguments, loads it and tags it `chaos-gateway:latest` (what the compose files use) and

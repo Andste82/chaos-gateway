@@ -63,13 +63,13 @@ sh_in "tcpdump --version 2>&1 | head -1" | grep -qi tcpdump || fail "tcpdump doe
 echo "ok   Kea $kea_version, BIRD $bird_version and mitmproxy $mitmproxy_version are the pinned versions; tcpdump runs"
 
 # the files the host setup copies out of the image: `docker run --entrypoint tar IMAGE -C /usr/local/share/chaosgw -cf - ...`
-files="compose.yaml update.sh env.example host-setup.sh"
+files="compose.yaml update.sh env.example host-setup.sh install.sh uninstall.sh"
 # shellcheck disable=SC2086 # the names are words
 listing=$(run --entrypoint tar "$image" -C /usr/local/share/chaosgw -cf - $files | tar -tf -) || fail "tar cannot copy the files of the deployment out of the image"
 for f in $files; do
 	echo "$listing" | grep -qx "$f" || fail "/usr/local/share/chaosgw/$f is not in the image"
 done
-sh_in "test -x /usr/local/share/chaosgw/update.sh && test -x /usr/local/share/chaosgw/host-setup.sh" || fail "update.sh or host-setup.sh is not executable in the image"
+sh_in "test -x /usr/local/share/chaosgw/update.sh && test -x /usr/local/share/chaosgw/host-setup.sh && test -x /usr/local/share/chaosgw/install.sh && test -x /usr/local/share/chaosgw/uninstall.sh" || fail "a script of the deployment (update.sh, host-setup.sh, install.sh, uninstall.sh) is not executable in the image"
 echo "ok   the files of the deployment are in the image"
 
 # Kea starts with the configuration the gateway gives it before the API has sent a scope (deploy/kea-start.sh): its parser accepts

@@ -145,7 +145,7 @@ func TestTheFilesOfTheDeploymentAreInTheImage(t *testing.T) {
 		}
 	}
 	setup := read(t, "deploy", "host-setup.sh")
-	if !strings.Contains(setup, "-cf - compose.yaml update.sh host-setup.sh env.example") || !strings.Contains(docker, "/usr/local/share/chaosgw/") {
+	if !strings.Contains(setup, "-cf - compose.yaml update.sh host-setup.sh env.example install.sh uninstall.sh") || !strings.Contains(docker, "/usr/local/share/chaosgw/") {
 		t.Error("the host setup copies other files out of the image than the ones the Dockerfile puts there")
 	}
 	// the tools the executor and the containers run (plan §3.4) and tcpdump (M28)
@@ -248,10 +248,37 @@ func TestAPreReleaseTagDoesNotMoveLatestAndMakesAPreRelease(t *testing.T) {
 	if create == "" || !strings.Contains(create, "$flags") || !strings.Contains(image, `*-*) flags="--prerelease"`) {
 		t.Errorf("image.yml creates the release without --prerelease for a tag with a hyphen: %q", create)
 	}
-	for _, want := range []string{"gh release upload", "compose.yaml host-setup.sh update.sh env.example SHA256SUMS", "if: startsWith(github.ref, 'refs/tags/v')"} {
+	for _, want := range []string{"gh release upload", "compose.yaml host-setup.sh install.sh update.sh uninstall.sh env.example SHA256SUMS", "if: startsWith(github.ref, 'refs/tags/v')"} {
 		if !strings.Contains(image, want) {
 			t.Errorf("image.yml lacks %q: the files of the deployment are not attached to the release", want)
 		}
+	}
+}
+
+// A release is published only from a checked tag: the check of the tag (deploy/release-check.sh, on the whole history) comes before the first
+// build and the first push, and after the push the manifest is read back for both platforms.
+func TestTheReleaseWorkflowChecksTheTagBeforeItBuildsAndTheManifestAfterItPushes(t *testing.T) {
+	image := read(t, ".github", "workflows", "image.yml")
+	if !strings.Contains(image, "fetch-depth: 0") {
+		t.Error("image.yml checks out no history: release-check.sh cannot tell whether the tag is on main")
+	}
+	pos := func(s string) int { return strings.Index(image, s) }
+	check, build, push, manifest, upload := pos(`deploy/release-check.sh "$GITHUB_REF_NAME"`), pos("docker/build-push-action@v7"), pos("push: ${{ github.event_name"), pos("imagetools inspect"), pos("gh release upload")
+	for name, p := range map[string]int{"the check of the tag": check, "the first build": build, "the push": push, "the check of the manifest": manifest, "the upload": upload} {
+		if p < 0 {
+			t.Fatalf("image.yml has no %s", name)
+		}
+	}
+	if check >= build || build >= push || push >= manifest || manifest >= upload {
+		t.Errorf("the order in image.yml is wrong: check %d, build %d, push %d, manifest %d, upload %d", check, build, push, manifest, upload)
+	}
+	for _, platform := range []string{"linux/amd64", "linux/arm64"} {
+		if !strings.Contains(image[manifest:], platform) {
+			t.Errorf("the check of the manifest does not look for %s", platform)
+		}
+	}
+	if !strings.Contains(image, "if: startsWith(github.ref, 'refs/tags/')\n        run: deploy/release-check.sh") {
+		t.Error("the check of the tag does not run for a pushed tag only")
 	}
 }
 

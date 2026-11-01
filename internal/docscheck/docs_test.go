@@ -354,3 +354,56 @@ func TestTheHostCommandsOfTheDocumentsNameThingsThatExist(t *testing.T) {
 		t.Errorf("the documents have %d host blocks and %d lines that run update.sh", seen, updates)
 	}
 }
+
+// The documents name the options of install.sh and uninstall.sh on command lines and in prose; an option the script does not have is a
+// command that fails for the person who typed it (the scripts are tested in tools/deployscripts).
+func TestTheOptionsTheDocumentsGiveInstallAndUninstallExist(t *testing.T) {
+	options := func(script string) map[string]bool {
+		out := map[string]bool{"--help": true}
+		for _, m := range regexp.MustCompile(`(?m)^\s*(--[a-z-]+)(?: \| -h)?\)`).FindAllStringSubmatch(read(t, script), -1) {
+			out[m[1]] = true
+		}
+		return out
+	}
+	install, uninstall := options("deploy/install.sh"), options("deploy/uninstall.sh")
+	if len(install) < 7 || len(uninstall) < 5 {
+		t.Fatalf("found the options %v of install.sh and %v of uninstall.sh: the pattern no longer matches the scripts", install, uninstall)
+	}
+	scripts := []struct {
+		name    string
+		pattern *regexp.Regexp
+		options map[string]bool
+	}{
+		{"install.sh", regexp.MustCompile(`(^|[^a-z])install\.sh`), install},
+		{"uninstall.sh", regexp.MustCompile(`uninstall\.sh`), uninstall},
+	}
+	option := regexp.MustCompile("(?:^|[\\s`(])(--[a-z][a-z-]*)")
+	seen := map[string]int{}
+	for _, doc := range []string{"README.md", "docs/install.md", "docs/release.md", "docs/recovery.md", "docs/troubleshooting.md", "docs/user-guide.md", "docs/release-notes/v1.0.0.md"} {
+		for n, line := range strings.Split(read(t, doc), "\n") {
+			for _, s := range scripts {
+				idx := s.pattern.FindStringIndex(line)
+				if idx == nil {
+					continue
+				}
+				// the options after the name of the script; a line that names uninstall.sh after install.sh gives the later options to the later script
+				after := line[idx[1]:]
+				if s.name == "install.sh" {
+					if u := strings.Index(after, "uninstall.sh"); u >= 0 {
+						after = after[:u]
+					}
+				}
+				seen[s.name]++
+				code, _, _ := strings.Cut(after, "#")
+				for _, m := range option.FindAllStringSubmatch(code, -1) {
+					if !s.options[m[1]] {
+						t.Errorf("%s:%d: deploy/%s has no option %s", doc, n+1, s.name, m[1])
+					}
+				}
+			}
+		}
+	}
+	if seen["install.sh"] < 5 || seen["uninstall.sh"] < 4 {
+		t.Errorf("the documents name install.sh on %d lines and uninstall.sh on %d: they lost their instructions", seen["install.sh"], seen["uninstall.sh"])
+	}
+}

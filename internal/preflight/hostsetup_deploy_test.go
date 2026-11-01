@@ -79,13 +79,13 @@ func TestHostSetupDataOnlyMakesNothingElse(t *testing.T) {
 	}
 }
 
-// dockerStub stands for `docker run --rm --entrypoint tar IMAGE -C /usr/local/share/chaosgw -cf - compose.yaml update.sh host-setup.sh env.example`:
+// dockerStub stands for `docker run --rm --entrypoint tar IMAGE -C /usr/local/share/chaosgw -cf - compose.yaml update.sh host-setup.sh env.example install.sh uninstall.sh`:
 // it writes the three files of the image as a tar stream, and records its arguments.
 const dockerStub = `#!/bin/sh
 echo "$*" >>"$DOCKER_STUB_DIR/calls"
 case "$*" in
-"run --rm --entrypoint tar "*" -C /usr/local/share/chaosgw -cf - compose.yaml update.sh host-setup.sh env.example")
-	exec tar -cf - -C "$DOCKER_STUB_DIR/image" compose.yaml update.sh host-setup.sh env.example ;;
+"run --rm --entrypoint tar "*" -C /usr/local/share/chaosgw -cf - compose.yaml update.sh host-setup.sh env.example install.sh uninstall.sh")
+	exec tar -cf - -C "$DOCKER_STUB_DIR/image" compose.yaml update.sh host-setup.sh env.example install.sh uninstall.sh ;;
 esac
 echo "docker stub: unexpected: $*" >&2
 exit 1
@@ -102,6 +102,8 @@ func runWithDockerStub(t *testing.T, stub string, args ...string) (string, error
 	writeFile(t, filepath.Join(image, "compose.yaml"), "services: {}\n")
 	writeFile(t, filepath.Join(image, "update.sh"), "#!/bin/sh\n")
 	writeFile(t, filepath.Join(image, "host-setup.sh"), "#!/bin/sh\n")
+	writeFile(t, filepath.Join(image, "install.sh"), "#!/bin/sh\n")
+	writeFile(t, filepath.Join(image, "uninstall.sh"), "#!/bin/sh\n")
 	writeFile(t, filepath.Join(image, "env.example"), "#CHAOSGW_UI_PORT=8443\n")
 	cmd := exec.Command("sh", append([]string{hostSetup}, args...)...)
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "DOCKER_STUB_DIR="+stub)
@@ -123,12 +125,12 @@ func TestHostSetupCopiesTheFilesOfTheDeploymentOutOfTheImageAndNamesItInEnv(t *t
 				t.Fatalf("%v\n%s", err, out)
 			}
 			install := filepath.Join(dir, "opt/chaosgw")
-			for _, f := range []string{"compose.yaml", "update.sh", "host-setup.sh", "env.example"} {
+			for _, f := range []string{"compose.yaml", "update.sh", "host-setup.sh", "install.sh", "uninstall.sh", "env.example"} {
 				if _, err := os.Stat(filepath.Join(install, f)); err != nil {
 					t.Errorf("%s was not copied: %v", f, err)
 				}
 			}
-			for _, f := range []string{"update.sh", "host-setup.sh"} {
+			for _, f := range []string{"update.sh", "host-setup.sh", "install.sh", "uninstall.sh"} {
 				if fi, _ := os.Stat(filepath.Join(install, f)); fi == nil || fi.Mode().Perm() != 0o755 {
 					t.Errorf("%s is not executable: %v", f, fi)
 				}

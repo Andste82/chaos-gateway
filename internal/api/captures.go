@@ -281,7 +281,8 @@ func (s *Server) DownloadCapture(c *gin.Context, id model.CaptureId, params mode
 		s.failCapture(c, err)
 		return
 	}
-	if p := principalOf(c); (part == "keylog" || (cp.Sensitive != nil && *cp.Sensitive)) && (p == nil || p.Scope != auth.ScopeFull) {
+	secret := part == "keylog" || (cp.Sensitive != nil && *cp.Sensitive)
+	if p := principalOf(c); secret && (p == nil || p.Scope != auth.ScopeFull) {
 		s.write(c, newProblem(model.ErrorCodeForbidden, "a key log and a capture that holds secrets are for the scope full"))
 		return
 	}
@@ -289,6 +290,13 @@ func (s *Server) DownloadCapture(c *gin.Context, id model.CaptureId, params mode
 	if err != nil {
 		s.failCapture(c, err)
 		return
+	}
+	// a download of secrets is recorded before the first byte leaves, like every other one (M5-16)
+	if secret {
+		if err := s.tryRecord(c, "capture.download_secret", &audit.Object{Kind: "capture", ID: id.String(), Name: derefStr(cp.Name)}, 0, "part "+part); err != nil {
+			s.write(c, newProblem(model.ErrorCodeUnavailable, "the audit log cannot be written"))
+			return
+		}
 	}
 	c.Header("Content-Type", d.ContentType)
 	c.Header("Content-Disposition", `attachment; filename="`+d.Name+`"`)

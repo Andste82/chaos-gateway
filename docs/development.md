@@ -5116,7 +5116,8 @@ operations of the spec that were declared with it (`GET`/`POST /captures`, `GET`
   the ring deletes while the download runs is skipped. `part=keylog` is `404 not_found` for a capture that has no key log (since M22 a capture
   has one when the interception proxy handled a connection of its device while it ran, "TLS interception and HTTP faults (M22)");
   `part=keylog` and a capture marked `sensitive` need the scope `full`, which the check in the handler already
-  applies.
+  applies. Such a download is a secret download: the handler writes `capture.download_secret` to the audit log before the
+  first byte leaves and answers `503` when the log cannot be written (`TestTheDownloadOfSecretsOfACaptureIsAuditedBeforeItStarts`).
 - **API details.** `POST /captures` takes `Idempotency-Key` and the scope `overlays`; it writes `capture.start`,
   `capture.stop` and `capture.delete` to the audit log; a deployment without a capture volume (`--captures-dir` empty)
   answers every operation with `422 unsupported_feature`, and its `GET /capabilities` lacks the step type `capture` and

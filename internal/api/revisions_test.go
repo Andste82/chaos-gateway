@@ -513,3 +513,20 @@ func TestARevisionWaitingForConfirmationIsRolledBackOnRequest(t *testing.T) {
 		}
 	}
 }
+
+// The API container has no capabilities (cap_drop ALL, user 65532), so it cannot listen below 1024: a
+// management.ui_port of 443 would lock the API out. The schema refuses it (P7-M29 audit S3).
+func TestAPrivilegedUIPortIsRefused(t *testing.T) {
+	g := ready(t)
+	g.badRequest = true // the ports below the minimum are deliberately invalid
+	for _, port := range []int{443, 80, 1023, 1, 0} {
+		r := g.patch(map[string]any{"management": map[string]any{"ui_port": port}})
+		if r.Status != 422 || r.code(t) != "validation_failed" || !strings.Contains(string(r.Body), "ui_port") {
+			t.Errorf("ui_port %d: %d %s", port, r.Status, r.Body)
+		}
+	}
+	g.badRequest = false
+	if r := g.patch(map[string]any{"management": map[string]any{"ui_port": 1024}}); r.Status != 201 {
+		t.Errorf("ui_port 1024: %d %s", r.Status, r.Body)
+	}
+}

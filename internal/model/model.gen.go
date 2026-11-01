@@ -5233,7 +5233,7 @@ type Management struct {
 	// Interface OS-owned management interface; may be the uplink interface (two-port topology).
 	Interface InterfaceRef `json:"interface"`
 
-	// UiPort Default - the port the API listens on (8443 in the shipped compose files).
+	// UiPort Default - the port the API listens on (8443 in the shipped compose files). Not below 1024: the API container has no capabilities and cannot bind a privileged port, so the API would be unreachable.
 	UiPort *int `json:"ui_port,omitempty"`
 }
 

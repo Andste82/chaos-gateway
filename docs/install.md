@@ -15,14 +15,14 @@ directories, the rule that keeps systemd-networkd off the test interfaces), star
 Name every interface that will carry a test network with `--test-interface` (`ip link` lists the names; never the uplink or the
 management interface, see [the test interfaces](#the-test-interfaces-belong-to-the-gateway-alone)):
 
-```sh
+```sh host
 curl -fsSL https://github.com/Andste82/chaos-gateway/releases/latest/download/install.sh | sudo sh -s -- --test-interface lan0
 ```
 
 A particular version is `--version 1.0.0` (`latest` is the newest release that is not a pre-release; a release candidate is
 `--version 1.0.0-rc.1`). If you would rather read the script before it runs as root, or check it against the checksums the release carries:
 
-```sh
+```sh host
 V=1.0.0
 curl -fsSLO "https://github.com/Andste82/chaos-gateway/releases/download/v$V/install.sh"
 curl -fsSLO "https://github.com/Andste82/chaos-gateway/releases/download/v$V/SHA256SUMS"
@@ -39,7 +39,7 @@ for a local build or a mirror), `--dir` (default `/opt/chaosgw`), `--no-pull` an
 
 The two other scripts are in `/opt/chaosgw` afterwards:
 
-```sh
+```sh host
 sudo /opt/chaosgw/update.sh --token-file ~/chaosgw.token     # later: the new version, when no run is active (see "Updating")
 sudo /opt/chaosgw/uninstall.sh                                # take the gateway away, keep the data (see "Uninstall")
 sudo /opt/chaosgw/uninstall.sh --purge                        # and delete the data, the files and the images
@@ -50,18 +50,21 @@ The sections below are what `install.sh` does, one step at a time, for a host yo
 ## 1. Get the image
 
 Docker must be there to take the files out of the image. On a host without it, download `host-setup.sh` from the release (the files of a
-release are attached to it: `compose.yaml`, `host-setup.sh`, `update.sh`, `env.example`, `SHA256SUMS`), run it without `--image` (it
-installs Docker), and continue with step 2.
+release are attached to it: `compose.yaml`, `host-setup.sh`, `install.sh`, `update.sh`, `uninstall.sh`, `env.example`, `SHA256SUMS`), run it
+without `--image` (it installs Docker), then set `IMAGE` and pull it as below, and continue with step 2. (`install.sh` does all of this.)
 
-```sh
+```sh host
 IMAGE=ghcr.io/andste82/chaos-gateway:1.0.0     # a version; :latest is the newest release
 docker pull "$IMAGE"
 docker run --rm "$IMAGE" version
 ```
 
+An image is named by tag: `host-setup.sh --image` does not take a reference by digest (`@sha256:`), because `.env` holds `CHAOSGW_IMAGE`
+and `CHAOSGW_VERSION`. To pin one exact build, pull it, give it a local tag (`docker tag`) and name that.
+
 To build the image from a checkout instead, with the version, so `chaosgw version` names the commit:
 
-```sh
+```sh host
 git clone https://github.com/Andste82/chaos-gateway.git && cd chaos-gateway
 make image-local
 IMAGE=chaos-gateway:latest
@@ -79,7 +82,7 @@ everything it runs: `chaosgw` and `chaosctl`, the tools of the executor, Kea, BI
 Once, as root; safe to run again. Name every interface that will carry a test network with `--test-interface`
 (here `lan0`; `ip link` lists the names of the host's interfaces):
 
-```sh
+```sh host
 docker run --rm --entrypoint cat "$IMAGE" /usr/local/share/chaosgw/host-setup.sh | sudo sh -s -- --image "$IMAGE" --test-interface lan0
 ```
 
@@ -111,7 +114,7 @@ wizard:
 1. **Delete the interface's netplan entry.** Ubuntu's installer and cloud-init write one for every port, for
    example in `/etc/netplan/50-cloud-init.yaml`:
 
-   ```yaml
+   ```yaml fragment
        lan0:
          optional: true
          dhcp4: false
@@ -127,7 +130,7 @@ wizard:
    `/etc/systemd/network/10-chaosgw-lan0.network`, which comes before every such default, and reloads
    systemd-networkd:
 
-   ```ini
+   ```ini fragment
    [Match]
    Name=lan0
 
@@ -140,7 +143,7 @@ wizard:
 
 Then check, until it says `the test interfaces are ready`:
 
-```sh
+```sh host
 sudo sh host-setup.sh --check lan0
 ```
 
@@ -154,7 +157,7 @@ reads only the host's `/etc`), so run the check before the wizard.
 
 ## 3. Start the containers
 
-```sh
+```sh host
 cd /opt/chaosgw
 docker compose up -d
 docker compose ps
@@ -195,7 +198,7 @@ The container of the proxy is read-only and mounts only its two directories, so 
 the host (PEM, one or more CA certificates, readable by the proxy's user 65532, for example mode `0644`) and add a compose file of your
 own next to `compose.yaml`; Compose reads `compose.override.yaml` by itself:
 
-```yaml
+```yaml fragment
 # /opt/chaosgw/compose.override.yaml
 services:
   tls-proxy:
@@ -208,7 +211,7 @@ services:
         read_only: true
 ```
 
-```sh
+```sh host
 COMPOSE_PROFILES=interception docker compose up -d tls-proxy
 docker compose logs tls-proxy | grep 'CA file'   # nothing: the file is readable; a warning names what is wrong
 ```
@@ -222,7 +225,7 @@ restart of the `svcns` container): it exits with code 3 and its restart policy b
 
 The API prints a one-time setup token to its log at the first start:
 
-```sh
+```sh host
 docker compose logs api | grep 'Setup token'
 ```
 
@@ -254,7 +257,7 @@ no use any more.
 The web UI and the API are served over HTTPS with a self-signed certificate that the gateway makes at its first start (valid for ten years, for
 the host name, the addresses of the host, the loopback and the link to the service containers). Replace it with one your browsers and tools trust:
 
-```sh
+```sh host
 chaosctl certificate show                                           # the one in use, its names, validity and SHA-256 fingerprint
 chaosctl certificate install --cert fullchain.pem --key privkey.pem  # scope full
 chaosctl certificate reset                                          # back to the gateway's own
@@ -308,7 +311,7 @@ anywhere that reaches the management network: copy the binary out of the image
 (`docker create --name tmp chaos-gateway && docker cp tmp:/usr/local/bin/chaosctl . && docker rm tmp`), or build it with
 `go build ./cmd/chaosctl`. Create a token once, with the scope `overlays` (faults, profiles, runs, captures; enough for a CI job; `chaosctl probe add` and `probe remove` change the configuration and need the scope `full`):
 
-```sh
+```sh host
 GW=https://gateway.example:8443
 curl -sk -c jar -H 'Content-Type: application/json' -d '{"password":"<admin password>"}' $GW/api/v1/auth/login | jq -r .csrf_token > csrf
 curl -sk -b jar -H "X-CSRF-Token: $(cat csrf)" -H 'Content-Type: application/json' \
@@ -322,7 +325,7 @@ These three are one setting: a flag on the command line replaces the `CHAOSGW_*`
 (a `CHAOSGW_INSECURE=1` in the shell does not weaken a `--fingerprint`), `--insecure` together with a fingerprint or a CA file
 is refused (exit 2), and `--insecure` prints a warning.
 
-```sh
+```sh host
 export CHAOSGW_URL=$GW CHAOSGW_TOKEN_FILE=token
 chaosctl wait device esp32-42 --online --connected tcp/8883 --timeout 90s
 chaosctl run -f mqtt-outage.yaml --set target.device=esp32-42 --wait --junit report.xml --artifacts out/
@@ -355,7 +358,7 @@ at least) sets it and takes effect at the next run that ends, also for the runs 
 of the interfaces the gateway applied, the devices and the health of the system (the families are listed in the spec under `/metrics`). It needs a token of the
 scope `read`, made like the one above with `"scope":"read"`. A scrape configuration:
 
-```yaml
+```yaml fragment
 scrape_configs:
   - job_name: chaos-gateway
     scheme: https
@@ -426,14 +429,14 @@ same line in `/etc/sysctl.d/`); until then a ping answers `cannot open an ICMP s
 token with the scope `read` in a file (made from the admin session with `POST /api/v1/auth/tokens`, see the
 [API guide](api-guide.md#tokens-and-scopes); the script sends it only to the API of this host):
 
-```sh
+```sh host
 sudo /opt/chaosgw/update.sh --token-file ~/chaosgw.token --version 1.1.0
 ```
 
 Without a token the script refuses to guess whether a run is active and says how to give it one; `--no-wait` updates without asking (a
 run that is active then ends as `aborted`). The options in full:
 
-```sh
+```sh host
 cd /opt/chaosgw
 ./update.sh --token-file ~/chaosgw.token              # the image of .env (CHAOSGW_VERSION), pulled again
 ./update.sh --version 1.1.0 --token-file ~/chaosgw.token
@@ -451,13 +454,17 @@ version rejects a set of two versions), and the script waits for their health ch
 back when they do not come; the DNS proxy and the TLS responder cannot be healthy before the first configuration, so a gateway that is not
 set up yet is not waited for with them). The flags, mounts, capabilities and health checks of the containers belong to the version, so the
 script also reads `compose.yaml`, `env.example` and `update.sh` out of the new image, checks that compose file with your `.env`, and
-replaces the installed one just before the restart (the old one stays as `compose.yaml.bak`; `.env` is never touched). The update script
+replaces the installed one just before the restart (the old one stays as `compose.yaml.bak`; `.env` is not touched, except that `--version V` writes `CHAOSGW_VERSION` into it after a healthy start). The update script
 the image carries is used from the next update on. A signal (Ctrl-C) during the wait ends the script without a restart. **The update stops the executor like any stop** (plan §3.8, D35): it removes the test networks, so the
 devices lose the gateway and their DHCP for the seconds to a minute the new executor needs to rebuild them from the confirmed revision;
 the leases are kept (`/var/lib/chaosgw/kea`), and a device gets the same address again. Going back is the same command with the old
 version, as long as the configuration has not been migrated to a newer schema.
 
 By hand it is `docker compose pull && docker compose up -d`, without the checks.
+
+Every update leaves the previous image on the host: it is the way back, and an image is over 1 GB, which matters on the SD card of a
+Raspberry Pi. `docker images ghcr.io/andste82/chaos-gateway` lists them and `docker image rm IMAGE_ID` removes one you no longer need; never
+remove the one the containers use.
 
 ## Troubleshooting: the executor's preflight
 
@@ -483,7 +490,7 @@ failed check is a thing to fix, the others go on working.
 Until M28 the data was in Docker volumes (`<project>_chaosgw-state` and so on). To move it into the directories of the host with the
 gateway stopped (`docker compose down`, with the old compose files), make the directories and copy:
 
-```sh
+```sh host
 sudo sh /opt/chaosgw/host-setup.sh --data-only
 for v in state secrets api service captures tlsca; do
   docker run --rm --user 0:0 -v "${COMPOSE_PROJECT_NAME:-chaos-gateway}_chaosgw-$v:/from:ro" -v "/var/lib/chaosgw/$v:/to" --entrypoint cp "$IMAGE" -a /from/. /to/
@@ -515,7 +522,7 @@ state again from the last confirmed revision. The revisions, the secrets, the au
 
 If the executor was killed (out of memory, `docker kill`, a power loss) it could not clean up. With the stack stopped, remove what it left:
 
-```sh
+```sh host
 docker compose --profile teardown run --rm teardown
 ```
 
@@ -530,11 +537,13 @@ last revision that worked and makes that the active one; if that fails too, or t
 access only, no forwarding for the test networks (a WireGuard network of the role `management` is down too: the way in is the management
 interface, not a tunnel), and everything that needs forwarding answers `503`. `GET /api/v1/state` reports
 `safe_mode` and `safe_mode_reason`, and the web app shows a red banner that links to the [recovery instructions](recovery.md), which
-say what to look at and how to leave safe mode, and also cover the teardown, a forgotten password and an update that went wrong.
+say what to look at and how to leave safe mode, and also cover the teardown, a forgotten password and an update that went wrong. If not a
+single revision can be read, the gateway has no configuration to take the management interface from, and the API listens on the host's
+loopback only; the recovery instructions say how to reach it.
 
 ## Uninstall
 
-```sh
+```sh host
 sudo /opt/chaosgw/uninstall.sh            # stop the gateway and take it out of the kernel; the data and the files stay
 sudo /opt/chaosgw/uninstall.sh --purge    # and delete the data, the files, the images (asks for a yes; --yes does not)
 ```
@@ -551,7 +560,7 @@ status is 1, and with `--purge` the data and `/opt/chaosgw` then stay, because a
 
 By hand, the same is:
 
-```sh
+```sh host
 cd /opt/chaosgw
 docker compose stop                                           # the API first, the executor last: it removes what it made in the kernel
 docker compose --profile teardown run --rm teardown --purge   # only needed if the executor was killed; it refuses while one serves
@@ -567,7 +576,7 @@ The stop removed what the gateway created in the kernel (above). What stays is t
 If `docker compose down -v` fails with `device or resource busy` on the `chaosgw-run` volume, a mount of the
 executor has leaked into the host (issue #57, F4). Unmount it, then run `down -v` again:
 
-```sh
+```sh host
 grep chaosgw /proc/self/mountinfo        # the leaked mount ends in .../_data/bird
 sudo umount /var/lib/docker/volumes/chaosgw_chaosgw-run/_data/bird
 ```

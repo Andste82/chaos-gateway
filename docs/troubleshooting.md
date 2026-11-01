@@ -36,8 +36,9 @@ the warning `preflight` (no host check ran); a real gateway also has the kernel,
 
 ## The preflight checks
 
-At every start the API checks what it can see of the host, the executor checks the host it runs on, and both write the result into
-their logs. `GET /api/v1/system/preflight` and the setup wizard show the same lines, with one more check per host interface that may
+At every start the API checks what it can see of the host (the kernel and its modules) and the executor checks the host it runs on. The
+executor writes its result into its log (`docker compose logs exec | grep preflight`); the API keeps its own only in the report.
+`GET /api/v1/system/preflight` and the setup wizard show the same lines, with one more check per host interface that may
 become or is a test interface. Each line has an `id`, a status (`ok`, `warn`, `fail`), a message and, when something is wrong, a `fix`.
 A failed check does not stop the gateway: it is a thing to repair, and the parts that do not depend on it go on working. The
 status of the report is the worst status of the checks of the host and of the interfaces that are assigned to a test network.

@@ -290,7 +290,7 @@ removed 1 overlays, aborted 0 runs (generation …)
 
 A profile is activated with `chaosctl with --profile` for the length of a command, or with `overlay create`. The most used commands: `fault set`, `dns set`, `tls set`, `dhcp set`, `overlay list|create|delete|renew`,
 `run -f scenario.yaml --wait --junit report.xml`, `wait device`, `with … -- command`, `explain`, `reset`, and with the full scope
-`probe add|remove`, `wg export` and `certificate show|install|reset`. Every command has `--help` with examples; the exit codes are in the
+`probe add|remove`, `wg export` and `certificate install|reset` (`certificate show` needs only `read`). Every command has `--help` with examples; the exit codes are in the
 [API guide](api-guide.md#clients).
 
 ## Security

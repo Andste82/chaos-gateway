@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/Andste82/chaos-gateway/internal/docscheck"
 	"github.com/Andste82/chaos-gateway/internal/domain"
 )
@@ -405,5 +407,75 @@ func TestTheOptionsTheDocumentsGiveInstallAndUninstallExist(t *testing.T) {
 	}
 	if seen["install.sh"] < 5 || seen["uninstall.sh"] < 4 {
 		t.Errorf("the documents name install.sh on %d lines and uninstall.sh on %d: they lost their instructions", seen["install.sh"], seen["uninstall.sh"])
+	}
+}
+
+// The release notes are the text of the GitHub release: a container exception they name must be one the compose file has (the audit of
+// Phase 7 found the notes saying Kea runs without no-new-privileges after the option was set).
+func TestTheReleaseNotesNameNoContainerExceptionTheComposeFileDoesNotHave(t *testing.T) {
+	var compose struct {
+		Services map[string]struct {
+			SecurityOpt []string `yaml:"security_opt"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(read(t, "deploy/compose.yaml")), &compose); err != nil {
+		t.Fatal(err)
+	}
+	if len(compose.Services) < 8 {
+		t.Fatalf("deploy/compose.yaml has %d services", len(compose.Services))
+	}
+	notes := read(t, "docs/release-notes/v1.0.0.md")
+	for name, svc := range compose.Services {
+		if slices.Contains(svc.SecurityOpt, "no-new-privileges:true") && regexp.MustCompile("`"+regexp.QuoteMeta(name)+"` container[^.]*without `no-new-privileges`").MatchString(notes) {
+			t.Errorf("the release notes say the %s container runs without no-new-privileges, deploy/compose.yaml sets it", name)
+		}
+	}
+}
+
+// The acceptance maps of the development guide name the tests that hold each clause; a test that was renamed leaves a clause with a
+// name that protects nothing.
+func TestEveryTestTheDevelopmentGuideNamesInATableExists(t *testing.T) {
+	defined := map[string]bool{}
+	def := regexp.MustCompile(`(?m)^func ((?:Test|Fuzz)[A-Za-z0-9_]*)\(`)
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && (d.Name() == "node_modules" || d.Name() == ".git" || d.Name() == "worktrees") {
+			return filepath.SkipDir
+		}
+		if d.IsDir() || !strings.HasSuffix(p, "_test.go") {
+			return nil
+		}
+		raw, err := os.ReadFile(p) //nolint:gosec // a test file of the repository
+		if err != nil {
+			return err
+		}
+		for _, m := range def.FindAllStringSubmatch(string(raw), -1) {
+			defined[m[1]] = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defined) < 1000 {
+		t.Fatalf("found %d tests: the walk no longer finds the test files", len(defined))
+	}
+	name := regexp.MustCompile("`((?:Test|Fuzz)[A-Za-z0-9_]+)(?:/[^`]*)?`")
+	rows := 0
+	for n, line := range strings.Split(read(t, "docs/development.md"), "\n") {
+		if !strings.HasPrefix(line, "|") {
+			continue
+		}
+		for _, m := range name.FindAllStringSubmatch(line, -1) {
+			rows++
+			if !defined[m[1]] {
+				t.Errorf("docs/development.md:%d names the test %s, which does not exist", n+1, m[1])
+			}
+		}
+	}
+	if rows < 100 {
+		t.Errorf("the tables name %d tests: the pattern no longer matches", rows)
 	}
 }

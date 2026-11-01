@@ -44,7 +44,7 @@ docker compose logs api | grep -i 'last known good'
 ```
 
 What to do: the gateway works with the older configuration, so nothing is urgent, but the change you made last is not in force. Read why
-it failed (the reason is in the log line and in the revision's `last_apply`), repair the cause (an interface that is gone, an address
+it failed (the reason is in the log line above and in the data of the event `revision_rolled_back`, whose `reason` starts with `boot:`), repair the cause (an interface that is gone, an address
 that clashes with Docker's pools, a missing kernel module: [troubleshooting](troubleshooting.md)) and apply your change again as a new
 revision. A revision that failed at start is not used as a fallback by a later start.
 
@@ -87,8 +87,16 @@ curl -sS -H "Authorization: Bearer $CHAOSGW_TOKEN" "$CHAOSGW_URL/api/v1/state" |
   "safe_mode_reason": null
 ```
 
+**When no revision can be read at all** (the state directory is damaged and there is no last known good revision either) the gateway has
+no configuration, so it knows no management interface to listen on: the API listens on the loopback of the host only, which is the safe
+choice for a state that exists only when the store is broken. Reach it from the host: in an SSH session
+`curl --cacert /var/lib/chaosgw/service/api.pem https://127.0.0.1:8443/api/v1/state`, or from your machine with
+`ssh -L 8443:127.0.0.1:8443 <host>` and `https://127.0.0.1:8443` in the browser (the certificate is the gateway's own, the browser warns). Log
+in as usual and restore a backup as described in [Backup and restore](#backup-and-restore).
+
 **The way out is a revision that works.** There is no timer that tries again, because a revision that fails would flap the kernel
-every time. Find the last revision that was good (`GET /revisions`; the web app's revision history), make a candidate of it
+every time. Find the last revision that was good (`GET /state` names it in `last_known_good`, and `GET /revisions` marks it `last_known_good: true`;
+the web app's revision history shows it), make a candidate of it
 (`clone`: the same configuration as a new revision), and apply it. If the change could lock you out (it touches the management
 interface), confirm it within 60 seconds. The apply that commits ends safe mode: the banner goes and forwarding returns.
 
@@ -108,8 +116,8 @@ active
 ```
 
 If the revision you clone also fails, the reason of the new failure is in the response of the apply and in the log of the `api`
-container; fix the cause first (the same causes as above). If you do not know which revision was good, clone the oldest one that was
-applied (`status` `superseded` with a `confirmed_at`), or start from the exported configuration of a backup ([below](#backup-and-restore)).
+container; fix the cause first (the same causes as above). If no revision is marked, clone the oldest one that was applied (`status` `superseded` with a `confirmed_at`; usually the revision of the
+setup, which loses everything you did since), or start from the exported configuration of a backup ([below](#backup-and-restore)).
 
 **A WireGuard key rotated since the revision you fall back to** cannot be restored: the commit of a rotation retires the old key
 generation, so a fallback to a revision from before the rotation has no key to configure and ends in safe mode too. The way out is the
@@ -203,23 +211,39 @@ codes say what happened: `3` runs were still active, `4` the configuration is ne
 ## Backup and restore
 
 What defines a gateway is the configuration and its secrets. `include_secrets=true` (scope `full`) makes the export complete, with the
-WireGuard keys, so it is a backup to keep as safe as the keys themselves; the file is made readable for its owner only (`umask 077`):
+WireGuard keys, so it is a backup to keep as safe as the keys themselves; the file is made readable for its owner only (`umask 077`).
+The backup is JSON because `POST /revisions` takes a complete configuration as `application/json` (the YAML export is for reading):
 
 ```sh run
 umask 077
 adm="Authorization: Bearer $CHAOSGW_ADMIN_TOKEN"
 active=$(curl -sS -H "$adm" "$CHAOSGW_URL/api/v1/revisions/active" | jq -r .id)
-curl -sS --fail-with-body -H "$adm" "$CHAOSGW_URL/api/v1/revisions/$active/export?include_secrets=true&format=yaml" -o gateway-backup.yaml
-grep schema_version gateway-backup.yaml
-stat -c 'mode %a' gateway-backup.yaml
+curl -sS --fail-with-body -H "$adm" "$CHAOSGW_URL/api/v1/revisions/$active/export?include_secrets=true&format=json" -o gateway-backup.json
+jq .schema_version gateway-backup.json
+stat -c 'mode %a' gateway-backup.json
 ```
 
 ```text output
-schema_version: 1
+1
 mode 600
 ```
 
-The same configuration goes into `POST /revisions` of a fresh gateway as a candidate (after its setup) and is applied as above; without
-the `secrets` the WireGuard peers in `generated` mode get new keys, and the preview lists them as warnings. The files of a whole
-installation are below `/var/lib/chaosgw` (the revisions in `state`, the keys and credentials in `secrets`, the audit log and the runs in
-`api`, the captures, the leases of Kea in `kea`); copy them with the gateway stopped to move it to another host.
+It goes into a gateway that has finished its setup as a candidate against its active revision, which `If-Match` has to name, and is
+applied as above (preview, then apply; confirmed within 60 seconds if it touches the management interface):
+
+```sh run
+adm="Authorization: Bearer $CHAOSGW_ADMIN_TOKEN"
+active=$(curl -sS -H "$adm" "$CHAOSGW_URL/api/v1/revisions/active" | jq -r .id)
+curl -sS --fail-with-body -H "$adm" -H "Content-Type: application/json" -H "If-Match: \"$active\"" --data-binary @gateway-backup.json "$CHAOSGW_URL/api/v1/revisions" | jq -r .status
+```
+
+```text output
+candidate
+```
+
+Without the `secrets` the WireGuard peers in `generated` mode get new keys, and the preview lists them as warnings. **The export does not
+carry the test CAs** (`/var/lib/chaosgw/tlsca`): devices that installed the test CA keep trusting the old one, so a gateway made from the
+export alone fails the TLS cases of those devices until they install the new CA. The files of a whole installation are all the directories
+below `/var/lib/chaosgw`: `state` (the revisions), `secrets` (the keys and credentials), `api` (the audit log and the runs), `service` (the
+token of the service containers), `tlsca` (the two CAs of the TLS cases), `captures`, `exec` (the interfaces assigned to the executor) and
+`kea` (the leases); copy them with the gateway stopped to move it to another host, with the owners that [installation](install.md) lists.

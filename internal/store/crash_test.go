@@ -50,6 +50,12 @@ func TestAProcessThatEndsWhileARevisionWaitsForConfirmationRollsItBack(t *testin
 	if got := statusOf(t, s2, 2); got != StatusRolledBack {
 		t.Fatalf("the revision was never confirmed: %s", got)
 	}
+	if got := s2.RolledBackAtOpen(); len(got) != 1 || got[0] != 2 {
+		t.Fatalf("the engine tells the rollback from this list: %v", got)
+	}
+	if got := s.RolledBackAtOpen(); len(got) != 0 {
+		t.Fatalf("a store that was not repaired at open names nothing: %v", got)
+	}
 	if lkg, _, _ := s2.LastKnownGood(); lkg.Id != 1 {
 		t.Fatalf("an unconfirmed revision never becomes last known good: %d", lkg.Id)
 	}

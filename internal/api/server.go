@@ -171,9 +171,14 @@ func New(cfg Config) (*Server, error) {
 	if s.idem, err = openIdempotency(cfg.StateDir, cfg.Clock); err != nil {
 		return nil, err
 	}
-	events, unsub := cfg.Engine.Subscribe()
+	// the engine started before the server (recovery at start, M27): what it published on the way, a revision rolled back at
+	// the restart or the fallback, safe mode, comes first from its buffer, and the live events follow without a gap
+	replay, events, unsub := cfg.Engine.SubscribeFrom(0)
 	s.unsubEvents = unsub
 	s.eventsDone = make(chan struct{})
+	for _, ev := range replay {
+		s.auditSystemEvent(ev)
+	}
 	go s.auditSystemEvents(events)
 	s.initDiagnostics()
 	s.startTrafficSampler()
@@ -194,8 +199,9 @@ func New(cfg Config) (*Server, error) {
 }
 
 // auditSystemEvents records the audit log entries of changes the engine makes on its own (M5-05):
-// today, only a commit-confirm rollback (timeout, or an unconfirmed revision found at restart). A
-// rollback an admin requested (POST /revisions/{id}/rollback, reason "requested") is the admin's and
+// a commit-confirm rollback (timeout, or an unconfirmed revision found at restart), the fallback of the
+// start (M27) and the entering and leaving of safe mode. The events the engine published before the server
+// existed come first (api.New replays them). A rollback an admin requested (POST /revisions/{id}/rollback, reason "requested") is the admin's and
 // RollbackRevision records it: it is not recorded a second time as the system's (Phase 3 audit). A
 // rollback that leaves nothing committed, requested or not, was the setup's own first revision (M5-03):
 // the admin password it set is of no use without the configuration it was paired with, so the setup
@@ -203,22 +209,33 @@ func New(cfg Config) (*Server, error) {
 func (s *Server) auditSystemEvents(events <-chan engine.Event) {
 	defer close(s.eventsDone)
 	for ev := range events {
-		if ev.Type != engine.EventRolledBack {
-			continue
+		s.auditSystemEvent(ev)
+	}
+}
+
+func (s *Server) auditSystemEvent(ev engine.Event) {
+	system := audit.Actor{Type: "system", ID: "system"}
+	switch ev.Type {
+	case engine.EventSafeMode:
+		if active, _ := ev.Data["active"].(bool); active {
+			reason, _ := ev.Data["reason"].(string)
+			_, _ = s.cfg.Audit.Append(audit.Entry{Actor: system, Via: "system", Action: "service.safe_mode", Detail: reason})
+		} else {
+			_, _ = s.cfg.Audit.Append(audit.Entry{Actor: system, Via: "system", Action: "service.safe_mode_ended"})
 		}
+	case engine.EventRolledBack:
 		rev, _ := ev.Data["revision"].(int64)
 		reason, _ := ev.Data["reason"].(string)
 		if reason != "requested" {
-			_, _ = s.cfg.Audit.Append(audit.Entry{Actor: audit.Actor{Type: "system", ID: "system"}, Via: "system",
-				Action: "revision.rolled_back", Revision: rev, Detail: reason})
+			_, _ = s.cfg.Audit.Append(audit.Entry{Actor: system, Via: "system", Action: "revision.rolled_back", Revision: rev, Detail: reason})
 		}
 		if s.cfg.Engine.Snapshot().Revision != 0 {
-			continue
+			return
 		}
 		tok, err := s.cfg.Auth.ReopenSetup()
 		if err != nil {
 			s.log.Error("cannot reopen the setup after the unconfirmed first revision was rolled back", "error", err)
-			continue
+			return
 		}
 		s.log.Warn("the setup's first revision was rolled back without confirmation: setup is open again", "setup_token", tok)
 	}

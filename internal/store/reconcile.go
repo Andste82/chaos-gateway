@@ -1,6 +1,9 @@
 package store
 
-import "errors"
+import (
+	"errors"
+	"slices"
+)
 
 // This file repairs what a crash can leave behind. A commit, a confirm and a rollback write the
 // status file of the revision and then the pointer in config.json: two files, so a crash in
@@ -23,6 +26,15 @@ func (s *Store) rebuildState() state {
 		}
 	}
 	return st
+}
+
+// RolledBackAtOpen returns the revisions that waited for confirmation when the process before this open ended and that Open
+// rolled back (plan §2.1.1). The engine tells the rollback as an event, because the store has already done it when the
+// engine looks for a pending revision. It is the same list for as long as the Store lives.
+func (s *Store) RolledBackAtOpen() []int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.rolledBackAtOpen)
 }
 
 // reconcile brings the statuses in line with the pointer.
@@ -61,6 +73,9 @@ func (s *Store) reconcile() error {
 			if err := set(p.Revision, StatusRolledBack); err != nil {
 				return err
 			}
+		}
+		if p.Revision != s.st.Active {
+			s.rolledBackAtOpen = append(s.rolledBackAtOpen, p.Revision)
 		}
 		s.st.Pending = nil
 		changed = true

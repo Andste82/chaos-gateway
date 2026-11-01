@@ -17,6 +17,10 @@ jobs:
   # Long fuzz runs on the executor's interface (plan M3, M29): the CI run fuzzes for 6 minutes, this one for 45 minutes per target
   # (the six targets of `make fuzz`: the operation decoder, the request handling, the connection, the capture request, its files and the
   # capture filter). A crashing input is uploaded: it is the reproducer, and belongs in the testdata/fuzz of its package.
+  # FuzzCaptureOpenFiles runs as root (FUZZ_ROOT_TARGETS of the Makefile): an unprivileged capture fails at the raw socket before it makes
+  # a file, which is what the target is about. The corpus that Go finds (GOCACHE/fuzz) is kept from night to night, so that a night goes on
+  # where the last one stopped and does not start from the seeds again; it is saved after a failed run too, and a change of a fuzz test
+  # (its arguments are what a corpus entry holds) starts a new one. The 330 minutes are the six targets of 45 minutes (observed: 271).
   fuzz:
     if: github.event_name == 'schedule' || inputs.fuzz
     runs-on: ubuntu-24.04
@@ -26,7 +30,17 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: make fuzz FUZZTIME=45m
+      - uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: fuzz-corpus-${{ hashFiles('internal/executor/fuzz*_test.go', 'internal/capture/fuzz_test.go') }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ hashFiles('internal/executor/fuzz*_test.go', 'internal/capture/fuzz_test.go') }}-
+      - run: make fuzz FUZZTIME=45m FUZZ_ROOT_CMD="sudo -E env PATH=$PATH HOME=$HOME"
+      - uses: actions/cache/save@v6
+        if: always()
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: fuzz-corpus-${{ hashFiles('internal/executor/fuzz*_test.go', 'internal/capture/fuzz_test.go') }}-${{ github.run_id }}
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

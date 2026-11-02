@@ -203,6 +203,16 @@ func installUninstall(t *testing.T, rel appliance.Release, imageTar string) {
 
 	// ---- the installation
 	compose := "cd /opt/chaosgw && sudo docker compose"
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		for _, c := range []string{compose + " ps -a", compose + " logs --no-color --tail 60 api", compose + " logs --no-color --tail 40 exec", "cat /tmp/chaosgw.jar"} {
+			if r, err := vm.Run(context.Background(), c+" 2>&1", nil); err == nil {
+				t.Logf("%s:\n%s", c, r.Stdout)
+			}
+		}
+	})
 	r = run(install)
 	if r.Exit != 0 || !strings.Contains(r.Stdout, "install: Chaos Gateway is running.") {
 		t.Fatalf("install.sh: exit %d\n%s", r.Exit, r.Stdout)

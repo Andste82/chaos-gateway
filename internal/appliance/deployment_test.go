@@ -647,7 +647,7 @@ func deployment(t *testing.T, rel appliance.Release, two bool, imageTar string) 
 		}
 		before := containerID("exec")
 		r := update("--version next2 --timeout 10")
-		if r.Exit != 3 || !strings.Contains(r.Stdout, "waiting for the runs to end") || !strings.Contains(r.Stdout, "nothing was changed") {
+		if r.Exit != 3 || !strings.Contains(r.Stdout, "waiting for the runs to end") || !strings.Contains(r.Stdout, "the containers were not touched") {
 			t.Fatalf("the update during a run: exit %d\n%s", r.Exit, r.Stdout)
 		}
 		if containerID("exec") != before {

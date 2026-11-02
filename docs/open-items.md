@@ -60,8 +60,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   2026-11-01 at `5d1ed45` by five reviewers. The result is in [Phase 7 audit result](#phase-7-audit-result), right before the Phase 7 open items: 12 items of major and 58 of
   minor severity, P7-AUDIT-01 to P7-AUDIT-70. The round after the audit closed them in the pull requests #135 to #139 (and the closure that records them): fixed with a test, fixed differently, accepted
   with a reason, or deferred to M38 (the preflight clauses of §3.3/§3.4 and the expiry warning of the installed certificate), see the verdict table. The five
-  items the phase raised, P7-M27-01, -02, P7-M28-01, P7-M29-01 and -02, were decided by the maintainer on 2026-10-31 and are closed. Three items are open: P7-M27-05 (what the engine does when the active revision fails twice
-  because the executor is not there; needs the maintainer), P7-CI-01 (three timing tests of the weekly emulated jobs, not caused by Phase 7) and P7-CI-02 (a probe namespace seen by a test of another package; watch the level 1 runs).
+  items the phase raised, P7-M27-01, -02, P7-M28-01, P7-M29-01 and -02, were decided by the maintainer on 2026-10-31 and are closed. Two items are open: P7-CI-01 (three timing tests of the weekly emulated jobs, not caused by Phase 7) and P7-CI-02 (a probe namespace seen by a test of another package; watch the level 1 runs); P7-M27-05 (what the engine does when the active revision fails because the executor is not there) was decided by the maintainer on 2026-11-02 and is closed.
 
 ## Phase 1 audit result
 
@@ -3271,7 +3270,7 @@ Major items: P7-AUDIT-01, P7-AUDIT-02, P7-AUDIT-11, P7-AUDIT-27, P7-AUDIT-28, P7
 |---|---|---|---|---|
 | P7-AUDIT-01 | M27 | major | Safe mode without a readable revision serves the API on the loopback only, so "management access only" was untrue for that case | fixed differently: decided by the maintainer on 2026-11-01 (the API stays on the loopback, the safe choice for a state that exists only when the store is broken): `docs/recovery.md` and `docs/install.md` say how to reach it (PR #135) |
 | P7-AUDIT-02 | M27 | major | A restart inside the confirmation window gave no `revision_rolled_back` event, no audit entry and no reopened setup (the test restarted on the same store object) | fixed: PR #139: `Store.RolledBackAtOpen`, the engine publishes the event; `TestARestartInsideTheConfirmationWindowTellsThatTheRevisionWasRolledBack`, `TestAStartAfterAnUnconfirmedSetupAuditsTheRollbackAndReopensTheSetup` |
-| P7-AUDIT-03 | M27 | minor | The fallback revision gets no second try and one failed attempt marks it boot-failed for good | fixed: PR #139 (`TestATransientFailureOfTheLastKnownGoodRevisionIsTriedAgainBeforeSafeMode`, `TestAStartThatFailsBecauseTheExecutorIsNotThereMarksNoRevision`); the active revision failing twice with a transport error still falls back, see P7-M27-05 |
+| P7-AUDIT-03 | M27 | minor | The fallback revision gets no second try and one failed attempt marks it boot-failed for good | fixed: PR #139 (`TestATransientFailureOfTheLastKnownGoodRevisionIsTriedAgainBeforeSafeMode`, `TestARevisionIsNotReplacedByAnOlderOneWhileTheExecutorIsNotThere`, `TestTheLastKnownGoodRevisionIsAppliedAgainWhileTheExecutorIsNotThereAndOnlyThenMadeActive`); a transport error of the active revision makes the start neither fall back nor enter safe mode either, see P7-M27-05, closed 2026-11-02 |
 | P7-AUDIT-04 | M27 | minor | The audit subscriber can miss the events of the start; safe mode is never audited | fixed: PR #139: `SubscribeFrom(0)`, `service.safe_mode`, `service.safe_mode_ended` (`TestSafeModeAtStartIsInTheAuditLog`, `TestSafeModeAndItsEndAreInTheAuditLog`) |
 | P7-AUDIT-05 | M27 | minor | A signal during the host checks, and a failed `Serve`, skip the stop cleanup | fixed: PR #139 (`TestExecRemovesEverythingItCreatedWhenTheListenerFails`); a failed Listen stays without cleanup on purpose, another executor may be serving |
 | P7-AUDIT-06 | M27 | minor | `teardown --purge` refuses only while an executor answers, not while the API has the store open | fixed: PR #139: `store.InUse` (`TestPurgeRefusesWhileTheApiHasTheStoreOpen`) |
@@ -3354,7 +3353,7 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 
 ### Phase 7 audit: remaining points
 
-- The active revision that fails twice with a transport error still falls back, and `Restore` then makes the older revision active for good: P7-M27-05 (needs the maintainer).
+- The active revision that failed twice with a transport error fell back, and `Restore` then made the older revision active for good: P7-M27-05, decided and closed on 2026-11-02 (the start applies the same revision again until the executor is back).
 - The weekly emulated level 1b jobs are red, for three tests that have nothing to do with Phase 7: P7-CI-01.
 - Level 1 failed once for a probe namespace that no test of its own owns (`cgp-3a1f7c52`), probably made by a test of another package running at the same time; the level 1 job runs the packages one at a time since PR #142: P7-CI-02.
 - The reviewers' scratch tests were not kept; the fix tests are the ones listed above.
@@ -3457,7 +3456,7 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 
 ### P7-M27-05 The active revision that fails twice because the executor is not there is replaced by an older one for good
 
-- Status: open
+- Status: closed (2026-11-02): decided by the maintainer, option (b) as recommended, and implemented: a failure of the way to the executor (`isTransportError`) at start is not an attempt, the gateway neither falls back nor enters safe mode and applies the same revision, the active one or the fallback, again with a delay that doubles from 10 seconds to a minute, until the executor is back (`internal/engine/recovery.go`, `bootRetryDelay`; `TestARevisionIsNotReplacedByAnOlderOneWhileTheExecutorIsNotThere`, `TestTheLastKnownGoodRevisionIsAppliedAgainWhileTheExecutorIsNotThereAndOnlyThenMadeActive`); the API reports a failed last apply and a degraded health meanwhile, not a state of its own
 - Severity: minor
 - Reason: needs-decision. Found while closing P7-AUDIT-03. At start the engine applies the active revision and tries once more after ten seconds; if the second try fails too, it falls back to the last known good revision, and `Store.Restore` makes that one the active revision for good. The fix of P7-AUDIT-03 treats a transport error (executor not there, connection refused or reset, EOF, deadline) as transient for the *fallback* revision, so it is retried and marks nothing. For the *active* revision a transport error is still counted like a refusal by the kernel. The cause of a transport error is the host (the executor container is restarting, or is not up yet), not the revision, and decision 2 of Phase 7 says that a transient failure must not roll a configuration back. A host whose executor needs longer than the two tries to come up (after a power loss, on a Raspberry Pi with a slow SD card) loses its newest configuration in favour of an older one without a word but the log line and the event.
 - Evidence: `internal/engine/recovery.go` (`bootResult`, `enterSafeMode`), `internal/engine/owner.go` (`retry`), `internal/store/recovery.go` (`Restore`), the report of the recovery fixes of PR #139.

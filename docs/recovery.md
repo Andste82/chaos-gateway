@@ -29,6 +29,12 @@ what was meant. The overlays of tests are gone (a test starts from a clean basel
    confirmed and worked, and makes it the active one. The revision that failed is marked `rolled_back`.
 3. If there is none, or that one fails too, the gateway runs in **safe mode**.
 
+A failure of the way to the executor (its container is not up yet, its socket is gone) says nothing about the revision, so it is none
+of these steps: the gateway applies the same revision again, after ten seconds, then after twenty, forty and a minute each time, and does
+not fall back or enter safe mode while the executor is away. `GET /state` shows the last apply as failed, the health report is
+`degraded`, and the log says `the executor cannot be reached at start`; look at the executor container (`docker compose logs exec`).
+When it is up, the revision is applied and the start goes on.
+
 A newer configuration than the program understands is never repaired by falling back: the gateway refuses to start and says which
 version is needed (the downgrade check, [update](#an-update-went-wrong)).
 

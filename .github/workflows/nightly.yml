@@ -104,7 +104,7 @@ jobs:
         run: |
           set -o pipefail
           export CHAOSGW_APPLIANCE_CACHE="$HOME/.cache/chaosgw-appliance"
-          tests="TestSmokeOnCleanUbuntuHosts TestRecoveryAndStopOnCleanUbuntuHosts TestContainerDeploymentOnCleanUbuntuHosts"
+          tests="TestSmokeOnCleanUbuntuHosts TestRecoveryAndStopOnCleanUbuntuHosts TestContainerDeploymentOnCleanUbuntuHosts TestInstallAndUninstallOnCleanUbuntuHosts"
           pattern="^($(echo $tests | tr ' ' '|'))\$"
           go test -tags appliance -count=1 -timeout 200m -v -run "$pattern" ./internal/appliance 2>&1 | tee "$RUNNER_TEMP/appliance-test.log"
           missing=0

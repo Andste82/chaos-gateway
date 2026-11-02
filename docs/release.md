@@ -9,7 +9,7 @@ Nothing else is needed: the workflow uses the `GITHUB_TOKEN` of the job and has 
 
 1. `main` is green in CI at the commit you tag: every job of the `CI` workflow, the level 1 and level 1b jobs included.
 2. The last scheduled **Nightly** is green, or a manual run on that commit is: it runs the level 2 tests on clean Ubuntu 24.04 and 26.04
-   hosts (`gh workflow run nightly.yml`, add `-f fuzz=true` for the fuzz job). A release that was never installed on a clean host is not tested.
+   hosts (`gh workflow run nightly.yml`, add `-f fuzz=true` for the fuzz job). A release that was never installed on a clean host is not tested (`TestInstallAndUninstallOnCleanUbuntuHosts` is part of that run: it installs, removes and installs again with the scripts of the checkout and the image of the run, not with the files of a published release).
 3. `docs/release-notes/vMAJOR.MINOR.PATCH.md` exists and is true: it names what the release contains and what is not validated. The release
    uses that file as its text; without it the text is generated from the commits and the workflow says so as a warning. Release candidates
    need no notes.

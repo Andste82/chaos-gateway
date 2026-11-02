@@ -158,6 +158,8 @@ func installUninstall(t *testing.T, rel appliance.Release, imageTar string) {
 		t.Fatalf("the host is not clean: Docker is installed (%s)", strings.TrimSpace(r.Stdout))
 	}
 
+	// the files of this test go to /opt/install-test: vm.Put makes the directory of a file with mode 0755, and /tmp would lose its
+	// sticky bit and be closed to the ssh user (the cookie jar of the API calls is kept there)
 	// ---- what the release serves: install.sh and the host setup, from the VM's own loopback
 	for _, f := range []string{"install.sh", "host-setup.sh"} {
 		if err := vm.PutFile(ctx, "../../deploy/"+f, "/srv/release/latest/download/"+f, 0o644); err != nil {
@@ -180,10 +182,10 @@ func installUninstall(t *testing.T, rel appliance.Release, imageTar string) {
 	if r := run("command -v docker && sudo docker compose version"); r.Exit != 0 {
 		t.Fatalf("Docker is not installed after install.sh:\n%s", r.Stdout)
 	}
-	if err := vm.PutFile(ctx, imageTar, "/tmp/image.tar.gz", 0o644); err != nil {
+	if err := vm.PutFile(ctx, imageTar, "/opt/install-test/image.tar.gz", 0o644); err != nil {
 		t.Fatal(err)
 	}
-	must("gunzip -c /tmp/image.tar.gz | sudo docker load")
+	must("gunzip -c /opt/install-test/image.tar.gz | sudo docker load")
 
 	// ---- the netplan entry of the test interface: install.sh stops with the hint of the check and starts nothing
 	r = run(install)
@@ -194,10 +196,10 @@ func installUninstall(t *testing.T, rel appliance.Release, imageTar string) {
 	if out := strings.TrimSpace(output("sudo docker ps -q")); out != "" {
 		t.Errorf("install.sh started containers although the host setup found a step missing:\n%s", output("sudo docker ps"))
 	}
-	if err := vm.Put(ctx, "/tmp/remove-lan0.py", 0o644, strings.NewReader(removeLan0)); err != nil {
+	if err := vm.Put(ctx, "/opt/install-test/remove-lan0.py", 0o644, strings.NewReader(removeLan0)); err != nil {
 		t.Fatal(err)
 	}
-	must("sudo python3 /tmp/remove-lan0.py")
+	must("sudo python3 /opt/install-test/remove-lan0.py")
 	must("printf '[Match]\\nMACAddress=" + appliance.MACs.LAN + "\\n\\n[Link]\\nName=lan0\\n' | sudo tee /etc/systemd/network/05-lan0.link >/dev/null")
 	must("sudo netplan apply")
 
@@ -207,9 +209,7 @@ func installUninstall(t *testing.T, rel appliance.Release, imageTar string) {
 		if !t.Failed() {
 			return
 		}
-		login := `curl -sk -i -m 30 -c /tmp/diag.jar -X POST -H 'Content-Type: application/json' --data '{"password":"correct horse battery staple"}' https://` + appliance.GatewayMgmt + `:8443/api/v1/auth/login`
-		for _, c := range []string{compose + " ps -a", compose + " logs --no-color --tail 60 api", compose + " logs --no-color --tail 40 exec", "ls -la /tmp", "date -u; curl --version | head -1; id",
-			login, "cat /tmp/diag.jar", "cat /tmp/chaosgw.jar"} {
+		for _, c := range []string{compose + " ps -a", compose + " logs --no-color --tail 60 api", compose + " logs --no-color --tail 40 exec", "ls -ld /tmp", "cat /tmp/chaosgw.jar"} {
 			if r, err := vm.Run(context.Background(), c+" 2>&1", nil); err == nil {
 				t.Logf("%s:\n%s", c, r.Stdout)
 			}

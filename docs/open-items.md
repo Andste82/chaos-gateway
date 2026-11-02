@@ -60,7 +60,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   2026-11-01 at `5d1ed45` by five reviewers. The result is in [Phase 7 audit result](#phase-7-audit-result), right before the Phase 7 open items: 12 items of major and 58 of
   minor severity, P7-AUDIT-01 to P7-AUDIT-70. The round after the audit closed them in the pull requests #135 to #139 (and the closure that records them): fixed with a test, fixed differently, accepted
   with a reason, or deferred to M38 (the preflight clauses of §3.3/§3.4 and the expiry warning of the installed certificate), see the verdict table. The five
-  items the phase raised, P7-M27-01, -02, P7-M28-01, P7-M29-01 and -02, were decided by the maintainer on 2026-10-31 and are closed. Two items are open: P7-CI-01 (three timing tests of the weekly emulated jobs, not caused by Phase 7) and P7-CI-02 (a probe namespace seen by a test of another package; watch the level 1 runs); P7-M27-05 (what the engine does when the active revision fails because the executor is not there) was decided by the maintainer on 2026-11-02 and is closed.
+  items the phase raised, P7-M27-01, -02, P7-M28-01, P7-M29-01 and -02, were decided by the maintainer on 2026-10-31 and are closed. **Phase 7 is closed on 2026-11-02 with the release of V1 (`v1.0.0`, `image.yml` run 41543627145).** No item of the phase is open. Two CI items remain as maintenance after V1, not as scope of Phase 7: P7-CI-01 (three timing tests of the weekly emulated jobs, not caused by Phase 7) and P7-CI-02 (a probe namespace seen by a test of another package; watch the level 1 runs); P7-M27-05 (what the engine does when the active revision fails because the executor is not there) was decided by the maintainer on 2026-11-02 and is closed.
 
 ## Phase 1 audit result
 
@@ -3470,7 +3470,7 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 
 ### P7-CI-01 The weekly emulated level 1b jobs fail for three tests
 
-- Status: open
+- Status: open (CI maintenance after V1, not scope of Phase 7; it does not block the release)
 - Severity: minor
 - Reason: not caused by Phase 7, found while closing P7-AUDIT-58. The Weekly run 41314639507 (2026-11-01, on `c2a90c8`) passed the arm64 appliance job and failed both emulated level 1b jobs: `TestDNSQuerySeenDecidesForADeviceOnTheRealKernel` ("no device of the target asked for example.test in the window of 8s"; the same message failed the Weekly run 40177095678 of 2026-10-25, before Phase 7), and `TestADeviceFaultStaysAttachedAfterTheForcedNewIPOnTheRealKernel` and `TestAHostnameFaultStillActsAfterTheForcedNewIPWithoutANewQueryOnTheRealKernel` in the engine job (the engine log shows "an identity update failed: applying everything ... context canceled" after 14 seconds of a full apply under emulation). The tests pass in the VM job of CI (with KVM); the emulated machine has no KVM and is much slower, and each of the three has a window or a deadline that the slowness can miss (not measured; this is the reading of the logs). The weekly jobs are not a gate of the merge rule.
 - Evidence: Weekly runs 41314639507 and 40177095678, `internal/api/e2e_dns_test.go:511`, `internal/api/e2e_checks_test.go:306`, `internal/engine/integration_dhcpactions_test.go:324`.
@@ -3483,7 +3483,7 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 
 ### P7-CI-02 A probe namespace of another package makes the verify of an apply fail in level 1
 
-- Status: open (observation): changed on 2026-11-02 and waiting for more level 1 runs on `main`
+- Status: open (observation, CI maintenance after V1, not scope of Phase 7): changed on 2026-11-02 and waiting for more level 1 runs on `main`
 - Severity: minor
 - Reason: not a decision, found while closing P7-AUDIT-38. CI run 41344903641 (on `82486de`) failed the level 1 job with `apply verify: probes: cgp-3a1f7c52 is not wanted` in `TestADeviceFaultStaysAttachedAfterTheForcedNewIPOnTheRealKernel`, a test without probes; a run on `5d1ed45` had failed the same way. The executor reads `ip netns list` for the namespaces of probes whose pair is gone (`probeNSIsOrphan`), and that list is the container's, not the gateway namespace's. `testvm run` in the direct mode let `go test` start the packages at the same time, and several packages use the probe with the fixed id `3a1f7c52`, so a namespace that a test of another package was just making or deleting looked like a leftover. This is the likely cause, not a proved one: the logs of the packages have no common clock. PR #142 runs the packages one at a time (`-p 1`, the job takes about 70 minutes instead of 48, its timeout is 180). The first run after it, CI run 41352829885 on `5d7d000`, is green in every job (level 1 in 70 minutes, the VM in 131).
 - Evidence: CI runs 41344903641 and 41352829885, `internal/executor/probe.go` (`probeNSIsOrphan`), `tools/testvm/main.go`.

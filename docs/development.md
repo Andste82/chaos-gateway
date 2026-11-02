@@ -7071,7 +7071,7 @@ There is no change of the spec and none of the HTTP API: the preflight adds chec
 3. **The executor's preflight reports and does not stop.** A failed check is shown where the administrator looks (the log, the wizard); stopping the one privileged process would make the cause harder to see.
 4. **The update asks the API for the runs with a token,** like any client; there is no unauthenticated way to ask, and the script does not read the service token. A gateway that is not set up has no run and needs no token.
 5. **The schema is checked by the new image before the old one stops,** so that a downgrade onto a newer configuration is refused with the gateway still running.
-6. **The release assets and the smoke test before the push** are in `image.yml` (it has never run on a tag; the first release is its first run).
+6. **The release assets and the smoke test before the push** are in `image.yml` (it ran on the tag `v1.0.0-rc.1` for the first time, run 41512304591, every step green).
 
 ### Tests
 

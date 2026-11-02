@@ -3346,9 +3346,10 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 
 - P7-AUDIT-38 is proved: the positive control failed in the level 1 job of CI runs 41330808027 and 41332599334 (device C had no address at the gateway, the bed configured `lan0` only, so its refusal of the API port had proved nothing; PR #141 configures the network of `lan1` in the test), and the test passes in CI run 41352829885 on `5d7d000`, in the container and in the VM.
 - P7-AUDIT-03, -05, -06: the executor reconnecting after a transport error, a SIGTERM during the host checks, and the lock of the revisions across two containers (levels 1 and 2).
-- P7-AUDIT-20 and -26: the job `deployment` starts Kea from the real image with the new `kea-start.sh` and passed on PR #136 and on `main`; the stale socket itself and the API with a data directory of the wrong owner need the nightly level 2 run.
-- P7-AUDIT-13: the mount check of `update.sh` on a real update.
-- P7-AUDIT-32, -59, -61: `sudo -E` and the corpus cache of the fuzz job on a hosted runner, the CI check and the `gh release` flags on the first tag push, and the `--- PASS` check under a real nightly run.
+- P7-AUDIT-20 (the Kea start), -13 and -21 (the messages of the real updates) are proved by the nightly level 2 run 41402657916 on `6bc283b` (the first run, 41397723921 on `c131a83`, failed `TestContainerDeploymentOnCleanUbuntuHosts` at an assertion for the old wording of `update.sh`; PR #145 fixed the test): Kea starts from the real image with the new `kea-start.sh` (the job `deployment` and the level 2 deployment test), and the updates of the real stack with the new `update.sh` go through (an idle gateway, a refused schema, a wait that gives up with exit 3 and the words "the containers were not touched", `--force` during a run). No test makes a stale Kea socket, refuses an update for a missing bind source or runs the API on another port than `CHAOSGW_UI_PORT`.
+- P7-AUDIT-26: the API with a data directory of the wrong owner has no level 2 test.
+- P7-AUDIT-61 passed in a real nightly run: all three level 2 tests ended with `--- PASS` on both releases. That the check catches a skipped test is shown at level 0 only (`TestTheNightlyLevel2JobFailsUnlessEachOfItsTestsPassed`).
+- P7-AUDIT-32, -59: `sudo -E` and the corpus cache of the fuzz job on a hosted runner (the nightly runs without fuzzing skip the job), and the CI check and the `gh release` flags on the first tag push.
 - P7-AUDIT-67: the new timeouts are estimates from the observed maxima.
 
 ### Phase 7 audit: remaining points

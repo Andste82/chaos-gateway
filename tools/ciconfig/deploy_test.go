@@ -222,13 +222,13 @@ func TestTheSmokeTestsOfTheDeploymentAreRunByTheJobs(t *testing.T) {
 
 // level2Tests are the tests of the nightly level 2 job. Each of them skips without an image tar or without /dev/kvm, and `go test` is green
 // for a skip, so the job must see each of them end with PASS.
-var level2Tests = []string{"TestSmokeOnCleanUbuntuHosts", "TestRecoveryAndStopOnCleanUbuntuHosts", "TestContainerDeploymentOnCleanUbuntuHosts"}
+var level2Tests = []string{"TestSmokeOnCleanUbuntuHosts", "TestRecoveryAndStopOnCleanUbuntuHosts", "TestContainerDeploymentOnCleanUbuntuHosts", "TestInstallAndUninstallOnCleanUbuntuHosts"}
 
-// The nightly level 2 job has the equivalent of -expect-pass: the step lists the three tests, selects exactly them with -run, and fails unless
+// The nightly level 2 job has the equivalent of -expect-pass: the step lists the four tests, selects exactly them with -run, and fails unless
 // each ended with PASS. The check is run here against the output of a `go test` that passes, skips, lacks or fails a test.
 func TestTheNightlyLevel2JobFailsUnlessEachOfItsTestsPassed(t *testing.T) {
 	var src string
-	for _, f := range []string{"deployment_test.go", "appliance_test.go", "recovery_test.go"} {
+	for _, f := range []string{"deployment_test.go", "appliance_test.go", "recovery_test.go", "install_test.go"} {
 		src += read(t, "internal", "appliance", f)
 	}
 	for _, name := range level2Tests {

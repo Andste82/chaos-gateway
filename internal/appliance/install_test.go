@@ -48,7 +48,33 @@ func TestInstallAndUninstallOnCleanUbuntuHosts(t *testing.T) {
 		if !ok {
 			t.Fatalf("unknown release %q", rel)
 		}
-		t.Run(r.Name+"/three-ports", func(t *testing.T) { installUninstall(t, r, tar) })
+		t.Run(r.Name+"/three-ports", func(t *testing.T) { installUninstall(t, r, tar, "") })
+	}
+}
+
+// TestInstallFromTheReleaseOnCleanUbuntuHosts is the same course with a published release instead of the files of the checkout and a
+// loaded image: install.sh comes from the GitHub release (the documented `curl -fsSL .../releases/download/vX/install.sh | sudo sh -s --
+// --version X ...`), fetches the host setup of that release to install Docker, pulls the image from ghcr.io, and everything after is as
+// above. It runs only when CHAOSGW_APPLIANCE_RELEASE_VERSION names a version that is published (1.0.0-rc.1; the workflow release-install.yml
+// sets it), and needs the VM to reach github.com and ghcr.io.
+func TestInstallFromTheReleaseOnCleanUbuntuHosts(t *testing.T) {
+	amd64Only(t)
+	version := os.Getenv("CHAOSGW_APPLIANCE_RELEASE_VERSION")
+	if version == "" {
+		t.Skip("CHAOSGW_APPLIANCE_RELEASE_VERSION is not set: name a published version (see .github/workflows/release-install.yml)")
+	}
+	if !regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`).MatchString(version) {
+		t.Fatalf("CHAOSGW_APPLIANCE_RELEASE_VERSION %q is not a version", version)
+	}
+	if !appliance.HasKVM() && os.Getenv("CHAOSGW_APPLIANCE_ALLOW_TCG") == "" {
+		t.Skip("no /dev/kvm: level 2 needs a KVM-capable machine (plan Q1); CHAOSGW_APPLIANCE_ALLOW_TCG=1 runs it emulated")
+	}
+	for _, rel := range strings.Split(env("CHAOSGW_APPLIANCE_RELEASES", "24.04,26.04"), ",") {
+		r, ok := appliance.Releases[strings.TrimSpace(rel)]
+		if !ok {
+			t.Fatalf("unknown release %q", rel)
+		}
+		t.Run(r.Name+"/three-ports", func(t *testing.T) { installUninstall(t, r, "", version) })
 	}
 }
 
@@ -78,10 +104,16 @@ func leftoversOfTheGateway(output func(string) string) []string {
 	return left
 }
 
-func installUninstall(t *testing.T, rel appliance.Release, imageTar string) {
+// installUninstall is the course of both tests. With a version it installs that published release (the files from GitHub, the image from
+// ghcr.io), else the files of the checkout, served from the VM's loopback, and the image of imageTar.
+func installUninstall(t *testing.T, rel appliance.Release, imageTar, version string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 85*time.Minute)
 	defer cancel()
+	released := version != ""
 	tag := env("CHAOSGW_APPLIANCE_IMAGE_TAG", "chaos-gateway:appliance")
+	if released {
+		tag = "ghcr.io/andste82/chaos-gateway:" + version
+	}
 	artifacts := filepath.Join(env("CHAOSGW_APPLIANCE_ARTIFACTS", t.TempDir()), strings.ReplaceAll(t.Name(), "/", "-"))
 	cache := env("CHAOSGW_APPLIANCE_CACHE", filepath.Join(os.TempDir(), "chaosgw-appliance"))
 
@@ -158,40 +190,56 @@ func installUninstall(t *testing.T, rel appliance.Release, imageTar string) {
 		t.Fatalf("the host is not clean: Docker is installed (%s)", strings.TrimSpace(r.Stdout))
 	}
 
-	// the files of this test go to /opt/install-test: vm.Put makes the directory of a file with mode 0755, and /tmp would lose its
-	// sticky bit and be closed to the ssh user (the cookie jar of the API calls is kept there)
-	// ---- what the release serves: install.sh and the host setup, from the VM's own loopback
-	for _, f := range []string{"install.sh", "host-setup.sh"} {
-		if err := vm.PutFile(ctx, "../../deploy/"+f, "/srv/release/latest/download/"+f, 0o644); err != nil {
+	var install string
+	if released {
+		// the published release: install.sh from the GitHub release, which fetches the host setup of that release for Docker and pulls
+		// the image from ghcr.io; the first run is the one that stops at the netplan entry
+		install = "curl -fsSL https://github.com/Andste82/chaos-gateway/releases/download/v" + version + "/install.sh | sudo sh -s -- --version " + version + " --test-interface lan0"
+	} else {
+		// the files of this test go to /opt/install-test: vm.Put makes the directory of a file with mode 0755, and /tmp would lose its
+		// sticky bit and be closed to the ssh user (the cookie jar of the API calls is kept there)
+		// ---- what the release serves: install.sh and the host setup, from the VM's own loopback
+		for _, f := range []string{"install.sh", "host-setup.sh"} {
+			if err := vm.PutFile(ctx, "../../deploy/"+f, "/srv/release/latest/download/"+f, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		must("sudo sh -c 'setsid nohup python3 -m http.server 8099 --bind 127.0.0.1 --directory /srv/release >/tmp/release-server.log 2>&1 &'")
+		waitFor(t, time.Minute, "the release server to answer", func() bool {
+			return run("curl -fsS -o /dev/null http://127.0.0.1:8099/latest/download/install.sh").Exit == 0
+		})
+		const releases = "http://127.0.0.1:8099"
+		install = "curl -fsSL " + releases + "/latest/download/install.sh | sudo CHAOSGW_RELEASES=" + releases + " sh -s -- --image " + tag + " --no-pull --test-interface lan0"
+
+		// ---- no Docker: the host setup of the release installs it, and install.sh stops at the image, which is not on the host yet
+		r := run(install)
+		if r.Exit != 1 || !strings.Contains(r.Stdout, "docker is not installed: fetching the host setup of the release") ||
+			!strings.Contains(r.Stdout, "cannot read the host setup out of "+tag) {
+			t.Fatalf("install.sh on a host without Docker and without the image: exit %d\n%s", r.Exit, r.Stdout)
+		}
+		if r := run("command -v docker && sudo docker compose version"); r.Exit != 0 {
+			t.Fatalf("Docker is not installed after install.sh:\n%s", r.Stdout)
+		}
+		if err := vm.PutFile(ctx, imageTar, "/opt/install-test/image.tar.gz", 0o644); err != nil {
 			t.Fatal(err)
 		}
+		must("gunzip -c /opt/install-test/image.tar.gz | sudo docker load")
 	}
-	must("sudo sh -c 'setsid nohup python3 -m http.server 8099 --bind 127.0.0.1 --directory /srv/release >/tmp/release-server.log 2>&1 &'")
-	waitFor(t, time.Minute, "the release server to answer", func() bool {
-		return run("curl -fsS -o /dev/null http://127.0.0.1:8099/latest/download/install.sh").Exit == 0
-	})
-	const releases = "http://127.0.0.1:8099"
-	install := "curl -fsSL " + releases + "/latest/download/install.sh | sudo CHAOSGW_RELEASES=" + releases + " sh -s -- --image " + tag + " --no-pull --test-interface lan0"
-
-	// ---- no Docker: the host setup of the release installs it, and install.sh stops at the image, which is not on the host yet
-	r := run(install)
-	if r.Exit != 1 || !strings.Contains(r.Stdout, "docker is not installed: fetching the host setup of the release") ||
-		!strings.Contains(r.Stdout, "cannot read the host setup out of "+tag) {
-		t.Fatalf("install.sh on a host without Docker and without the image: exit %d\n%s", r.Exit, r.Stdout)
-	}
-	if r := run("command -v docker && sudo docker compose version"); r.Exit != 0 {
-		t.Fatalf("Docker is not installed after install.sh:\n%s", r.Stdout)
-	}
-	if err := vm.PutFile(ctx, imageTar, "/opt/install-test/image.tar.gz", 0o644); err != nil {
-		t.Fatal(err)
-	}
-	must("gunzip -c /opt/install-test/image.tar.gz | sudo docker load")
 
 	// ---- the netplan entry of the test interface: install.sh stops with the hint of the check and starts nothing
-	r = run(install)
+	r := run(install)
 	if r.Exit != 1 || !strings.Contains(r.Stdout, "FAIL  netplan: /etc/netplan/") || !strings.Contains(r.Stdout, "delete the entry of lan0") ||
 		!strings.Contains(r.Stdout, "the host setup found a step missing") {
 		t.Fatalf("install.sh before the netplan entry is gone: exit %d\n%s", r.Exit, r.Stdout)
+	}
+	if released {
+		// this was the first run on a host without Docker: it fetched the host setup of the release and pulled the image
+		if !strings.Contains(r.Stdout, "docker is not installed: fetching the host setup of the release") || !strings.Contains(r.Stdout, "pulling "+tag) {
+			t.Errorf("the first install.sh of the release did not install Docker and pull the image:\n%s", r.Stdout)
+		}
+		if r := run("command -v docker && sudo docker image inspect " + tag); r.Exit != 0 {
+			t.Fatalf("Docker or the image is missing after the first install.sh:\n%s", r.Stdout)
+		}
 	}
 	if out := strings.TrimSpace(output("sudo docker ps -q")); out != "" {
 		t.Errorf("install.sh started containers although the host setup found a step missing:\n%s", output("sudo docker ps"))
@@ -301,7 +349,11 @@ func installUninstall(t *testing.T, rel appliance.Release, imageTar string) {
 	}
 
 	// ---- install.sh again: the gateway is back with its revision and no new setup
-	r = run("sudo sh /opt/chaosgw/install.sh --image " + tag + " --no-pull --test-interface lan0")
+	reinstall := "sudo sh /opt/chaosgw/install.sh --image " + tag + " --no-pull --test-interface lan0"
+	if released {
+		reinstall = "sudo sh /opt/chaosgw/install.sh --version " + version + " --test-interface lan0"
+	}
+	r = run(reinstall)
 	if r.Exit != 0 || !strings.Contains(r.Stdout, "install: Chaos Gateway is running.") {
 		t.Fatalf("install.sh after uninstall.sh: exit %d\n%s", r.Exit, r.Stdout)
 	}

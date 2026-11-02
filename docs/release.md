@@ -62,6 +62,13 @@ Then install it on a clean Ubuntu host as a user would, and run through the user
 curl -fsSL https://github.com/Andste82/chaos-gateway/releases/download/v1.0.0-rc.1/install.sh | sudo sh -s -- --version 1.0.0-rc.1 --test-interface lan0
 ```
 
+A workflow does that on clean Ubuntu 24.04 and 26.04 hosts in a VM, with the files of the release from GitHub and the image from ghcr.io, and
+then goes through the setup wizard, `uninstall.sh`, `install.sh` again and `uninstall.sh --purge` (`TestInstallFromTheReleaseOnCleanUbuntuHosts`):
+
+```sh
+gh workflow run release-install.yml -f version=1.0.0-rc.1
+```
+
 When the candidate is good, tag the release on the same commit (or on a later commit of `main` with the fixes):
 
 ```sh

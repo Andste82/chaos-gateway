@@ -368,6 +368,10 @@ func (o *owner) scheduleRetry() {
 	if o.e.cfg.RetryDelay > 0 {
 		delay = o.e.cfg.RetryDelay
 	}
+	if o.boot != nil && o.boot.transportFails > 0 {
+		// the executor is not there: asking every few seconds helps nobody (recovery.go)
+		delay = bootRetryDelay(delay, o.boot.transportFails)
+	}
 	o.e.cfg.Clock.AfterFunc(delay, func() {
 		go func() {
 			select {

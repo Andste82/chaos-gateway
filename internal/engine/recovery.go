@@ -29,8 +29,20 @@ import (
 const EventSafeMode = "safe_mode"
 
 // bootApplyAttempts is how often the apply of the active revision is tried before the last known good one is: a failure
-// that only a moment caused (the executor busy, a link that came up a second late) must not roll the configuration back.
+// that only a moment caused (the executor busy, a link that came up a second late) must not roll the configuration back. A
+// failure of the way to the executor does not count: that revision is applied again for as long as it lasts.
 const bootApplyAttempts = 2
+
+// bootRetryDelay is how long the owner waits before it applies the revision of the start again after the executor could not be
+// reached for the n-th time in a row: base for the first, then twice as long each time, up to six times base (a minute for the
+// 10 seconds of retryDelay).
+func bootRetryDelay(base time.Duration, n int) time.Duration {
+	d := base
+	for i := 1; i < n && d < 6*base; i++ {
+		d *= 2
+	}
+	return min(d, 6*base)
+}
 
 // bootState is the start of the process until the revision it applies has been applied and verified.
 type bootState struct {
@@ -44,9 +56,9 @@ type bootState struct {
 	fallback bool
 	failed   int64
 	failure  string
-	// transient says that failure, the reason the fallback was started, came from the way to the executor and not from the
-	// revision (isTransportError).
-	transient bool
+	// transportFails counts the applies that failed because the executor could not be reached (isTransportError): they are not
+	// held against the revision (bootRetryDelay).
+	transportFails int
 	// failedCfg is the configuration of failed, nil when it could not be read.
 	failedCfg *model.Configuration
 }
@@ -55,15 +67,15 @@ type bootState struct {
 // the last known good revision at once.
 func (o *owner) recoverUnreadable(init *ownerInit) {
 	o.snap.Revision = init.revision
-	if o.startFallback(init.revision, init.failure, nil, false) {
+	if o.startFallback(init.revision, init.failure, nil) {
 		return
 	}
 	o.enterSafeMode(&bootState{failed: init.revision, failure: init.failure}, fmt.Sprintf("revision %d cannot be read (%s) and there is no earlier revision that worked", init.revision, init.failure), true, false)
 }
 
-// startFallback applies the last known good revision because failed could not be applied or read (transient: the failure
-// came from the way to the executor). It reports whether there is one.
-func (o *owner) startFallback(failed int64, failure string, failedCfg *model.Configuration, transient bool) bool {
+// startFallback applies the last known good revision because failed could not be applied or read. It reports whether there is
+// one.
+func (o *owner) startFallback(failed int64, failure string, failedCfg *model.Configuration) bool {
 	rev, cfg, err := o.e.cfg.Store.Fallback()
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
@@ -74,7 +86,7 @@ func (o *owner) startFallback(failed int64, failure string, failedCfg *model.Con
 	o.e.cfg.Log.Warn("revision cannot be applied at start: applying the last known good revision", "revision", failed, "reason", failure, "fallback", rev.Id)
 	d := o.nextDesired(cfg, rev.Id)
 	d.RolledBack = true
-	o.boot = &bootState{revision: rev.Id, cfg: cfg, gen: d.Generation, fallback: true, failed: failed, failure: failure, transient: transient, failedCfg: failedCfg}
+	o.boot = &bootState{revision: rev.Id, cfg: cfg, gen: d.Generation, fallback: true, failed: failed, failure: failure, failedCfg: failedCfg}
 	o.committed = d
 	o.snap.Revision, o.snap.Config = rev.Id, cfg
 	o.converge(d)
@@ -106,8 +118,22 @@ func (o *owner) bootResult(r applyResult) bool {
 		o.event(EventRolledBack, map[string]any{"revision": b.failed, "reason": "boot: " + b.failure, "restored": b.revision})
 		return true
 	}
-	b.attempts++
 	transport := isTransportError(r.err)
+	if transport {
+		// The way to the executor failed (it is not up yet, its socket broke), and that says nothing about the revision: the
+		// gateway neither falls back to an older revision, which Store.Restore would make the active one for good, nor enters
+		// safe mode, which needs the executor too. The same revision is applied again, with a growing delay (bootRetryDelay), for
+		// as long as the executor is away; the snapshot says that the last apply failed and the health report is degraded.
+		// P7-M27-05: after a power loss on a slow host the executor can take longer than two tries, and the newest configuration
+		// was replaced by an older one without a word but a log line.
+		b.transportFails++
+		if !b.fallback {
+			b.failure = r.err.Error()
+		}
+		o.e.cfg.Log.Warn("the executor cannot be reached at start: the revision is applied again", "revision", b.revision, "fallback", b.fallback, "failures", b.transportFails, "error", r.err)
+		return true
+	}
+	b.attempts++
 	switch {
 	case b.attempts < bootApplyAttempts:
 		// scheduleRetry applies it again; the last known good revision gets the same second try as the active one
@@ -116,18 +142,18 @@ func (o *owner) bootResult(r applyResult) bool {
 		}
 	case b.fallback:
 		o.enterSafeMode(b, fmt.Sprintf("revision %d could not be applied (%s), and neither could revision %d, the last known good one (%s)",
-			b.failed, firstLine(b.failure), b.revision, firstLine(r.err.Error())), !b.transient, !transport)
-	case o.startFallback(b.revision, r.err.Error(), b.cfg, transport):
+			b.failed, firstLine(b.failure), b.revision, firstLine(r.err.Error())), true, true)
+	case o.startFallback(b.revision, r.err.Error(), b.cfg):
 	default:
 		b.failure = r.err.Error()
-		o.enterSafeMode(b, fmt.Sprintf("revision %d could not be applied (%s) and there is no earlier revision that worked", b.revision, firstLine(r.err.Error())), false, !transport)
+		o.enterSafeMode(b, fmt.Sprintf("revision %d could not be applied (%s) and there is no earlier revision that worked", b.revision, firstLine(r.err.Error())), false, true)
 	}
 	return true
 }
 
 // isTransportError tells a failure of the way to the executor (the socket is gone, the connection broke, the call ran out of
 // time) from one of the revision (a command that exited non-zero, a configuration the kernel refuses): the first says nothing
-// about the revision, so it is not held against it.
+// about the revision, so it is not held against it and the start neither falls back nor enters safe mode because of it.
 func isTransportError(err error) bool {
 	var re *executor.RemoteError
 	if errors.As(err, &re) {
@@ -141,8 +167,7 @@ func isTransportError(err error) bool {
 
 // enterSafeMode runs the gateway in safe mode: the configuration of domain.SafeModeConfiguration made of the failed revision
 // (else of the last known good one) is applied, the snapshot says why. Nothing is applied when no configuration could be read.
-// markFailed and markRevision say whether b.failed and b.revision are recorded as not applying at start: a failure of the way to
-// the executor is no fault of the revision, and the next start tries it again.
+// markFailed and markRevision say whether b.failed and b.revision are recorded as not applying at start.
 func (o *owner) enterSafeMode(b *bootState, reason string, markFailed, markRevision bool) {
 	o.boot = nil
 	src := b.failedCfg

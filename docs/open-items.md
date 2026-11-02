@@ -60,8 +60,8 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   2026-11-01 at `5d1ed45` by five reviewers. The result is in [Phase 7 audit result](#phase-7-audit-result), right before the Phase 7 open items: 12 items of major and 58 of
   minor severity, P7-AUDIT-01 to P7-AUDIT-70. The round after the audit closed them in the pull requests #135 to #139 (and the closure that records them): fixed with a test, fixed differently, accepted
   with a reason, or deferred to M38 (the preflight clauses of §3.3/§3.4 and the expiry warning of the installed certificate), see the verdict table. The five
-  items the phase raised, P7-M27-01, -02, P7-M28-01, P7-M29-01 and -02, were decided by the maintainer on 2026-10-31 and are closed. Two items are open: P7-M27-05 (what the engine does when the active revision fails twice
-  because the executor is not there; needs the maintainer) and P7-CI-01 (three timing tests of the weekly emulated jobs, not caused by Phase 7).
+  items the phase raised, P7-M27-01, -02, P7-M28-01, P7-M29-01 and -02, were decided by the maintainer on 2026-10-31 and are closed. Three items are open: P7-M27-05 (what the engine does when the active revision fails twice
+  because the executor is not there; needs the maintainer), P7-CI-01 (three timing tests of the weekly emulated jobs, not caused by Phase 7) and P7-CI-02 (a probe namespace seen by a test of another package; watch the level 1 runs).
 
 ## Phase 1 audit result
 
@@ -3345,9 +3345,9 @@ Major items: P7-AUDIT-01, P7-AUDIT-02, P7-AUDIT-11, P7-AUDIT-27, P7-AUDIT-28, P7
 These fixes are tested at level 0 and wait for a run that is not available on the development machine; the CI run on `main` and the nightly run show them
 (the status lines of M27 to M30 in `docs/plan.md` say which have been seen):
 
-- P7-AUDIT-38: the pings from the uplink and from device A to the management address of the test in `internal/api/e2e_security_test.go` (level 1).
+- P7-AUDIT-38 is proved: the positive control failed in the level 1 job of CI runs 41330808027 and 41332599334 (device C had no address at the gateway, the bed configured `lan0` only, so its refusal of the API port had proved nothing; PR #141 configures the network of `lan1` in the test), and the test passes in CI run 41352829885 on `5d7d000`, in the container and in the VM.
 - P7-AUDIT-03, -05, -06: the executor reconnecting after a transport error, a SIGTERM during the host checks, and the lock of the revisions across two containers (levels 1 and 2).
-- P7-AUDIT-20 and -26: Kea started from the real image with the new `kea-start.sh`, and the API with a data directory of the wrong owner (the job `deployment` and the nightly level 2 run).
+- P7-AUDIT-20 and -26: the job `deployment` starts Kea from the real image with the new `kea-start.sh` and passed on PR #136 and on `main`; the stale socket itself and the API with a data directory of the wrong owner need the nightly level 2 run.
 - P7-AUDIT-13: the mount check of `update.sh` on a real update.
 - P7-AUDIT-32, -59, -61: `sudo -E` and the corpus cache of the fuzz job on a hosted runner, the CI check and the `gh release` flags on the first tag push, and the `--- PASS` check under a real nightly run.
 - P7-AUDIT-67: the new timeouts are estimates from the observed maxima.
@@ -3356,6 +3356,7 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 
 - The active revision that fails twice with a transport error still falls back, and `Restore` then makes the older revision active for good: P7-M27-05 (needs the maintainer).
 - The weekly emulated level 1b jobs are red, for three tests that have nothing to do with Phase 7: P7-CI-01.
+- Level 1 failed once for a probe namespace that no test of its own owns (`cgp-3a1f7c52`), probably made by a test of another package running at the same time; the level 1 job runs the packages one at a time since PR #142: P7-CI-02.
 - The reviewers' scratch tests were not kept; the fix tests are the ones listed above.
 - Fuzz crashers of the nightly job are public artifacts of a public repository (P7-AUDIT-70, accepted): triage a failed nightly fuzz run before anyone fetches its artifact.
 
@@ -3479,3 +3480,16 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 - Acceptance: two weekly runs on `main` in a row are green in every job.
 - Needs maintainer: no
 - Effort: S to M
+
+### P7-CI-02 A probe namespace of another package makes the verify of an apply fail in level 1
+
+- Status: open (observation): changed on 2026-11-02 and waiting for more level 1 runs on `main`
+- Severity: minor
+- Reason: not a decision, found while closing P7-AUDIT-38. CI run 41344903641 (on `82486de`) failed the level 1 job with `apply verify: probes: cgp-3a1f7c52 is not wanted` in `TestADeviceFaultStaysAttachedAfterTheForcedNewIPOnTheRealKernel`, a test without probes; a run on `5d1ed45` had failed the same way. The executor reads `ip netns list` for the namespaces of probes whose pair is gone (`probeNSIsOrphan`), and that list is the container's, not the gateway namespace's. `testvm run` in the direct mode let `go test` start the packages at the same time, and several packages use the probe with the fixed id `3a1f7c52`, so a namespace that a test of another package was just making or deleting looked like a leftover. This is the likely cause, not a proved one: the logs of the packages have no common clock. PR #142 runs the packages one at a time (`-p 1`, the job takes about 70 minutes instead of 48, its timeout is 180). The first run after it, CI run 41352829885 on `5d7d000`, is green in every job (level 1 in 70 minutes, the VM in 131).
+- Evidence: CI runs 41344903641 and 41352829885, `internal/executor/probe.go` (`probeNSIsOrphan`), `tools/testvm/main.go`.
+- Task: watch the level 1 runs on `main`; a failure of the same kind after PR #142 means the cause is another one or the VM job (which this change does not touch) has it too.
+- Options: (a) accept the sequential run and close the item after ten level 1 runs on `main` without the failure; (b) if it comes back, give the probe fixtures of each package ids of their own (the namespace name is the first eight digits of the id) and have the executor's orphan check ignore a namespace younger than a moment.
+- Recommendation: (a).
+- Acceptance: ten level 1 runs on `main` in a row without a `probes:` failure of the verify.
+- Needs maintainer: no
+- Effort: S for (a), M for (b)

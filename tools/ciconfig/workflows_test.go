@@ -40,7 +40,7 @@ type workflow struct {
 	Jobs map[string]job `yaml:"jobs"`
 }
 
-var workflowFiles = []string{"ci.yml", "nightly.yml", "weekly.yml", "image.yml"}
+var workflowFiles = []string{"ci.yml", "nightly.yml", "weekly.yml", "image.yml", "release-install.yml"}
 
 func parseWorkflow(t *testing.T, file string) workflow {
 	t.Helper()

@@ -1,0 +1,68 @@
+name: Release install
+
+# Level 2 of a published release (docs/release.md): a clean Ubuntu host in a QEMU VM installs the release the way the documents say,
+# `curl -fsSL .../releases/download/vX/install.sh | sudo sh -s -- --version X --test-interface lan0`: the files come from the GitHub
+# release, Docker from the host setup of that release, the image from ghcr.io. Then the setup wizard, uninstall.sh, install.sh again
+# and uninstall.sh --purge, as TestInstallAndUninstallOnCleanUbuntuHosts does with the files of the checkout.
+# Run it by hand after a tag has been published, before the next tag:
+#   gh workflow run release-install.yml -f version=1.0.0-rc.1
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'the published version to install, without the v (1.0.0-rc.1)'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: install from the release (level 2, Ubuntu ${{ matrix.release }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ['24.04', '26.04']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install QEMU and the tools of the harness
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils python3 curl iproute2 iptables udhcpc
+      - name: Allow access to /dev/kvm
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+          test -w /dev/kvm || { echo "::error title=No KVM::level 2 needs /dev/kvm, the runner did not offer it"; exit 1; }
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/chaosgw-appliance
+          key: appliance-images-${{ matrix.release }}-${{ github.run_id }}
+          restore-keys: appliance-images-${{ matrix.release }}-
+      - name: Install the published release
+        env:
+          VERSION: ${{ inputs.version }}
+          CHAOSGW_APPLIANCE_RELEASES: ${{ matrix.release }}
+          CHAOSGW_APPLIANCE_ARTIFACTS: ${{ runner.temp }}/appliance-logs
+        # The test skips without a version or without /dev/kvm and leaves `go test` green, so the step fails unless it ended with PASS.
+        run: |
+          set -o pipefail
+          printf '%s\n' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "::error::$VERSION is not a version (1.0.0-rc.1)"; exit 1; }
+          export CHAOSGW_APPLIANCE_RELEASE_VERSION="$VERSION"
+          export CHAOSGW_APPLIANCE_CACHE="$HOME/.cache/chaosgw-appliance"
+          go test -tags appliance -count=1 -timeout 50m -v -run '^TestInstallFromTheReleaseOnCleanUbuntuHosts$' ./internal/appliance 2>&1 | tee "$RUNNER_TEMP/release-install.log"
+          grep -q -- "--- PASS: TestInstallFromTheReleaseOnCleanUbuntuHosts " "$RUNNER_TEMP/release-install.log" || { echo "::error title=Level 2 test did not pass::TestInstallFromTheReleaseOnCleanUbuntuHosts did not end with PASS (it skipped or did not run)"; exit 1; }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: release-install-logs-${{ matrix.release }}
+          path: ${{ runner.temp }}/appliance-logs
+          if-no-files-found: ignore

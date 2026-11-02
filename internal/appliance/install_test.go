@@ -207,7 +207,9 @@ func installUninstall(t *testing.T, rel appliance.Release, imageTar string) {
 		if !t.Failed() {
 			return
 		}
-		for _, c := range []string{compose + " ps -a", compose + " logs --no-color --tail 60 api", compose + " logs --no-color --tail 40 exec", "cat /tmp/chaosgw.jar"} {
+		login := `curl -sk -i -m 30 -c /tmp/diag.jar -X POST -H 'Content-Type: application/json' --data '{"password":"correct horse battery staple"}' https://` + appliance.GatewayMgmt + `:8443/api/v1/auth/login`
+		for _, c := range []string{compose + " ps -a", compose + " logs --no-color --tail 60 api", compose + " logs --no-color --tail 40 exec", "ls -la /tmp", "date -u; curl --version | head -1; id",
+			login, "cat /tmp/diag.jar", "cat /tmp/chaosgw.jar"} {
 			if r, err := vm.Run(context.Background(), c+" 2>&1", nil); err == nil {
 				t.Logf("%s:\n%s", c, r.Stdout)
 			}

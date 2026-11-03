@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Chaos Gateway">
+  <rect width="128" height="128" rx="26" fill="#0e1116"/>
+  <g transform="translate(19 19) scale(4.2)" fill="none" stroke="#FFA24C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="1.5" y="1.5" width="19" height="19" rx="4"/>
+    <path d="M5 12h3l2-5 2.5 9 2-4H17"/>
+  </g>
+</svg>

@@ -14,7 +14,8 @@
     "pretest": "npm run generate",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "test:e2e:testbed": "playwright test --config playwright.testbed.config.ts"
+    "test:e2e:testbed": "playwright test --config playwright.testbed.config.ts",
+    "screenshots": "playwright test --config playwright.screenshots.config.ts"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "5.3.0",

@@ -85,6 +85,8 @@ The plan (§4.5) defines levels; this is how they map to commands.
 | – | `make test-docs` | the `sh run` examples of the user documentation (`docs/`) against a gateway on the simulated kernel, their printed output compared with what the documents show (M30; test tag `examples`) | `curl`, `jq`; no root |
 | 1/1b | `make test-vm ARGS='-tags testbed,browser -run InTheBrowser ./internal/api'` | the browser flows of the web app against the real stack in the testbed: first start (M12), a fault created in the UI and measured (M13) (also `test-privileged`) | `make build-web`, `cd web && npm ci && npx playwright install chromium` |
 
+**Screenshots of the README.** The four pictures in `docs/images/` are made from the built app against the same mocked API (`web/screenshots/readme.spec.ts`, `web/playwright.screenshots.config.ts`): `cd web && npm run screenshots` writes them again, and a change of a screen they show is a reason to do it (the spec waits for its screen, so a renamed heading fails it).
+
 **Playwright port.** The e2e tests (`web/playwright.config.ts`) build the app and start `vite preview` on
 the port in `E2E_PORT`, 4173 when it is unset; the tests use the same port as their base URL. Runs in
 several worktrees can overlap when each has its own port, and each tests its own build:

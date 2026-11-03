@@ -36,6 +36,14 @@ var (
 	SupportedCheckTypes = []string{"reconnected", "no_connection", "traffic_seen", "traffic_not_seen", "dns_query_seen", "tls_rejected", "tls_accepted"}
 )
 
+// What the specification has and the runner does not yet, with the milestone that brings it: the preflight of a
+// run refuses a scenario that uses one (Manager.supported), and the entry goes when the type is in the lists above.
+var (
+	laterCheckTypes         = map[string]string{"ntp_queried": "M34"}
+	laterWaitConditions     = map[string]string{string(model.WaitConditionForNtpQuerySeen): "M34"}
+	supportedWaitConditions = []string{"online", "dns_query", "connected"}
+)
+
 var (
 	// ErrNotFound is returned for a run that does not exist (any more: the record of an ended run is kept
 	// for the retention time).

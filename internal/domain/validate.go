@@ -71,6 +71,7 @@ const (
 	CodeInvalidDNSFault        = "invalid_dns_fault"
 	CodeInvalidTLSCase         = "invalid_tls_case"
 	CodeInvalidDHCPAction      = "invalid_dhcp_action"
+	CodeInvalidTimeFault       = "invalid_time_fault"
 	CodeInvalidOverlay         = "invalid_overlay"
 	CodeInvalidFlapping        = "invalid_flapping"
 	CodeInvalidRate            = "invalid_rate"

@@ -28,6 +28,9 @@ networks:
       static_entries:
         - {name: mock-broker.iot.test, addresses: [10.10.0.5]}
       redirect_hardcoded: true
+    ntp:
+      enabled: true
+      redirect_hardcoded: false
   4e2f9d1c-8b3a-4f6e-a1d7-2c9b8e7f6a54:
     type: wireguard
     kind: hub
@@ -169,6 +172,11 @@ profiles:
     parts:
       impairment: {latency: 50ms, jitter: 10ms, loss: 0.1%}
       dns: {action: delay, delay: 800ms}
+  4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b72:
+    name: clock-in-1970
+    description: The time of 1970, for the firmware's clock handling (M34)
+    parts:
+      time: {absolute: '1970-01-01T00:00:00Z'}
 
 scenarios:
   3d4e5f6a-7b8c-4d9e-0f1a-2b3c4d5e6f71:
@@ -184,6 +192,17 @@ scenarios:
     checks:
       - {reconnected: {protocol: tcp, ports: [8883]}, window: {from: restore, within: 30s}}
       - {dns_query_seen: {name: broker.example.com}, window: {from: restore, within: 30s}}
+  5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c83:
+    name: stale-clock
+    description: A device whose clock is 400 days ahead rejects the certificate of the broker (M34)
+    target: {device: esp32-42}
+    steps:
+      - {id: ntp-up, at: 0s, wait: {for: ntp_query_seen, timeout: 10m}}
+      - {id: ahead,  at: 5s, time: {offset: +400d}}
+      - {id: polled, at: 10s, wait: {for: ntp_query_seen, timeout: 10m}}
+      - {id: back,   at: 20s, remove: ahead}
+    checks:
+      - {ntp_queried: {}, window: {from: ahead, until: back}}
 
 settings:
   commit_confirm_timeout: 60s

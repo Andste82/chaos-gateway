@@ -48,7 +48,7 @@ func TestDiffFromNothingAddsEverything(t *testing.T) {
 	}
 	want := map[string]int{"uplink": 1, "management": 1, "network": 3, "client": 1, "link_peer": 1, "routing": 1,
 		"routing_protocol": 1, "access_matrix": 1, "device": 2, "group": 2, "probe": 1, "access_rule": 2,
-		"fault": 5, "profile": 1, "scenario": 1, "settings": 1}
+		"fault": 5, "profile": 2, "scenario": 2, "settings": 1}
 	// access_rule counts the rule and the order
 	for k, n := range want {
 		if kinds[k] != n {

@@ -93,6 +93,12 @@ func visitTLS(path string, t *model.TlsCase, fn refFunc) {
 	}
 }
 
+func visitTime(path string, t *model.TimeFault, fn refFunc) {
+	if t != nil {
+		visitDestination(path+"/destination", t.Destination, fn)
+	}
+}
+
 func visitWireGuardAction(path string, a *model.WireGuardAction, fn refFunc) {
 	if a != nil {
 		visitRef(path+"/client", KindClient, a.Client, fn)
@@ -111,6 +117,7 @@ func visitStep(path string, st *model.Step, fn refFunc) {
 	visitFaultBody(path+"/fault", st.Fault, fn)
 	visitRuleBody(path+"/rule", st.Rule, fn)
 	visitTLS(path+"/tls", st.Tls, fn)
+	visitTime(path+"/time", st.Time, fn)
 	visitWireGuardAction(path+"/wireguard", st.Wireguard, fn)
 	if st.Wait != nil {
 		visitDestination(path+"/wait/destination", st.Wait.Destination, fn)
@@ -148,6 +155,7 @@ func visitScenario(path string, s *model.Scenario, fn refFunc) {
 
 func visitProfile(path string, p *model.Profile, fn refFunc) {
 	visitTLS(path+"/parts/tls", p.Parts.Tls, fn)
+	visitTime(path+"/parts/time", p.Parts.Time, fn)
 }
 
 // visitConfiguration calls fn for every reference of a configuration. Network is a union, so a
@@ -229,6 +237,7 @@ func visitOverlayRequest(r *model.OverlayRequest, fn refFunc) {
 	visitFaultBody("/fault", r.Fault, fn)
 	visitRuleBody("/rule", r.Rule, fn)
 	visitTLS("/tls", r.Tls, fn)
+	visitTime("/time", r.Time, fn)
 	visitWireGuardAction("/wireguard", r.Wireguard, fn)
 }
 

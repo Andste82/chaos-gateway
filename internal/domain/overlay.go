@@ -14,10 +14,10 @@ import (
 )
 
 // overlayKinds lists the kinds of overlay in the order the spec names them.
-var overlayKinds = []string{"profile", "fault", "rule", "dns", "tls", "dhcp", "wireguard"}
+var overlayKinds = []string{"profile", "fault", "rule", "dns", "tls", "dhcp", "time", "wireguard"}
 
 // OverlayKindOf returns the kind of an overlay request: the one of profile, fault, rule, dns,
-// tls, dhcp and wireguard that it sets. It is an error when there is not exactly one.
+// tls, dhcp, time and wireguard that it sets. It is an error when there is not exactly one.
 func OverlayKindOf(req *model.OverlayRequest) (string, error) {
 	var set []string
 	add := func(name string, present bool) {
@@ -31,6 +31,7 @@ func OverlayKindOf(req *model.OverlayRequest) (string, error) {
 	add("dns", req.Dns != nil)
 	add("tls", req.Tls != nil)
 	add("dhcp", req.Dhcp != nil)
+	add("time", req.Time != nil)
 	add("wireguard", req.Wireguard != nil)
 	if len(set) != 1 {
 		return "", fmt.Errorf("an overlay has exactly one of %s (found %d)", strings.Join(overlayKinds, ", "), len(set))
@@ -48,7 +49,7 @@ func isTunnelFault(f *model.FaultBody) bool {
 // request body, like the JSON pointers of a `validation_failed` problem.
 //
 // Rules: exactly one kind; a target for every kind except tunnel faults and WireGuard actions,
-// which have none; DHCP actions target a device or a network; the parameters of the kind are
+// which have none; DHCP actions target a device or a network, time faults a device, a group or a network; the parameters of the kind are
 // consistent (the same rules as in the configuration); ttl and lease are positive.
 func ValidateOverlay(cfg *model.Configuration, req *model.OverlayRequest, opts ...Option) (*model.OverlayRequest, []model.ValidationError) {
 	out := clone(*req)
@@ -91,6 +92,15 @@ func ValidateOverlay(cfg *model.Configuration, req *model.OverlayRequest, opts .
 		v.dhcpAction("/dhcp", *out.Dhcp)
 		if out.Target != nil {
 			v.dhcpTarget("/target", out.Target, *out.Dhcp)
+		}
+	case "time":
+		v.timeFault("/time", *out.Time)
+		if out.Target != nil {
+			v.timeTarget("/target", out.Target)
+		}
+	case "profile":
+		if out.Target != nil && out.Profile != nil {
+			v.profileTimeTarget("/target", out.Target, *out.Profile)
 		}
 	case "wireguard":
 		v.wireguardAction("/wireguard", *out.Wireguard)
@@ -145,7 +155,7 @@ func NewOverlay(req model.OverlayRequest, owner model.Owner, id uuid.UUID, now t
 		Id: id, Kind: model.OverlayKind(kind), Owner: owner,
 		Target: req.Target, Ttl: req.Ttl, Lease: req.Lease,
 		Profile: req.Profile, Fault: req.Fault, Rule: req.Rule, Dns: req.Dns, Tls: req.Tls,
-		Dhcp: req.Dhcp, Wireguard: req.Wireguard,
+		Dhcp: req.Dhcp, Time: req.Time, Wireguard: req.Wireguard,
 		CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
@@ -242,6 +252,7 @@ func sortedLower(names []string) string {
 //	dns        the set of names
 //	tls        traffic selector + SNI
 //	dhcp       the action
+//	time       traffic selector (the protocol udp and the port 123 when it names none)
 //	wireguard  client or link + action
 func OverlayKey(owner model.Owner, req *model.OverlayRequest) (string, error) {
 	kind, err := OverlayKindOf(req)
@@ -271,6 +282,8 @@ func OverlayKey(owner model.Owner, req *model.OverlayRequest) (string, error) {
 		selector = matchKey(convert[model.TrafficMatch](req.Tls)) + ";sni=" + sortedLower(deref(req.Tls.Sni))
 	case "dhcp":
 		selector = string(req.Dhcp.Action)
+	case "time":
+		selector = matchKey(timeMatch(*req.Time))
 	case "wireguard":
 		selector = tunnelKey(&model.TunnelRef{Client: req.Wireguard.Client, Link: req.Wireguard.Link}) + ";" + string(req.Wireguard.Action)
 	}
@@ -305,6 +318,6 @@ func RequestOf(o *model.Overlay) model.OverlayRequest {
 	return model.OverlayRequest{
 		Target: o.Target, Ttl: o.Ttl, Lease: o.Lease,
 		Profile: o.Profile, Fault: o.Fault, Rule: o.Rule, Dns: o.Dns, Tls: o.Tls,
-		Dhcp: o.Dhcp, Wireguard: o.Wireguard,
+		Dhcp: o.Dhcp, Time: o.Time, Wireguard: o.Wireguard,
 	}
 }

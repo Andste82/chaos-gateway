@@ -65,7 +65,7 @@ func (w *World) DHCPWinner(target model.Scope) (Candidate, bool) {
 func (w *World) DHCPDeletions() []model.Overlay {
 	var out []model.Overlay
 	for _, o := range w.Overlays {
-		if o.Kind == model.OverlayKindDhcp && o.Dhcp != nil && o.Dhcp.Action == model.DeleteLease && o.Target != nil {
+		if o.Kind == model.OverlayKindDhcp && o.Dhcp != nil && o.Dhcp.Action == model.DhcpActionActionDeleteLease && o.Target != nil {
 			out = append(out, o)
 		}
 	}

@@ -337,6 +337,7 @@ func (e CheckResultStatus) Valid() bool {
 const (
 	DnsQuerySeen   CheckResultType = "dns_query_seen"
 	NoConnection   CheckResultType = "no_connection"
+	NtpQueried     CheckResultType = "ntp_queried"
 	Reconnected    CheckResultType = "reconnected"
 	TlsAccepted    CheckResultType = "tls_accepted"
 	TlsRejected    CheckResultType = "tls_rejected"
@@ -350,6 +351,8 @@ func (e CheckResultType) Valid() bool {
 	case DnsQuerySeen:
 		return true
 	case NoConnection:
+		return true
+	case NtpQueried:
 		return true
 	case Reconnected:
 		return true
@@ -404,22 +407,22 @@ func (e ConfigurationSchemaVersion) Valid() bool {
 
 // Defines values for DelayDistribution.
 const (
-	Normal       DelayDistribution = "normal"
-	Pareto       DelayDistribution = "pareto"
-	Paretonormal DelayDistribution = "paretonormal"
-	Uniform      DelayDistribution = "uniform"
+	DelayDistributionNormal       DelayDistribution = "normal"
+	DelayDistributionPareto       DelayDistribution = "pareto"
+	DelayDistributionParetonormal DelayDistribution = "paretonormal"
+	DelayDistributionUniform      DelayDistribution = "uniform"
 )
 
 // Valid indicates whether the value is a known member of the DelayDistribution enum.
 func (e DelayDistribution) Valid() bool {
 	switch e {
-	case Normal:
+	case DelayDistributionNormal:
 		return true
-	case Pareto:
+	case DelayDistributionPareto:
 		return true
-	case Paretonormal:
+	case DelayDistributionParetonormal:
 		return true
-	case Uniform:
+	case DelayDistributionUniform:
 		return true
 	default:
 		return false
@@ -497,25 +500,25 @@ func (e DeviceOrigin) Valid() bool {
 
 // Defines values for DhcpActionAction.
 const (
-	DeleteLease DhcpActionAction = "delete_lease"
-	ForceNewIp  DhcpActionAction = "force_new_ip"
-	SetOptions  DhcpActionAction = "set_options"
-	ShortLease  DhcpActionAction = "short_lease"
-	Silence     DhcpActionAction = "silence"
+	DhcpActionActionDeleteLease DhcpActionAction = "delete_lease"
+	DhcpActionActionForceNewIp  DhcpActionAction = "force_new_ip"
+	DhcpActionActionSetOptions  DhcpActionAction = "set_options"
+	DhcpActionActionShortLease  DhcpActionAction = "short_lease"
+	DhcpActionActionSilence     DhcpActionAction = "silence"
 )
 
 // Valid indicates whether the value is a known member of the DhcpActionAction enum.
 func (e DhcpActionAction) Valid() bool {
 	switch e {
-	case DeleteLease:
+	case DhcpActionActionDeleteLease:
 		return true
-	case ForceNewIp:
+	case DhcpActionActionForceNewIp:
 		return true
-	case SetOptions:
+	case DhcpActionActionSetOptions:
 		return true
-	case ShortLease:
+	case DhcpActionActionShortLease:
 		return true
-	case Silence:
+	case DhcpActionActionSilence:
 		return true
 	default:
 		return false
@@ -912,6 +915,9 @@ const (
 	EventTypeHttpFaultTriggered    EventType = "http_fault_triggered"
 	EventTypeNetworkDegraded       EventType = "network_degraded"
 	EventTypeNetworkRestored       EventType = "network_restored"
+	EventTypeNtpAnswered           EventType = "ntp_answered"
+	EventTypeNtpQuerySeen          EventType = "ntp_query_seen"
+	EventTypeNtsSeen               EventType = "nts_seen"
 	EventTypeObservedChanged       EventType = "observed_changed"
 	EventTypeOverlayCreated        EventType = "overlay_created"
 	EventTypeOverlayExpired        EventType = "overlay_expired"
@@ -977,6 +983,12 @@ func (e EventType) Valid() bool {
 	case EventTypeNetworkDegraded:
 		return true
 	case EventTypeNetworkRestored:
+		return true
+	case EventTypeNtpAnswered:
+		return true
+	case EventTypeNtpQuerySeen:
+		return true
+	case EventTypeNtsSeen:
 		return true
 	case EventTypeObservedChanged:
 		return true
@@ -1107,6 +1119,7 @@ const (
 	FaultFamilyDns        FaultFamily = "dns"
 	FaultFamilyImpairment FaultFamily = "impairment"
 	FaultFamilyMtu        FaultFamily = "mtu"
+	FaultFamilyTime       FaultFamily = "time"
 	FaultFamilyTls        FaultFamily = "tls"
 	FaultFamilyTunnel     FaultFamily = "tunnel"
 )
@@ -1121,6 +1134,8 @@ func (e FaultFamily) Valid() bool {
 	case FaultFamilyImpairment:
 		return true
 	case FaultFamilyMtu:
+		return true
+	case FaultFamilyTime:
 		return true
 	case FaultFamilyTls:
 		return true
@@ -1240,6 +1255,7 @@ const (
 	HealthComponentsNameDns      HealthComponentsName = "dns"
 	HealthComponentsNameExecutor HealthComponentsName = "executor"
 	HealthComponentsNameKea      HealthComponentsName = "kea"
+	HealthComponentsNameNtp      HealthComponentsName = "ntp"
 	HealthComponentsNameSvcns    HealthComponentsName = "svcns"
 	HealthComponentsNameTls      HealthComponentsName = "tls"
 	HealthComponentsNameTlsProxy HealthComponentsName = "tls_proxy"
@@ -1257,6 +1273,8 @@ func (e HealthComponentsName) Valid() bool {
 	case HealthComponentsNameExecutor:
 		return true
 	case HealthComponentsNameKea:
+		return true
+	case HealthComponentsNameNtp:
 		return true
 	case HealthComponentsNameSvcns:
 		return true
@@ -1707,6 +1725,132 @@ func (e NetworkType) Valid() bool {
 	}
 }
 
+// Defines values for NtpQueryLogEntryAnswer.
+const (
+	NtpQueryLogEntryAnswerDropped        NtpQueryLogEntryAnswer = "dropped"
+	NtpQueryLogEntryAnswerKissOfDeath    NtpQueryLogEntryAnswer = "kiss_of_death"
+	NtpQueryLogEntryAnswerNormal         NtpQueryLogEntryAnswer = "normal"
+	NtpQueryLogEntryAnswerOriginMismatch NtpQueryLogEntryAnswer = "origin_mismatch"
+	NtpQueryLogEntryAnswerSilence        NtpQueryLogEntryAnswer = "silence"
+	NtpQueryLogEntryAnswerUnsynchronized NtpQueryLogEntryAnswer = "unsynchronized"
+	NtpQueryLogEntryAnswerWrongMode      NtpQueryLogEntryAnswer = "wrong_mode"
+	NtpQueryLogEntryAnswerZeroTransmit   NtpQueryLogEntryAnswer = "zero_transmit"
+)
+
+// Valid indicates whether the value is a known member of the NtpQueryLogEntryAnswer enum.
+func (e NtpQueryLogEntryAnswer) Valid() bool {
+	switch e {
+	case NtpQueryLogEntryAnswerDropped:
+		return true
+	case NtpQueryLogEntryAnswerKissOfDeath:
+		return true
+	case NtpQueryLogEntryAnswerNormal:
+		return true
+	case NtpQueryLogEntryAnswerOriginMismatch:
+		return true
+	case NtpQueryLogEntryAnswerSilence:
+		return true
+	case NtpQueryLogEntryAnswerUnsynchronized:
+		return true
+	case NtpQueryLogEntryAnswerWrongMode:
+		return true
+	case NtpQueryLogEntryAnswerZeroTransmit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for NtpQueryLogEntryKind.
+const (
+	NtsKe NtpQueryLogEntryKind = "nts_ke"
+	Query NtpQueryLogEntryKind = "query"
+)
+
+// Valid indicates whether the value is a known member of the NtpQueryLogEntryKind enum.
+func (e NtpQueryLogEntryKind) Valid() bool {
+	switch e {
+	case NtsKe:
+		return true
+	case Query:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for NtpServiceConfigFaultsAnswer.
+const (
+	NtpServiceConfigFaultsAnswerKissOfDeath    NtpServiceConfigFaultsAnswer = "kiss_of_death"
+	NtpServiceConfigFaultsAnswerNormal         NtpServiceConfigFaultsAnswer = "normal"
+	NtpServiceConfigFaultsAnswerOriginMismatch NtpServiceConfigFaultsAnswer = "origin_mismatch"
+	NtpServiceConfigFaultsAnswerSilence        NtpServiceConfigFaultsAnswer = "silence"
+	NtpServiceConfigFaultsAnswerUnsynchronized NtpServiceConfigFaultsAnswer = "unsynchronized"
+	NtpServiceConfigFaultsAnswerWrongMode      NtpServiceConfigFaultsAnswer = "wrong_mode"
+	NtpServiceConfigFaultsAnswerZeroTransmit   NtpServiceConfigFaultsAnswer = "zero_transmit"
+)
+
+// Valid indicates whether the value is a known member of the NtpServiceConfigFaultsAnswer enum.
+func (e NtpServiceConfigFaultsAnswer) Valid() bool {
+	switch e {
+	case NtpServiceConfigFaultsAnswerKissOfDeath:
+		return true
+	case NtpServiceConfigFaultsAnswerNormal:
+		return true
+	case NtpServiceConfigFaultsAnswerOriginMismatch:
+		return true
+	case NtpServiceConfigFaultsAnswerSilence:
+		return true
+	case NtpServiceConfigFaultsAnswerUnsynchronized:
+		return true
+	case NtpServiceConfigFaultsAnswerWrongMode:
+		return true
+	case NtpServiceConfigFaultsAnswerZeroTransmit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for NtpServiceConfigFaultsKissCode.
+const (
+	NtpServiceConfigFaultsKissCodeDENY NtpServiceConfigFaultsKissCode = "DENY"
+	NtpServiceConfigFaultsKissCodeRATE NtpServiceConfigFaultsKissCode = "RATE"
+	NtpServiceConfigFaultsKissCodeRSTR NtpServiceConfigFaultsKissCode = "RSTR"
+)
+
+// Valid indicates whether the value is a known member of the NtpServiceConfigFaultsKissCode enum.
+func (e NtpServiceConfigFaultsKissCode) Valid() bool {
+	switch e {
+	case NtpServiceConfigFaultsKissCodeDENY:
+		return true
+	case NtpServiceConfigFaultsKissCodeRATE:
+		return true
+	case NtpServiceConfigFaultsKissCodeRSTR:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for NtpServiceConfigFaultsLeap.
+const (
+	NtpServiceConfigFaultsLeapDelete NtpServiceConfigFaultsLeap = "delete"
+	NtpServiceConfigFaultsLeapInsert NtpServiceConfigFaultsLeap = "insert"
+)
+
+// Valid indicates whether the value is a known member of the NtpServiceConfigFaultsLeap enum.
+func (e NtpServiceConfigFaultsLeap) Valid() bool {
+	switch e {
+	case NtpServiceConfigFaultsLeapDelete:
+		return true
+	case NtpServiceConfigFaultsLeapInsert:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OverlayKind.
 const (
 	OverlayKindDhcp      OverlayKind = "dhcp"
@@ -1714,6 +1858,7 @@ const (
 	OverlayKindFault     OverlayKind = "fault"
 	OverlayKindProfile   OverlayKind = "profile"
 	OverlayKindRule      OverlayKind = "rule"
+	OverlayKindTime      OverlayKind = "time"
 	OverlayKindTls       OverlayKind = "tls"
 	OverlayKindWireguard OverlayKind = "wireguard"
 )
@@ -1730,6 +1875,8 @@ func (e OverlayKind) Valid() bool {
 	case OverlayKindProfile:
 		return true
 	case OverlayKindRule:
+		return true
+	case OverlayKindTime:
 		return true
 	case OverlayKindTls:
 		return true
@@ -2197,6 +2344,7 @@ const (
 	RunStepTypeRemove    RunStepType = "remove"
 	RunStepTypeRestore   RunStepType = "restore"
 	RunStepTypeRule      RunStepType = "rule"
+	RunStepTypeTime      RunStepType = "time"
 	RunStepTypeTls       RunStepType = "tls"
 	RunStepTypeWait      RunStepType = "wait"
 	RunStepTypeWireguard RunStepType = "wireguard"
@@ -2220,6 +2368,8 @@ func (e RunStepType) Valid() bool {
 	case RunStepTypeRestore:
 		return true
 	case RunStepTypeRule:
+		return true
+	case RunStepTypeTime:
 		return true
 	case RunStepTypeTls:
 		return true
@@ -2364,6 +2514,78 @@ func (e SystemInfoArch) Valid() bool {
 	case Amd64:
 		return true
 	case Arm64:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TimeFaultAnswer.
+const (
+	TimeFaultAnswerKissOfDeath    TimeFaultAnswer = "kiss_of_death"
+	TimeFaultAnswerNormal         TimeFaultAnswer = "normal"
+	TimeFaultAnswerOriginMismatch TimeFaultAnswer = "origin_mismatch"
+	TimeFaultAnswerSilence        TimeFaultAnswer = "silence"
+	TimeFaultAnswerUnsynchronized TimeFaultAnswer = "unsynchronized"
+	TimeFaultAnswerWrongMode      TimeFaultAnswer = "wrong_mode"
+	TimeFaultAnswerZeroTransmit   TimeFaultAnswer = "zero_transmit"
+)
+
+// Valid indicates whether the value is a known member of the TimeFaultAnswer enum.
+func (e TimeFaultAnswer) Valid() bool {
+	switch e {
+	case TimeFaultAnswerKissOfDeath:
+		return true
+	case TimeFaultAnswerNormal:
+		return true
+	case TimeFaultAnswerOriginMismatch:
+		return true
+	case TimeFaultAnswerSilence:
+		return true
+	case TimeFaultAnswerUnsynchronized:
+		return true
+	case TimeFaultAnswerWrongMode:
+		return true
+	case TimeFaultAnswerZeroTransmit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TimeFaultKissCode.
+const (
+	TimeFaultKissCodeDENY TimeFaultKissCode = "DENY"
+	TimeFaultKissCodeRATE TimeFaultKissCode = "RATE"
+	TimeFaultKissCodeRSTR TimeFaultKissCode = "RSTR"
+)
+
+// Valid indicates whether the value is a known member of the TimeFaultKissCode enum.
+func (e TimeFaultKissCode) Valid() bool {
+	switch e {
+	case TimeFaultKissCodeDENY:
+		return true
+	case TimeFaultKissCodeRATE:
+		return true
+	case TimeFaultKissCodeRSTR:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TimeFaultLeap.
+const (
+	TimeFaultLeapDelete TimeFaultLeap = "delete"
+	TimeFaultLeapInsert TimeFaultLeap = "insert"
+)
+
+// Valid indicates whether the value is a known member of the TimeFaultLeap enum.
+func (e TimeFaultLeap) Valid() bool {
+	switch e {
+	case TimeFaultLeapDelete:
+		return true
+	case TimeFaultLeapInsert:
 		return true
 	default:
 		return false
@@ -2555,9 +2777,10 @@ func (e TokenScope) Valid() bool {
 
 // Defines values for WaitConditionFor.
 const (
-	WaitConditionForConnected WaitConditionFor = "connected"
-	WaitConditionForDnsQuery  WaitConditionFor = "dns_query"
-	WaitConditionForOnline    WaitConditionFor = "online"
+	WaitConditionForConnected    WaitConditionFor = "connected"
+	WaitConditionForDnsQuery     WaitConditionFor = "dns_query"
+	WaitConditionForNtpQuerySeen WaitConditionFor = "ntp_query_seen"
+	WaitConditionForOnline       WaitConditionFor = "online"
 )
 
 // Valid indicates whether the value is a known member of the WaitConditionFor enum.
@@ -2566,6 +2789,8 @@ func (e WaitConditionFor) Valid() bool {
 	case WaitConditionForConnected:
 		return true
 	case WaitConditionForDnsQuery:
+		return true
+	case WaitConditionForNtpQuerySeen:
 		return true
 	case WaitConditionForOnline:
 		return true
@@ -3231,7 +3456,7 @@ type Capabilities struct {
 	DiagnosticTypes *[]string     `json:"diagnostic_types,omitempty"`
 	FaultFamilies   []FaultFamily `json:"fault_families"`
 
-	// Features Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `tls.cases`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `wireguard.actions`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `diagnostics`, `probes`, `metrics`, `port_forwards`.
+	// Features Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `tls.cases`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `wireguard.actions`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `time.faults`, `ntp.server`, `diagnostics`, `probes`, `metrics`, `port_forwards`.
 	Features []string `json:"features"`
 
 	// Limits The capacity limits of this gateway (plan §3.3); a change above one is `capacity_exceeded`.
@@ -3431,10 +3656,10 @@ type CertificateUpload struct {
 }
 
 // Check Exactly one check type besides `window` and `name`. Checks observe the scenario
-// target (flows, DNS log, TLS handshake events) inside the window. A step has two moments: the timeline
+// target (flows, DNS log, NTP queries, TLS handshake events) inside the window. A step has two moments: the timeline
 // hands its change to the engine, and the engine answers that the apply is verified; the change takes effect
 // in the kernel somewhere between the two. The window is placed so that this cannot make the check wrong.
-// A positive check (`reconnected`, `traffic_seen`, `dns_query_seen`) looks for what the change makes possible:
+// A positive check (`reconnected`, `traffic_seen`, `dns_query_seen`, `ntp_queried`) looks for what the change makes possible:
 // its window opens when `window.from` is handed over and, with `until`, closes at the answer of that step.
 // A negative check (`no_connection`, `traffic_not_seen`) claims that nothing happens while the change is in
 // force: its window opens at the answer of `window.from` and, with `until`, closes when that step is handed over.
@@ -3447,7 +3672,7 @@ type CertificateUpload struct {
 // connection that began after `window_end` does not count, however late the poll reads it. A connection
 // without a start time cannot be dated and is judged by the poll. DNS queries are placed by the time stamp
 // in the DNS log, not by the moment the log is read. A positive check (`reconnected`, `traffic_seen`,
-// `dns_query_seen`) passes at its first observation and fails when the window closes without one;
+// `dns_query_seen`, `ntp_queried`) passes at its first observation and fails when the window closes without one;
 // a negative check (`no_connection`, `traffic_not_seen`) fails at its first observation and passes when
 // the window closes. A run lasts until its last check is decided, so a window may reach past the last
 // step; the overlays of the run stay until then. A run with a failed check ends as `failed`; one with a
@@ -3472,6 +3697,14 @@ type Check struct {
 
 	// NoConnection No connection matching the selector is established inside the window.
 	NoConnection *TrafficMatch `json:"no_connection,omitempty"`
+
+	// NtpQueried A device of the target asks the gateway's NTP server for the time inside the window (M34): the query is in the
+	// server's log with a time stamp inside the window, whatever the server answered (a time fault, silence included).
+	// That the device asked is what the network shows; whether it took the answer is not visible there, its effect is
+	// (a TLS check, or the device's own log). A device with a hardcoded server asks the gateway only where its
+	// queries are redirected (`ntp.redirect_hardcoded`, or a time fault of its scope), so a missing query can mean
+	// that the device uses NTS or another source of time (plan §6, risk 37). The block has no fields: `ntp_queried: {}`.
+	NtpQueried *NtpQueriedCheck `json:"ntp_queried,omitempty"`
 
 	// Reconnected A new connection of the target matching the selector is established inside the window: one that was there
 	// when the window opened does not count, one that is only trying (TCP before the handshake is through, a UDP
@@ -3543,7 +3776,8 @@ type CheckWindow struct {
 }
 
 // ConfigFault A persistent fault (configuration layer). Only families `impairment`, `mtu` and
-// `tunnel`; DNS faults, TLS cases and DHCP actions exist only as overlays (plan §2.6–2.8).
+// `tunnel`; DNS faults, TLS cases, DHCP actions and time faults exist only as overlays (plan §2.6–2.8, §2.18; persistent
+// time faults follow with M39).
 // `source` is required except for `tunnel`.
 type ConfigFault struct {
 	// Blackout Drop everything (netem loss 100 %).
@@ -3926,7 +4160,10 @@ type DhcpOptions struct {
 	// Domain Option 15.
 	Domain *string `json:"domain,omitempty"`
 
-	// NtpServers Option 42.
+	// NtpServers Option 42. Default - the network's gateway address (the NTP server of Chaos Gateway, M34) for a network whose
+	// time service is on (`ntp.enabled`) and where the service namespace exists; a network that names servers here
+	// keeps them, and the time faults then reach a device only through the redirect of hardcoded servers
+	// (`ntp.redirect_hardcoded`, or the automatic redirect of a scope with a time fault).
 	NtpServers *[]Ipv4 `json:"ntp_servers,omitempty"`
 
 	// Router Option 3. Default - the network's gateway address.
@@ -4310,7 +4547,11 @@ type Event struct {
 	// (`data`: `overlay`, `network`, for a device's action `device`, and `count`). `events_lost` is synthetic: the server sends it instead of a replay
 	// when a client's `Last-Event-ID` is from an earlier boot or older than the replay buffer, so
 	// the client knows to treat its own state as possibly stale (`data.reason`: `restart` or
-	// `expired`).
+	// `expired`). `ntp_answered` says that a time fault shaped an answer of the NTP server (`data`: `overlay`, `device`,
+	// `answer`, at most one per device and fault every 10 s); `ntp_query_seen` that a device asked the server for the
+	// time (`data`: `device`; the wait condition of that name reads the server's own record of the queries and does not
+	// depend on this event, so the event may be limited without a wait missing a query); `nts_seen` that a device made an
+	// NTS key-establishment connection (TCP 4460), which the server cannot answer (once per device).
 	Type EventType `json:"type"`
 }
 
@@ -4321,7 +4562,11 @@ type Event struct {
 // (`data`: `overlay`, `network`, for a device's action `device`, and `count`). `events_lost` is synthetic: the server sends it instead of a replay
 // when a client's `Last-Event-ID` is from an earlier boot or older than the replay buffer, so
 // the client knows to treat its own state as possibly stale (`data.reason`: `restart` or
-// `expired`).
+// `expired`). `ntp_answered` says that a time fault shaped an answer of the NTP server (`data`: `overlay`, `device`,
+// `answer`, at most one per device and fault every 10 s); `ntp_query_seen` that a device asked the server for the
+// time (`data`: `device`; the wait condition of that name reads the server's own record of the queries and does not
+// depend on this event, so the event may be limited without a wait missing a query); `nts_seen` that a device made an
+// NTS key-establishment connection (TCP 4460), which the server cannot answer (once per device).
 type EventType string
 
 // Explanation defines model for Explanation.
@@ -4358,7 +4603,9 @@ type Explanation struct {
 	// maintainer on 2026-10-11. The families `dns` and `dhcp` are resolved for every destination: a DHCP
 	// action overlay whose scope covers the device and a DNS fault without names are winners for any
 	// address asked, although they act on the device's name resolution and lease, not on a connection to
-	// that address; a client that draws what acts on a connection takes `impairment`, `mtu`, `tls` and
+	// that address. The family `time` is resolved like `tls`, for UDP traffic to the NTP port or to the ports the
+	// fault names, and for no other: a query without a protocol and a port, or for a TCP flow, has no time
+	// winner. A client that draws what acts on a connection takes `impairment`, `mtu`, `tls`, `time` and
 	// `tunnel`.
 	Faults []struct {
 		Family     FaultFamily `json:"family"`
@@ -4481,8 +4728,8 @@ type ExternalRouting struct {
 	Table  *int          `json:"table,omitempty"`
 }
 
-// FaultBody A fault of family `impairment` (default), `mtu` or `tunnel`. Families `dns`, `tls`
-// and `dhcp` have their own bodies (`DnsFault`, `TlsCase`, `DhcpAction`).
+// FaultBody A fault of family `impairment` (default), `mtu` or `tunnel`. Families `dns`, `tls`,
+// `dhcp` and `time` have their own bodies (`DnsFault`, `TlsCase`, `DhcpAction`, `TimeFault`).
 //   - `impairment` - `ImpairmentParams` plus an optional `TrafficMatch`.
 //   - `mtu` - `mtu` plus an optional `TrafficMatch`.
 //   - `tunnel` - `tunnel` plus `ImpairmentParams` limited to latency, jitter, loss,
@@ -4603,7 +4850,8 @@ type FaultRefLayer string
 // FaultView defines model for FaultView.
 type FaultView struct {
 	// Config A persistent fault (configuration layer). Only families `impairment`, `mtu` and
-	// `tunnel`; DNS faults, TLS cases and DHCP actions exist only as overlays (plan §2.6–2.8).
+	// `tunnel`; DNS faults, TLS cases, DHCP actions and time faults exist only as overlays (plan §2.6–2.8, §2.18; persistent
+	// time faults follow with M39).
 	// `source` is required except for `tunnel`.
 	Config   ConfigFault `json:"config"`
 	Counters *Counter    `json:"counters,omitempty"`
@@ -5157,6 +5405,11 @@ type LanNetwork struct {
 	// Nat Masquerade towards the uplink.
 	Nat *bool `json:"nat,omitempty"`
 
+	// Ntp The network's use of the gateway's NTP server (M34, plan §2.18). A network without the block has the defaults.
+	// The server runs in the service namespace and answers UDP 123 on the network's gateway address, so a network
+	// without the service namespace has no time service (the preview warns).
+	Ntp *NetworkNtp `json:"ntp,omitempty"`
+
 	// Routes Downstream routes for devices behind another router in this network.
 	Routes *[]DownstreamRoute `json:"routes,omitempty"`
 	Type   LanNetworkType     `json:"type"`
@@ -5350,6 +5603,24 @@ type NetworkDns struct {
 	StaticEntries     *[]DnsStaticEntry `json:"static_entries,omitempty"`
 }
 
+// NetworkNtp The network's use of the gateway's NTP server (M34, plan §2.18). A network without the block has the defaults.
+// The server runs in the service namespace and answers UDP 123 on the network's gateway address, so a network
+// without the service namespace has no time service (the preview warns).
+type NetworkNtp struct {
+	// Enabled The network's devices are served by the gateway's NTP server: queries to the gateway address (UDP 123)
+	// are answered by it, and DHCP hands the gateway address out as NTP server (option 42) unless
+	// `dhcp.options.ntp_servers` names others. On by default, as the DNS proxy (plan Q2).
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// RedirectHardcoded Redirect NTP (UDP 123) to other servers than the gateway to the NTP server (M34): the queries of the network's
+	// devices are answered by it and the answer leaves with the address and port of the server the device asked, so
+	// clients that check the source of the reply accept it. What stays inside the network and the networks behind its
+	// routers is not redirected. The traffic of a scope with an active time fault is redirected whether or not this is
+	// set (a time fault must not silently miss a device with a hardcoded server, plan Q3); this setting only decides
+	// about redirecting without a fault. A network without the service namespace cannot redirect: the preview warns.
+	RedirectHardcoded *bool `json:"redirect_hardcoded,omitempty"`
+}
+
 // NetworkPage defines model for NetworkPage.
 type NetworkPage struct {
 	Items      []NetworkView `json:"items"`
@@ -5401,6 +5672,139 @@ type NetworkView struct {
 	Id     Uuid          `json:"id"`
 	Status NetworkStatus `json:"status"`
 }
+
+// NtpQueriedCheck A device of the target asks the gateway's NTP server for the time inside the window (M34): the query is in the
+// server's log with a time stamp inside the window, whatever the server answered (a time fault, silence included).
+// That the device asked is what the network shows; whether it took the answer is not visible there, its effect is
+// (a TLS check, or the device's own log). A device with a hardcoded server asks the gateway only where its
+// queries are redirected (`ntp.redirect_hardcoded`, or a time fault of its scope), so a missing query can mean
+// that the device uses NTS or another source of time (plan §6, risk 37). The block has no fields: `ntp_queried: {}`.
+type NtpQueriedCheck = map[string]interface{}
+
+// NtpQueryLogEntry defines model for NtpQueryLogEntry.
+type NtpQueryLogEntry struct {
+	// Answer How the server answered; `dropped` - not answered because the device's rate limit (16 per second) was exceeded.
+	Answer *NtpQueryLogEntryAnswer `json:"answer,omitempty"`
+	Client Ipv4                    `json:"client"`
+
+	// Device Filled in by the API from the observed state.
+	Device *Uuid `json:"device,omitempty"`
+
+	// Fault The time fault overlay that shaped the answer.
+	Fault *Uuid `json:"fault,omitempty"`
+
+	// Kind `nts_ke` - a connection to the server's NTS key-establishment port (TCP 4460) that the server cannot answer (plan §2.18); the fields below are absent.
+	Kind *NtpQueryLogEntryKind `json:"kind,omitempty"`
+
+	// OffsetMs The served time minus the correct time, in milliseconds.
+	OffsetMs *int64 `json:"offset_ms,omitempty"`
+
+	// Port The port of the server the query arrived on; it tells the destination selector it was redirected for (decision D36).
+	Port int `json:"port"`
+
+	// ServedTime The transmit time stamp of the answer; absent without an answer.
+	ServedTime *time.Time `json:"served_time,omitempty"`
+
+	// Server The server the device asked (`ip:port`), known where a destination selector has a fault; the API fills in the server for other redirected servers from the flows it observes, best effort.
+	Server *string `json:"server,omitempty"`
+
+	// Time When the query arrived (the kernel's receive time stamp).
+	Time time.Time `json:"time"`
+
+	// Version The NTP version of the query.
+	Version *int `json:"version,omitempty"`
+}
+
+// NtpQueryLogEntryAnswer How the server answered; `dropped` - not answered because the device's rate limit (16 per second) was exceeded.
+type NtpQueryLogEntryAnswer string
+
+// NtpQueryLogEntryKind `nts_ke` - a connection to the server's NTS key-establishment port (TCP 4460) that the server cannot answer (plan §2.18); the fields below are absent.
+type NtpQueryLogEntryKind string
+
+// NtpServiceConfig defines model for NtpServiceConfig.
+type NtpServiceConfig struct {
+	// Faults Resolved time faults, the precedence of §2.4 already applied per group of sources and per redirect port: for a
+	// query the first entry whose `sources` contain the client and whose `port` is the port the query arrived on
+	// decides, and the server walks no further. A query that no entry decides is answered with the correct time.
+	//
+	// The compiler emits one entry for every group of sources with the same ranked list of time faults and for every
+	// port that queries of the group can arrive on (123 and the redirect ports of the selectors in its list): the
+	// first fault of the ranked list that has no destination selector or whose selector is redirected to that port
+	// (`domain.TimeWinner`). A fault without a destination selector therefore appears once for each of those
+	// ports, a fault for one server on the port of that server only, and a newer fault without a selector hides an
+	// older fault for one server. The destination NAT of a selector is limited to the sources of the groups that
+	// have it in their list and is ordered like the list, so a query arrives on the port of the first fault whose
+	// selector matches the server asked; the queries of other sources to that server arrive on 123 like all the rest.
+	// A selector is the destination together with `ports` and `port_ranges`: a fault with other ports and no
+	// destination has a selector of its own, and it is a fault "without a destination selector" only when it has
+	// neither a destination nor ports other than 123.
+	Faults []struct {
+		// Absolute RFC 3339 with time zone. The instant the served time shows when the fault takes effect.
+		Absolute *time.Time                    `json:"absolute,omitempty"`
+		Answer   *NtpServiceConfigFaultsAnswer `json:"answer,omitempty"`
+
+		// Destination Exactly one property. Omit the whole destination for "any".
+		Destination *Destination `json:"destination,omitempty"`
+
+		// KissCode Required for `kiss_of_death`, not allowed with another `answer`.
+		KissCode *NtpServiceConfigFaultsKissCode `json:"kiss_code,omitempty"`
+
+		// Leap Leap indicator 1 (a second is inserted at the end of the day, 23:59:60) or 2 (deleted).
+		Leap *NtpServiceConfigFaultsLeap `json:"leap,omitempty"`
+
+		// Offset A signed span of time: an optional sign and one or more numbers with a unit, `ms`, `s`, `m`, `h`, `d` (24 h), `w`
+		// (7 d) and `y` (365 d). A missing sign is a plus. `+400d`, `-90s` and `-1y2d` are valid. It is a span of the
+		// served time against the correct time, so it is not a `Duration`, which has no sign and no days. It has at most 64
+		// characters and must fit about 292 years either way.
+		//
+		//
+		// Example: +400d
+		Offset  *TimeOffset `json:"offset,omitempty"`
+		Overlay Uuid        `json:"overlay"`
+
+		// Port The port of the server the fault's destination selector is redirected to (decision D36): 123 for the
+		// gateway address and for a fault without a destination selector, further ports from 12301 upward, one
+		// per distinct destination selector.
+		Port       int          `json:"port"`
+		PortRanges *[]PortRange `json:"port_ranges,omitempty"`
+		Ports      *[]int       `json:"ports,omitempty"`
+		Protocol   *Protocol    `json:"protocol,omitempty"`
+
+		// Since The instant the fault took effect: the `updated_at` of the overlay (of the activation, for the part of a
+		// profile), so it changes when the overlay is replaced and not when the configuration changes or the
+		// server restarts. The server serves `absolute` plus the time elapsed since then, and a skew of
+		// `skew_ppm` times the time elapsed since then, from this instant and not from the moment it received
+		// the entry.
+		Since time.Time `json:"since"`
+
+		// SkewPpm Parts per million; positive runs fast, negative slow. -1000000 is a clock that stands still.
+		SkewPpm *float32     `json:"skew_ppm,omitempty"`
+		Sources []Ipv4OrCidr `json:"sources"`
+	} `json:"faults"`
+	Generation int64 `json:"generation"`
+
+	// Listen The UDP ports the server listens on (123 and the redirect ports of the faults, at most 32 of them, decision D36), in the service namespace.
+	Listen []int `json:"listen"`
+
+	// Networks The networks whose devices the server serves; the server's reference id in an answer is the gateway address of the client's network.
+	Networks []struct {
+		// Clients Source range of the network's clients.
+		Clients *Ipv4Cidr `json:"clients,omitempty"`
+
+		// Gateway The network's gateway address the clients query.
+		Gateway Ipv4 `json:"gateway"`
+		Network Uuid `json:"network"`
+	} `json:"networks"`
+}
+
+// NtpServiceConfigFaultsAnswer defines model for NtpServiceConfig.Faults.Answer.
+type NtpServiceConfigFaultsAnswer string
+
+// NtpServiceConfigFaultsKissCode Required for `kiss_of_death`, not allowed with another `answer`.
+type NtpServiceConfigFaultsKissCode string
+
+// NtpServiceConfigFaultsLeap Leap indicator 1 (a second is inserted at the end of the day, 23:59:60) or 2 (deleted).
+type NtpServiceConfigFaultsLeap string
 
 // OspfSettings defines model for OspfSettings.
 type OspfSettings struct {
@@ -5465,8 +5869,8 @@ type Overlay struct {
 	// an overlay as read has `ttl` and `expires_at`, never `expires_in`.
 	ExpiresIn *Duration `json:"expires_in,omitempty"`
 
-	// Fault A fault of family `impairment` (default), `mtu` or `tunnel`. Families `dns`, `tls`
-	// and `dhcp` have their own bodies (`DnsFault`, `TlsCase`, `DhcpAction`).
+	// Fault A fault of family `impairment` (default), `mtu` or `tunnel`. Families `dns`, `tls`,
+	// `dhcp` and `time` have their own bodies (`DnsFault`, `TlsCase`, `DhcpAction`, `TimeFault`).
 	// - `impairment` - `ImpairmentParams` plus an optional `TrafficMatch`.
 	// - `mtu` - `mtu` plus an optional `TrafficMatch`.
 	// - `tunnel` - `tunnel` plus `ImpairmentParams` limited to latency, jitter, loss,
@@ -5568,6 +5972,46 @@ type Overlay struct {
 	// destination/port).
 	Target *Scope `json:"target,omitempty"`
 
+	// Time Time family (plan §2.18, M34), implemented by the gateway's NTP server: an overlay of the kind `time`, or the
+	// `time` part of an activated profile. The server answers a query of a client with the first time fault whose
+	// scope contains the client and whose destination matches the server the client asked; the faults of one client
+	// are ordered by the precedence of §2.4 (a device before a group before a network, the newer first at the same
+	// level, a fault before a part of a profile on the same scope). A time fault competes only with other time faults:
+	// a latency fault of the device does not cancel a wrong time. A time fault is an overlay only (persistent time
+	// faults follow with M39); its target is a device, a group or a network, never the global scope.
+	//
+	// What the server answers (plan §2.18):
+	// - `offset` - the correct time plus the offset, in the receive, transmit and reference timestamps.
+	// - `absolute` - that instant at the moment the fault takes effect, running on from there at the rate of the clock.
+	// - `skew_ppm` - on top of `offset` or `absolute`, a time that drifts from the moment the fault takes effect on: after
+	//   10 s a skew of 1000 ppm adds 10 ms. The moment is the `updated_at` of the overlay, so a restart of the server or
+	//   a change of another overlay does not restart the drift.
+	// - `leap` - leap indicator 1 (`insert`) or 2 (`delete`) in the answer.
+	// - `answer` - how the server answers instead of the time: `normal` (the default, the answer is built from the fields
+	//   above), `unsynchronized` (leap indicator 3 and stratum 16), `kiss_of_death` (stratum 0 with `kiss_code` as the
+	//   reference id), `silence` (no answer, the query is counted) and the invalid answers `origin_mismatch` (the origin
+	//   timestamp is not the client's transmit timestamp), `zero_transmit` (a transmit timestamp of zero) and
+	//   `wrong_mode` (the mode of the answer is not 4).
+	//
+	// A fault must change something: at least one of `offset`, `absolute`, `skew_ppm`, `leap` or an `answer` other than
+	// `normal`. `offset` and `absolute` exclude each other. An `answer` other than `normal` is the whole fault: it
+	// excludes `offset`, `absolute`, `skew_ppm` and `leap`. The activation and the removal of a fault are jumps of the
+	// served time; a device sees either only when it polls next. An `absolute` time is not before 1900-01-01 (an NTP
+	// timestamp starts there). An `offset` is not bounded against that date, because the served time is its sum with the
+	// clock of the moment: how the server answers when it falls outside the era of the protocol is the server's matter.
+	//
+	// The destination selector (`TrafficMatch`) narrows the fault to the server the device asked, an address or prefix
+	// (`destination.cidr`) or a hostname of the DNS-derived set (`destination.hostname`, plan §2.6); `network` and
+	// `uplink` are no destinations of a time fault. `protocol` is `udp` or omitted, `ports` default to 123; the ports
+	// 53, 67 and 68, which the gateway's DNS and DHCP services use, are refused (as a list entry or inside a range), since their
+	// traffic would end in the NTP server. The redirect keys on the whole selector, the destination and the ports
+	// together: a fault with `ports` and no destination redirects those ports of every server to a port of its own. The server
+	// learns the destination from the port of the redirect it received the query on (decision D36): each distinct
+	// destination selector of an active time fault gets a port of its own, at most 32 distinct destinations, and the
+	// rest is served like the scope without a selector with a warning. A fault without a destination selector applies
+	// to every server the scope's devices ask, the gateway's own address included.
+	Time *TimeFault `json:"time,omitempty"`
+
 	// Tls TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
 	// (certificate and handshake cases, M21). The case `intercept` (M22) is also decided by the responder, which hands the
 	// connection to the interception proxy (mitmproxy sidecar) instead of answering it: the proxy terminates the device's TLS
@@ -5613,7 +6057,7 @@ type OverlayPage struct {
 	NextCursor *string   `json:"next_cursor,omitempty"`
 }
 
-// OverlayRequest Exactly one of `profile`, `fault`, `rule`, `dns`, `tls`, `dhcp`, `wireguard`.
+// OverlayRequest Exactly one of `profile`, `fault`, `rule`, `dns`, `tls`, `dhcp`, `time`, `wireguard`.
 // `target` is required except for tunnel faults and WireGuard actions. Example (plan §2.15):
 // `{"target": {"device": "esp32-42"}, "profile": "bad-lte", "ttl": "5m"}`.
 //
@@ -5628,14 +6072,18 @@ type OverlayPage struct {
 // | `dns` | the set of `names` |
 // | `tls` | `TrafficMatch` + `sni` |
 // | `dhcp` | `action` |
+// | `time` | `TrafficMatch` (the destination selector of the asked server; none - the scope's whole NTP traffic) |
 // | `wireguard` | `client` or `link` + `action` |
 //
 // **Order of overlay rules:** newest first (by `updated_at`), all before configured rules.
 //
 // **Specificity of non-impairment families** (plan §2.4 levels): DNS `names` and TLS
 // `TrafficMatch`/`sni` count as destination/port; DHCP actions target a device (level 4)
-// or a network (level 8); tunnel faults are resolved per tunnel only (overlay before
-// configuration, newest wins) and have no level.
+// or a network (level 8); a time fault (M34) always has a port part, its `ports` or 123, like a TLS case, and its
+// destination selector counts as destination (a device level 1 with a destination and 3 without, a group 5, a
+// network 7). A fault for one server beats a fault of the same scope for every server on a device scope
+// only (level 1 against 3); on a group and on a network both have the level of the table of §2.4 and the newer one
+// comes first, as for every other family; tunnel faults are resolved per tunnel only (overlay before configuration, newest wins) and have no level.
 type OverlayRequest struct {
 	// Dhcp DHCP family (plan §2.7, M23), target a network or a device (never a group or the global
 	// scope). `short_lease`, `set_options`, `silence` and `force_new_ip` last as long as the
@@ -5682,8 +6130,8 @@ type OverlayRequest struct {
 	// an overlay as read has `ttl` and `expires_at`, never `expires_in`.
 	ExpiresIn *Duration `json:"expires_in,omitempty"`
 
-	// Fault A fault of family `impairment` (default), `mtu` or `tunnel`. Families `dns`, `tls`
-	// and `dhcp` have their own bodies (`DnsFault`, `TlsCase`, `DhcpAction`).
+	// Fault A fault of family `impairment` (default), `mtu` or `tunnel`. Families `dns`, `tls`,
+	// `dhcp` and `time` have their own bodies (`DnsFault`, `TlsCase`, `DhcpAction`, `TimeFault`).
 	// - `impairment` - `ImpairmentParams` plus an optional `TrafficMatch`.
 	// - `mtu` - `mtu` plus an optional `TrafficMatch`.
 	// - `tunnel` - `tunnel` plus `ImpairmentParams` limited to latency, jitter, loss,
@@ -5752,6 +6200,46 @@ type OverlayRequest struct {
 	// group → 5–6, network and remote_network → 7–8, global → 9–10 (with or without a
 	// destination/port).
 	Target *Scope `json:"target,omitempty"`
+
+	// Time Time family (plan §2.18, M34), implemented by the gateway's NTP server: an overlay of the kind `time`, or the
+	// `time` part of an activated profile. The server answers a query of a client with the first time fault whose
+	// scope contains the client and whose destination matches the server the client asked; the faults of one client
+	// are ordered by the precedence of §2.4 (a device before a group before a network, the newer first at the same
+	// level, a fault before a part of a profile on the same scope). A time fault competes only with other time faults:
+	// a latency fault of the device does not cancel a wrong time. A time fault is an overlay only (persistent time
+	// faults follow with M39); its target is a device, a group or a network, never the global scope.
+	//
+	// What the server answers (plan §2.18):
+	// - `offset` - the correct time plus the offset, in the receive, transmit and reference timestamps.
+	// - `absolute` - that instant at the moment the fault takes effect, running on from there at the rate of the clock.
+	// - `skew_ppm` - on top of `offset` or `absolute`, a time that drifts from the moment the fault takes effect on: after
+	//   10 s a skew of 1000 ppm adds 10 ms. The moment is the `updated_at` of the overlay, so a restart of the server or
+	//   a change of another overlay does not restart the drift.
+	// - `leap` - leap indicator 1 (`insert`) or 2 (`delete`) in the answer.
+	// - `answer` - how the server answers instead of the time: `normal` (the default, the answer is built from the fields
+	//   above), `unsynchronized` (leap indicator 3 and stratum 16), `kiss_of_death` (stratum 0 with `kiss_code` as the
+	//   reference id), `silence` (no answer, the query is counted) and the invalid answers `origin_mismatch` (the origin
+	//   timestamp is not the client's transmit timestamp), `zero_transmit` (a transmit timestamp of zero) and
+	//   `wrong_mode` (the mode of the answer is not 4).
+	//
+	// A fault must change something: at least one of `offset`, `absolute`, `skew_ppm`, `leap` or an `answer` other than
+	// `normal`. `offset` and `absolute` exclude each other. An `answer` other than `normal` is the whole fault: it
+	// excludes `offset`, `absolute`, `skew_ppm` and `leap`. The activation and the removal of a fault are jumps of the
+	// served time; a device sees either only when it polls next. An `absolute` time is not before 1900-01-01 (an NTP
+	// timestamp starts there). An `offset` is not bounded against that date, because the served time is its sum with the
+	// clock of the moment: how the server answers when it falls outside the era of the protocol is the server's matter.
+	//
+	// The destination selector (`TrafficMatch`) narrows the fault to the server the device asked, an address or prefix
+	// (`destination.cidr`) or a hostname of the DNS-derived set (`destination.hostname`, plan §2.6); `network` and
+	// `uplink` are no destinations of a time fault. `protocol` is `udp` or omitted, `ports` default to 123; the ports
+	// 53, 67 and 68, which the gateway's DNS and DHCP services use, are refused (as a list entry or inside a range), since their
+	// traffic would end in the NTP server. The redirect keys on the whole selector, the destination and the ports
+	// together: a fault with `ports` and no destination redirects those ports of every server to a port of its own. The server
+	// learns the destination from the port of the redirect it received the query on (decision D36): each distinct
+	// destination selector of an active time fault gets a port of its own, at most 32 distinct destinations, and the
+	// rest is served like the scope without a selector with a warning. A fault without a destination selector applies
+	// to every server the scope's devices ask, the gateway's own address included.
+	Time *TimeFault `json:"time,omitempty"`
 
 	// Tls TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
 	// (certificate and handshake cases, M21). The case `intercept` (M22) is also decided by the responder, which hands the
@@ -6290,6 +6778,12 @@ type ProfileParts struct {
 	Impairment *ImpairmentParams `json:"impairment,omitempty"`
 	Mtu        *MtuParams        `json:"mtu,omitempty"`
 
+	// Time A part competes like a time fault of its own, so a profile with this part is activated on a device, a group or
+	// a network, never on the global scope or a remote network: the activation is refused with `target_kind` as a
+	// whole (a profile with a time part has no partial activation). If a profile that is already active gains the
+	// part later, the part does not apply on such a target and the other parts do.
+	Time *TimeFault `json:"time,omitempty"`
+
 	// Tls TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
 	// (certificate and handshake cases, M21). The case `intercept` (M22) is also decided by the responder, which hands the
 	// connection to the interception proxy (mitmproxy sidecar) instead of answering it: the proxy terminates the device's TLS
@@ -6311,7 +6805,8 @@ type ProfileView struct {
 
 	// Available False while a part of the profile is not in this build. Every part is available since M22 (the `dns` family
 	// since M20, the certificate and handshake cases of the `tls` family, `tls-broken` among them, since M21, and the
-	// case `intercept` since M22), so this is true for every profile today; the field stays for a part a later
+	// case `intercept` since M22) except the `time` part (M34): a profile with a `time` part is false here, with the
+	// milestone M34 in `unavailable_reason`, until the NTP server is in the build; the field stays for a part a later
 	// milestone adds. A profile with a part that is not in the build can be defined and shown, but activating it
 	// is refused with `unsupported_feature`. So is applying a revision that gives a profile
 	// such a part while an overlay activates it (the profile and the milestone are named; remove
@@ -6915,7 +7410,7 @@ type SetupStatus struct {
 	SuggestedUplink *InterfaceRef `json:"suggested_uplink,omitempty"`
 }
 
-// Step Exactly one of `profile`, `fault`, `rule`, `dns`, `tls`, `dhcp`, `wireguard`,
+// Step Exactly one of `profile`, `fault`, `rule`, `dns`, `tls`, `dhcp`, `time`, `wireguard`,
 // `capture`, `wait`, `remove`, `restore`. `at` is the offset on the run's timeline; a
 // `wait` step stops the timeline until its condition holds, so later steps shift by the
 // waiting time. Steps with the same `at` run in list order. Tunnel faults and WireGuard
@@ -6970,8 +7465,8 @@ type Step struct {
 	// does not cancel a "DNS broken" profile of its network (E5).
 	Dns *DnsFault `json:"dns,omitempty"`
 
-	// Fault A fault of family `impairment` (default), `mtu` or `tunnel`. Families `dns`, `tls`
-	// and `dhcp` have their own bodies (`DnsFault`, `TlsCase`, `DhcpAction`).
+	// Fault A fault of family `impairment` (default), `mtu` or `tunnel`. Families `dns`, `tls`,
+	// `dhcp` and `time` have their own bodies (`DnsFault`, `TlsCase`, `DhcpAction`, `TimeFault`).
 	// - `impairment` - `ImpairmentParams` plus an optional `TrafficMatch`.
 	// - `mtu` - `mtu` plus an optional `TrafficMatch`.
 	// - `tunnel` - `tunnel` plus `ImpairmentParams` limited to latency, jitter, loss,
@@ -7043,6 +7538,46 @@ type Step struct {
 
 	// Target Narrows the scenario target (e.g. one device of the target group).
 	Target *Scope `json:"target,omitempty"`
+
+	// Time Time family (plan §2.18, M34), implemented by the gateway's NTP server: an overlay of the kind `time`, or the
+	// `time` part of an activated profile. The server answers a query of a client with the first time fault whose
+	// scope contains the client and whose destination matches the server the client asked; the faults of one client
+	// are ordered by the precedence of §2.4 (a device before a group before a network, the newer first at the same
+	// level, a fault before a part of a profile on the same scope). A time fault competes only with other time faults:
+	// a latency fault of the device does not cancel a wrong time. A time fault is an overlay only (persistent time
+	// faults follow with M39); its target is a device, a group or a network, never the global scope.
+	//
+	// What the server answers (plan §2.18):
+	// - `offset` - the correct time plus the offset, in the receive, transmit and reference timestamps.
+	// - `absolute` - that instant at the moment the fault takes effect, running on from there at the rate of the clock.
+	// - `skew_ppm` - on top of `offset` or `absolute`, a time that drifts from the moment the fault takes effect on: after
+	//   10 s a skew of 1000 ppm adds 10 ms. The moment is the `updated_at` of the overlay, so a restart of the server or
+	//   a change of another overlay does not restart the drift.
+	// - `leap` - leap indicator 1 (`insert`) or 2 (`delete`) in the answer.
+	// - `answer` - how the server answers instead of the time: `normal` (the default, the answer is built from the fields
+	//   above), `unsynchronized` (leap indicator 3 and stratum 16), `kiss_of_death` (stratum 0 with `kiss_code` as the
+	//   reference id), `silence` (no answer, the query is counted) and the invalid answers `origin_mismatch` (the origin
+	//   timestamp is not the client's transmit timestamp), `zero_transmit` (a transmit timestamp of zero) and
+	//   `wrong_mode` (the mode of the answer is not 4).
+	//
+	// A fault must change something: at least one of `offset`, `absolute`, `skew_ppm`, `leap` or an `answer` other than
+	// `normal`. `offset` and `absolute` exclude each other. An `answer` other than `normal` is the whole fault: it
+	// excludes `offset`, `absolute`, `skew_ppm` and `leap`. The activation and the removal of a fault are jumps of the
+	// served time; a device sees either only when it polls next. An `absolute` time is not before 1900-01-01 (an NTP
+	// timestamp starts there). An `offset` is not bounded against that date, because the served time is its sum with the
+	// clock of the moment: how the server answers when it falls outside the era of the protocol is the server's matter.
+	//
+	// The destination selector (`TrafficMatch`) narrows the fault to the server the device asked, an address or prefix
+	// (`destination.cidr`) or a hostname of the DNS-derived set (`destination.hostname`, plan §2.6); `network` and
+	// `uplink` are no destinations of a time fault. `protocol` is `udp` or omitted, `ports` default to 123; the ports
+	// 53, 67 and 68, which the gateway's DNS and DHCP services use, are refused (as a list entry or inside a range), since their
+	// traffic would end in the NTP server. The redirect keys on the whole selector, the destination and the ports
+	// together: a fault with `ports` and no destination redirects those ports of every server to a port of its own. The server
+	// learns the destination from the port of the redirect it received the query on (decision D36): each distinct
+	// destination selector of an active time fault gets a port of its own, at most 32 distinct destinations, and the
+	// rest is served like the scope without a selector with a warning. A fault without a destination selector applies
+	// to every server the scope's devices ask, the gateway's own address included.
+	Time *TimeFault `json:"time,omitempty"`
 
 	// Tls TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
 	// (certificate and handshake cases, M21). The case `intercept` (M22) is also decided by the responder, which hands the
@@ -7120,6 +7655,91 @@ type SystemInfo struct {
 
 // SystemInfoArch defines model for SystemInfo.Arch.
 type SystemInfoArch string
+
+// TimeFault Time family (plan §2.18, M34), implemented by the gateway's NTP server: an overlay of the kind `time`, or the
+// `time` part of an activated profile. The server answers a query of a client with the first time fault whose
+// scope contains the client and whose destination matches the server the client asked; the faults of one client
+// are ordered by the precedence of §2.4 (a device before a group before a network, the newer first at the same
+// level, a fault before a part of a profile on the same scope). A time fault competes only with other time faults:
+// a latency fault of the device does not cancel a wrong time. A time fault is an overlay only (persistent time
+// faults follow with M39); its target is a device, a group or a network, never the global scope.
+//
+// What the server answers (plan §2.18):
+//   - `offset` - the correct time plus the offset, in the receive, transmit and reference timestamps.
+//   - `absolute` - that instant at the moment the fault takes effect, running on from there at the rate of the clock.
+//   - `skew_ppm` - on top of `offset` or `absolute`, a time that drifts from the moment the fault takes effect on: after
+//     10 s a skew of 1000 ppm adds 10 ms. The moment is the `updated_at` of the overlay, so a restart of the server or
+//     a change of another overlay does not restart the drift.
+//   - `leap` - leap indicator 1 (`insert`) or 2 (`delete`) in the answer.
+//   - `answer` - how the server answers instead of the time: `normal` (the default, the answer is built from the fields
+//     above), `unsynchronized` (leap indicator 3 and stratum 16), `kiss_of_death` (stratum 0 with `kiss_code` as the
+//     reference id), `silence` (no answer, the query is counted) and the invalid answers `origin_mismatch` (the origin
+//     timestamp is not the client's transmit timestamp), `zero_transmit` (a transmit timestamp of zero) and
+//     `wrong_mode` (the mode of the answer is not 4).
+//
+// A fault must change something: at least one of `offset`, `absolute`, `skew_ppm`, `leap` or an `answer` other than
+// `normal`. `offset` and `absolute` exclude each other. An `answer` other than `normal` is the whole fault: it
+// excludes `offset`, `absolute`, `skew_ppm` and `leap`. The activation and the removal of a fault are jumps of the
+// served time; a device sees either only when it polls next. An `absolute` time is not before 1900-01-01 (an NTP
+// timestamp starts there). An `offset` is not bounded against that date, because the served time is its sum with the
+// clock of the moment: how the server answers when it falls outside the era of the protocol is the server's matter.
+//
+// The destination selector (`TrafficMatch`) narrows the fault to the server the device asked, an address or prefix
+// (`destination.cidr`) or a hostname of the DNS-derived set (`destination.hostname`, plan §2.6); `network` and
+// `uplink` are no destinations of a time fault. `protocol` is `udp` or omitted, `ports` default to 123; the ports
+// 53, 67 and 68, which the gateway's DNS and DHCP services use, are refused (as a list entry or inside a range), since their
+// traffic would end in the NTP server. The redirect keys on the whole selector, the destination and the ports
+// together: a fault with `ports` and no destination redirects those ports of every server to a port of its own. The server
+// learns the destination from the port of the redirect it received the query on (decision D36): each distinct
+// destination selector of an active time fault gets a port of its own, at most 32 distinct destinations, and the
+// rest is served like the scope without a selector with a warning. A fault without a destination selector applies
+// to every server the scope's devices ask, the gateway's own address included.
+type TimeFault struct {
+	// Absolute RFC 3339 with time zone. The instant the served time shows when the fault takes effect.
+	Absolute *time.Time       `json:"absolute,omitempty"`
+	Answer   *TimeFaultAnswer `json:"answer,omitempty"`
+
+	// Destination Exactly one property. Omit the whole destination for "any".
+	Destination *Destination `json:"destination,omitempty"`
+
+	// KissCode Required for `kiss_of_death`, not allowed with another `answer`.
+	KissCode *TimeFaultKissCode `json:"kiss_code,omitempty"`
+
+	// Leap Leap indicator 1 (a second is inserted at the end of the day, 23:59:60) or 2 (deleted).
+	Leap *TimeFaultLeap `json:"leap,omitempty"`
+
+	// Offset A signed span of time: an optional sign and one or more numbers with a unit, `ms`, `s`, `m`, `h`, `d` (24 h), `w`
+	// (7 d) and `y` (365 d). A missing sign is a plus. `+400d`, `-90s` and `-1y2d` are valid. It is a span of the
+	// served time against the correct time, so it is not a `Duration`, which has no sign and no days. It has at most 64
+	// characters and must fit about 292 years either way.
+	//
+	//
+	// Example: +400d
+	Offset     *TimeOffset  `json:"offset,omitempty"`
+	PortRanges *[]PortRange `json:"port_ranges,omitempty"`
+	Ports      *[]int       `json:"ports,omitempty"`
+	Protocol   *Protocol    `json:"protocol,omitempty"`
+
+	// SkewPpm Parts per million; positive runs fast, negative slow. -1000000 is a clock that stands still.
+	SkewPpm *float32 `json:"skew_ppm,omitempty"`
+}
+
+// TimeFaultAnswer defines model for TimeFault.Answer.
+type TimeFaultAnswer string
+
+// TimeFaultKissCode Required for `kiss_of_death`, not allowed with another `answer`.
+type TimeFaultKissCode string
+
+// TimeFaultLeap Leap indicator 1 (a second is inserted at the end of the day, 23:59:60) or 2 (deleted).
+type TimeFaultLeap string
+
+// TimeOffset A signed span of time: an optional sign and one or more numbers with a unit, `ms`, `s`, `m`, `h`, `d` (24 h), `w`
+// (7 d) and `y` (365 d). A missing sign is a plus. `+400d`, `-90s` and `-1y2d` are valid. It is a span of the
+// served time against the correct time, so it is not a `Duration`, which has no sign and no days. It has at most 64
+// characters and must fit about 292 years either way.
+//
+// Example: +400d
+type TimeOffset = string
 
 // TlsCase TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
 // (certificate and handshake cases, M21). The case `intercept` (M22) is also decided by the responder, which hands the
@@ -7391,7 +8011,10 @@ type WaitCondition struct {
 	// Destination Exactly one property. Omit the whole destination for "any".
 	Destination *Destination `json:"destination,omitempty"`
 
-	// For `connected` - a new connection matching the `TrafficMatch`; `dns_query` - a query for `name`.
+	// For `connected` - a new connection matching the `TrafficMatch`; `dns_query` - a query for `name`;
+	// `ntp_query_seen` - a device of the target asks the gateway's NTP server for the time (M34): a time fault
+	// shows only when the device polls next, so a scenario waits for the query instead of guessing. The
+	// `TrafficMatch` is not used.
 	For WaitConditionFor `json:"for"`
 
 	// Name Exact name or `*.suffix` (matches the suffix's subdomains, not the suffix itself).
@@ -7404,7 +8027,10 @@ type WaitCondition struct {
 	Timeout Duration `json:"timeout"`
 }
 
-// WaitConditionFor `connected` - a new connection matching the `TrafficMatch`; `dns_query` - a query for `name`.
+// WaitConditionFor `connected` - a new connection matching the `TrafficMatch`; `dns_query` - a query for `name`;
+// `ntp_query_seen` - a device of the target asks the gateway's NTP server for the time (M34): a time fault
+// shows only when the device polls next, so a scenario waits for the query instead of guessing. The
+// `TrafficMatch` is not used.
 type WaitConditionFor string
 
 // WireGuardAction WireGuard test action (plan §2.2.1, §2.2.2), lasting as long as the overlay:
@@ -7767,6 +8393,14 @@ type PostInterceptFlowsJSONBody = []InterceptFlowReport
 // PostInterceptKeylogJSONBody defines parameters for PostInterceptKeylog.
 type PostInterceptKeylogJSONBody = []InterceptKeylogBatch
 
+// GetNtpServiceConfigParams defines parameters for GetNtpServiceConfig.
+type GetNtpServiceConfigParams struct {
+	After *int64 `form:"after,omitempty" json:"after,omitempty"`
+}
+
+// PostNtpQueriesJSONBody defines parameters for PostNtpQueries.
+type PostNtpQueriesJSONBody = []NtpQueryLogEntry
+
 // GetTlsServiceConfigParams defines parameters for GetTlsServiceConfig.
 type GetTlsServiceConfigParams struct {
 	After    *int64                             `form:"after,omitempty" json:"after,omitempty"`
@@ -8054,6 +8688,9 @@ type PostInterceptFlowsJSONRequestBody = PostInterceptFlowsJSONBody
 
 // PostInterceptKeylogJSONRequestBody defines body for PostInterceptKeylog for application/json ContentType.
 type PostInterceptKeylogJSONRequestBody = PostInterceptKeylogJSONBody
+
+// PostNtpQueriesJSONRequestBody defines body for PostNtpQueries for application/json ContentType.
+type PostNtpQueriesJSONRequestBody = PostNtpQueriesJSONBody
 
 // PostTlsHandshakesJSONRequestBody defines body for PostTlsHandshakes for application/json ContentType.
 type PostTlsHandshakesJSONRequestBody = PostTlsHandshakesJSONBody

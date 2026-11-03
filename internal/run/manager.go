@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -376,9 +377,27 @@ func discoveredIDs(snap *engine.Snapshot) []string {
 }
 
 // supported refuses a scenario that needs a milestone this build does not have (the spec's
-// `unsupported_feature`): a step type or a check type, capturing, a host name where the resolver is needed, an
-// overlay whose kind or profile is not available.
+// `unsupported_feature`): a check type or a wait condition that the runner cannot decide, capturing, a host
+// name where the resolver is needed, an overlay whose kind or profile is not available.
 func (m *Manager) supported(cfg *model.Configuration, sc *model.Scenario) error {
+	// The domain accepts the NTP wait and check from the specification on, but the runner has no way to decide
+	// them before stage 3 of M34: the wait would run until its timeout, and the check would be taken for a
+	// negative check of traffic that passes on silence. Stage 3 adds them to the supported lists and this goes.
+	if sc.Checks != nil {
+		for i := range *sc.Checks {
+			kind := domain.CheckKind(&(*sc.Checks)[i])
+			if ms, later := laterCheckTypes[kind]; later && !slices.Contains(SupportedCheckTypes, kind) {
+				return &UnsupportedError{What: fmt.Sprintf("a %s check", kind), Milestone: ms}
+			}
+		}
+	}
+	for i := range sc.Steps {
+		if w := sc.Steps[i].Wait; w != nil {
+			if ms, later := laterWaitConditions[string(w.For)]; later && !slices.Contains(supportedWaitConditions, string(w.For)) {
+				return &UnsupportedError{What: fmt.Sprintf("a wait for %s (step %s)", w.For, sc.Steps[i].Id), Milestone: ms}
+			}
+		}
+	}
 	if m.cfg.Captures == nil {
 		if sc.Capture != nil && *sc.Capture {
 			return &UnsupportedError{What: "capture: true (the gateway has no capture volume: the executor needs a captures directory)"}

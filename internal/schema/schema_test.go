@@ -108,8 +108,10 @@ func TestEveryExampleOfTheSpecValidates(t *testing.T) {
 			t.Errorf("overlays.yaml[%d]: %v", i, errs)
 		}
 	}
-	if errs := v.Validate("RunRequest", decodeYAML(t, read("run-request.yaml"))); len(errs) != 0 {
-		t.Errorf("run-request.yaml: %v", errs)
+	for _, name := range []string{"run-request.yaml", "run-request-time.yaml"} {
+		if errs := v.Validate("RunRequest", decodeYAML(t, read(name))); len(errs) != 0 {
+			t.Errorf("%s: %v", name, errs)
+		}
 	}
 	for i, doc := range decodeYAML(t, read("capture-requests.yaml")).([]any) {
 		if errs := v.Validate("CaptureRequest", doc); len(errs) != 0 {

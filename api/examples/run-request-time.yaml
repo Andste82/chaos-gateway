@@ -1,0 +1,15 @@
+# Example `POST /runs` body (schema `RunRequest`) for the time family (M34): an inline scenario that serves the
+# device a clock 400 days ahead after its first NTP query and checks that it polls again.
+inline:
+  name: stale-clock-ci
+  target: {device: placeholder}
+  steps:
+    - {id: ntp-up, at: 0s, wait: {for: ntp_query_seen, timeout: 10m}}
+    - {id: ahead, at: 5s, time: {offset: +400d}}
+    - {id: polled, at: 10s, wait: {for: ntp_query_seen, timeout: 10m}}
+    - {id: back, at: 20s, remove: ahead}
+  checks:
+    - {ntp_queried: {}, window: {from: ahead, until: back}}
+parameters:
+  target.device: esp32-42
+lease: 30s

@@ -61,6 +61,8 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   minor severity, P7-AUDIT-01 to P7-AUDIT-70. The round after the audit closed them in the pull requests #135 to #139 (and the closure that records them): fixed with a test, fixed differently, accepted
   with a reason, or deferred to M38 (the preflight clauses of §3.3/§3.4 and the expiry warning of the installed certificate), see the verdict table. The five
   items the phase raised, P7-M27-01, -02, P7-M28-01, P7-M29-01 and -02, were decided by the maintainer on 2026-10-31 and are closed. **Phase 7 is closed on 2026-11-02 with the release of V1 (`v1.0.0`, `image.yml` run 41543627145).** No item of the phase is open. Two CI items remain as maintenance after V1, not as scope of Phase 7: P7-CI-01 (three timing tests of the weekly emulated jobs, not caused by Phase 7) and P7-CI-02 (a probe namespace seen by a test of another package; watch the level 1 runs); P7-M27-05 (what the engine does when the active revision fails because the executor is not there) was decided by the maintainer on 2026-11-02 and is closed.
+- **M34** (NTP server and time faults, delivered in four stages, D37, branch `m34-ntp`): the questions the stages raise and that no later stage of M34 settles are under
+  [M34 open items](#m34-open-items) at the end of the file. Stage 1 (specification and domain) raised P34-01 to P34-03, all open.
 
 ## Phase 1 audit result
 
@@ -3492,4 +3494,45 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 - Recommendation: (a).
 - Acceptance: ten level 1 runs on `main` in a row without a `probes:` failure of the verify.
 - Needs maintainer: no
+- Effort: S for (a), M for (b)
+
+## M34 open items
+
+### P34-01 Does a time fault that names a destination beat a newer time fault of the same scope without one
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. The normative precedence table of plan §2.4 gives both faults the same level (5 for a group, 7 for a network), so within one group or network the newer fault wins, whether or not it names a server. Stage 1 implements the table and corrected the spec text that said otherwise. On a device scope a fault that names a server does rank above one for every server (that is the device rule of the table). A tester who puts a fault for one server on a network and later a fault for all servers on the same network will see the second one win for the first server too.
+- Evidence: `docs/plan.md` §2.4 and §2.18, `internal/domain/resolve.go` (the time family), `internal/domain/timefault_test.go` (`TestOnAGroupAndOnANetworkTheNewerTimeFaultWinsWhetherOrNotItNamesAServer`, `TestATimeFaultForOneServerBeatsAFaultOfTheSameScopeForEveryServer`).
+- Task: decide whether the table stays as it is for the family `time` or a destination breaks the tie within one group or network.
+- Options: (a) keep the table: newer wins within a level, whether or not a destination is named (what stage 1 does); (b) a fault that names a destination beats a newer one that names none within the same level; this deviates from the table and has to be applied to `Resolve` and `explain` and to `TimeCandidates` alike, and the table of §2.4 gets a note for this family.
+- Recommendation: (a): one rule for every family, and the tester sees the winner in the explain view; (b) only if testers are found to be surprised.
+- Acceptance: for (a) the text of §2.18 says the newer fault wins within a level; for (b) a domain test shows the destination fault winning on a group and on a network, in `Resolve`, `explain` and `TimeCandidates`.
+- Needs maintainer: yes
+- Effort: S for (a), M for (b)
+
+### P34-02 Which ports does the validation refuse for a time fault
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. A time fault may name a destination with ports, and the stage 2 compiler redirects that destination to the NTP server. If the destination named port 53, 67 or 68, the redirect would pull the device's DNS or DHCP traffic into the NTP server. Stage 1 therefore refuses the ports 53, 67 and 68 with `invalid_time_fault`. 51820 (WireGuard) and 4460 (NTS-KE, TCP) are not on the list, because that traffic is addressed to the gateway itself and not forwarded. The maintainer may want a different list, or free ports for tests.
+- Evidence: `internal/domain/timefault.go` (the list of refused ports), `internal/domain/timefault_test.go` (`TestATimeFaultThatIsNotValid`), `docs/plan.md` §2.18.
+- Task: decide the list of ports a time fault refuses.
+- Options: (a) keep 53, 67 and 68 refused (what stage 1 does); (b) refuse also 51820 and 4460; (c) refuse none in the validation and let the stage 2 compiler leave these ports out of the redirect, so a test can use them as a destination.
+- Recommendation: (a): the redirect can never capture the device's DNS or DHCP, and the other two are not forwarded traffic.
+- Acceptance: the validation and the table of `invalid_time_fault` in `docs/development.md` name the same ports as the decision; for (c) the compiler test shows the excluded ports are not redirected.
+- Needs maintainer: yes
+- Effort: S
+
+### P34-03 What the activation of a profile with a time part does on a target that has no client addresses
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. The resolution drops a time part from a target without client addresses (the global target and a remote network), because the NTP server tells the scope from the client address. Stage 1 refuses the activation of such a profile as a whole, with a message that names the cause. The other reading, activating the other parts and leaving the time part out with a warning, is equally consistent with the resolution. A stored activation that gains a time part later (the profile is edited while activated) has no revision-time check yet if the answer is to refuse.
+- Evidence: `internal/domain/timefault.go` (`timeTarget`, used by `internal/domain/overlay.go`), `internal/domain/timefault_scenario_test.go` (`TestTheActivationOfAProfileWithATimePartNeedsADeviceAGroupOrANetwork`).
+- Task: decide whether the activation is refused as a whole or the time part alone is left out with a warning.
+- Options: (a) refuse the activation as a whole (what stage 1 does): the tester never believes a time fault is active when it is not; (b) activate the other parts and leave the time part out with a warning in the response and in the explain view.
+- Recommendation: (a), the safest reading and the same reasoning as the fail-closed service table (risk 35); then a revision that adds a time part to a profile that is activated on such a target is refused too, which a later stage adds.
+- Acceptance: for (a) a test shows the refusal on the global target and on a remote network, and a revision that gives an activated profile a time part there is refused; for (b) a test shows the other parts active and the warning present.
+- Needs maintainer: yes
 - Effort: S for (a), M for (b)

@@ -14,7 +14,7 @@ configuration at all, go to the [recovery instructions](recovery.md).
 
 | What | How |
 |---|---|
-| Is the gateway healthy? | `GET /api/v1/system/health` (a status per component: `api`, `executor`, `svcns`, `dns`, `tls`, `tls_proxy`, `kea`, `bird`) |
+| Is the gateway healthy? | `GET /api/v1/system/health` (a status per component: `api`, `executor`, `svcns`, `dns`, `tls`, `tls_proxy`, `ntp`, `kea`, `bird`) |
 | Is it in safe mode? | `GET /api/v1/state`: `safe_mode`, `safe_mode_reason`; the red banner of the web app |
 | What is wrong with the host? | `GET /api/v1/system/preflight` or `docker compose logs exec \| grep preflight` |
 | Why did a change fail? | the response of the apply (`apply_failed`, `verify_failed`, `validation_failed` with pointers), the event `apply_failed`, `docker compose logs api` |

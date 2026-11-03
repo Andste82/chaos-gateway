@@ -118,6 +118,8 @@ func CheckOverlaySupported(req *model.OverlayRequest) error {
 		return nil // M21, and the case intercept: M22
 	case "dhcp":
 		return nil // M23
+	case "time":
+		return &UnsupportedOverlayError{What: "a time fault", Milestone: "M34"}
 	}
 	return nil
 }

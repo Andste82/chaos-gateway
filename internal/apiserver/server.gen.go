@@ -123,6 +123,12 @@ type ServerInterface interface {
 	// PostInterceptKeylog TLS secrets of intercepted connections, for the captures that run (asynchronous batch)
 	// (POST /internal/intercept/keylog)
 	PostInterceptKeylog(c *gin.Context)
+	// GetNtpServiceConfig Everything the NTP server needs (long poll, as `/internal/dns/config`)
+	// (GET /internal/ntp/config)
+	GetNtpServiceConfig(c *gin.Context, params GetNtpServiceConfigParams)
+	// PostNtpQueries Batch of query-log entries of the NTP server (asynchronous)
+	// (POST /internal/ntp/queries)
+	PostNtpQueries(c *gin.Context)
 	// GetTlsServiceConfig Active TLS cases for the TLS responder and proxy (long poll, as `/internal/dns/config`)
 	// (GET /internal/tls/config)
 	GetTlsServiceConfig(c *gin.Context, params GetTlsServiceConfigParams)
@@ -1385,6 +1391,46 @@ func (siw *ServerInterfaceWrapper) PostInterceptKeylog(c *gin.Context) {
 	}
 
 	siw.Handler.PostInterceptKeylog(c)
+}
+
+// GetNtpServiceConfig operation middleware
+func (siw *ServerInterfaceWrapper) GetNtpServiceConfig(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetNtpServiceConfigParams
+
+	// ------------- Optional query parameter "after" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "after", c.Request.URL.Query(), &params.After, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter after: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetNtpServiceConfig(c, params)
+}
+
+// PostNtpQueries operation middleware
+func (siw *ServerInterfaceWrapper) PostNtpQueries(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PostNtpQueries(c)
 }
 
 // GetTlsServiceConfig operation middleware
@@ -3635,6 +3681,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/internal/dns/config", wrapper.GetDnsServiceConfig)
 	router.POST(options.BaseURL+"/internal/dns/resolutions", wrapper.PostDnsResolutions)
 	router.POST(options.BaseURL+"/internal/dns/queries", wrapper.PostDnsQueries)
+	router.GET(options.BaseURL+"/internal/ntp/config", wrapper.GetNtpServiceConfig)
+	router.POST(options.BaseURL+"/internal/ntp/queries", wrapper.PostNtpQueries)
 	router.GET(options.BaseURL+"/internal/tls/config", wrapper.GetTlsServiceConfig)
 	router.POST(options.BaseURL+"/internal/tls/resolve", wrapper.ResolveTlsConnection)
 	router.POST(options.BaseURL+"/internal/tls/handshakes", wrapper.PostTlsHandshakes)
@@ -5021,6 +5069,86 @@ type PostInterceptKeylogdefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response PostInterceptKeylogdefaultApplicationProblemPlusJSONResponse) VisitPostInterceptKeylogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetNtpServiceConfigRequestObject struct {
+	Params GetNtpServiceConfigParams
+}
+
+type GetNtpServiceConfigResponseObject interface {
+	VisitGetNtpServiceConfigResponse(w http.ResponseWriter) error
+}
+
+type GetNtpServiceConfig200JSONResponse NtpServiceConfig
+
+func (response GetNtpServiceConfig200JSONResponse) VisitGetNtpServiceConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetNtpServiceConfig204Response struct {
+}
+
+func (response GetNtpServiceConfig204Response) VisitGetNtpServiceConfigResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type GetNtpServiceConfigdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetNtpServiceConfigdefaultApplicationProblemPlusJSONResponse) VisitGetNtpServiceConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PostNtpQueriesRequestObject struct {
+	Body *PostNtpQueriesJSONRequestBody
+}
+
+type PostNtpQueriesResponseObject interface {
+	VisitPostNtpQueriesResponse(w http.ResponseWriter) error
+}
+
+type PostNtpQueries204Response struct {
+}
+
+func (response PostNtpQueries204Response) VisitPostNtpQueriesResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type PostNtpQueriesdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response PostNtpQueriesdefaultApplicationProblemPlusJSONResponse) VisitPostNtpQueriesResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -8163,6 +8291,12 @@ type StrictServerInterface interface {
 	// PostInterceptKeylog TLS secrets of intercepted connections, for the captures that run (asynchronous batch)
 	// (POST /internal/intercept/keylog)
 	PostInterceptKeylog(ctx context.Context, request PostInterceptKeylogRequestObject) (PostInterceptKeylogResponseObject, error)
+	// GetNtpServiceConfig Everything the NTP server needs (long poll, as `/internal/dns/config`)
+	// (GET /internal/ntp/config)
+	GetNtpServiceConfig(ctx context.Context, request GetNtpServiceConfigRequestObject) (GetNtpServiceConfigResponseObject, error)
+	// PostNtpQueries Batch of query-log entries of the NTP server (asynchronous)
+	// (POST /internal/ntp/queries)
+	PostNtpQueries(ctx context.Context, request PostNtpQueriesRequestObject) (PostNtpQueriesResponseObject, error)
 	// GetTlsServiceConfig Active TLS cases for the TLS responder and proxy (long poll, as `/internal/dns/config`)
 	// (GET /internal/tls/config)
 	GetTlsServiceConfig(ctx context.Context, request GetTlsServiceConfigRequestObject) (GetTlsServiceConfigResponseObject, error)
@@ -9354,6 +9488,63 @@ func (sh *strictHandler) PostInterceptKeylog(ctx *gin.Context) {
 		sh.options.HandlerErrorFunc(ctx, err)
 	} else if validResponse, ok := response.(PostInterceptKeylogResponseObject); ok {
 		if err := validResponse.VisitPostInterceptKeylogResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetNtpServiceConfig operation middleware
+func (sh *strictHandler) GetNtpServiceConfig(ctx *gin.Context, params GetNtpServiceConfigParams) {
+	var request GetNtpServiceConfigRequestObject
+
+	request.Params = params
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetNtpServiceConfig(ctx, request.(GetNtpServiceConfigRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetNtpServiceConfig")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(GetNtpServiceConfigResponseObject); ok {
+		if err := validResponse.VisitGetNtpServiceConfigResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PostNtpQueries operation middleware
+func (sh *strictHandler) PostNtpQueries(ctx *gin.Context) {
+	var request PostNtpQueriesRequestObject
+
+	var body PostNtpQueriesJSONRequestBody
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(ctx, err)
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.PostNtpQueries(ctx, request.(PostNtpQueriesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PostNtpQueries")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(PostNtpQueriesResponseObject); ok {
+		if err := validResponse.VisitPostNtpQueriesResponse(ctx.Writer); err != nil {
 			sh.options.ResponseErrorHandlerFunc(ctx, err)
 		}
 	} else if response != nil {

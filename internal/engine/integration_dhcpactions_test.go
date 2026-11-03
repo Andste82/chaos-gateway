@@ -320,8 +320,25 @@ func TestADeviceFaultStaysAttachedAfterTheForcedNewIPOnTheRealKernel(t *testing.
 	if got := len(b.e.Snapshot().Faults); got != faults {
 		t.Errorf("the device has %d faults after the move, %d before", got, faults)
 	}
-	if rtt := testbed.MustPing(t, b.top.A, testbed.ServerAddr, 3, 200*time.Millisecond).Median(); rtt < 250*time.Millisecond {
+	if rtt := b.delayedWithin(t, 45*time.Second); rtt < 250*time.Millisecond {
 		t.Errorf("the fault is not attached to the device at its new address %s (median %v)", moved, rtt)
+	}
+}
+
+// delayedWithin pings the server from A until the fault delays the ping (the median is the delay of the fault or more) and returns the
+// last median. The address of a device that moved is applied by a full apply of the engine, which takes seconds on a slow machine (about
+// 20 s under emulation, the weekly jobs), and the kernel impairs the traffic of the new address only when that apply is done: one ping
+// right after the identity map holds the address measures the apply and not the fault. A fault that never attaches still fails, after
+// the deadline.
+func (b *dhcpBed) delayedWithin(t *testing.T, within time.Duration) time.Duration {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for {
+		rtt := testbed.MustPing(t, b.top.A, testbed.ServerAddr, 3, 200*time.Millisecond).Median()
+		if rtt >= 250*time.Millisecond || time.Now().After(deadline) {
+			return rtt
+		}
+		time.Sleep(time.Second)
 	}
 }
 
@@ -391,7 +408,7 @@ func TestAHostnameFaultStillActsAfterTheForcedNewIPWithoutANewQueryOnTheRealKern
 	if !strings.Contains(listing, want) {
 		t.Fatalf("the set does not hold %q after the move from %s:\n%s", want, old, listing)
 	}
-	if rtt := testbed.MustPing(t, b.top.A, testbed.ServerAddr, 3, 200*time.Millisecond).Median(); rtt < 250*time.Millisecond {
+	if rtt := b.delayedWithin(t, 45*time.Second); rtt < 250*time.Millisecond {
 		t.Errorf("the hostname fault does not act at the new address %s without a new query (median %v)", moved, rtt)
 	}
 }

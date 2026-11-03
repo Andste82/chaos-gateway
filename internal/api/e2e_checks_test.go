@@ -300,7 +300,25 @@ func TestDNSQuerySeenDecidesForADeviceOnTheRealKernel(t *testing.T) {
 	if out, err := digA(top, top.A, testbed.LAN0Gateway); err != nil || out != "203.0.113.77" {
 		t.Fatalf("A does not resolve through the gateway: %q %v", out, err)
 	}
+	// A asks again every second until the run is over: the window of a positive check opens when the step is handed over and lasts
+	// 8 s, and on a slow machine (the weekly jobs run emulated) the apply of the step and the first query take seconds, so that one
+	// query after "applied" can fall behind the window. The check still decides on what the device asked inside it.
+	stopAsking := make(chan struct{})
+	asking := make(chan struct{})
+	go func() {
+		defer close(asking)
+		for {
+			select {
+			case <-stopAsking:
+				return
+			case <-time.After(time.Second):
+				_, _ = digA(top, top.A, testbed.LAN0Gateway)
+			}
+		}
+	}()
 	done := g.waitRun(id, "passed", "failed", "error")
+	close(stopAsking)
+	<-asking
 	c := done["checks"].([]any)[0].(map[string]any)
 	if c["status"] != "passed" {
 		t.Fatalf("the check is %v: %v", c["status"], c["message"])

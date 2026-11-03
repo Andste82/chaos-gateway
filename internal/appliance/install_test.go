@@ -322,6 +322,77 @@ func installUninstall(t *testing.T, rel appliance.Release, imageTar, version str
 		t.Fatalf("the gateway made no nftables table after the setup:\n%s", output("sudo nft list tables"))
 	}
 
+	// ---- the edges of the operation on the installed gateway, with the real containers (audit of Phase 7: R6, D16, and the executor that
+	// is late). Each one puts the gateway back as it was before the next begins.
+	loginAgain := func(what string) {
+		t.Helper()
+		if st, m := api.call("POST", "/auth/login", map[string]any{"password": adminPassword}); st != 200 {
+			t.Fatalf("login %s: %d %v", what, st, m)
+		}
+	}
+
+	// R6: `teardown --purge` refuses while the API container has the revisions open, which is the state while the executor restarts: the
+	// stop of the executor leaves the API running, and emptying the data under it would leave the API with a store that is not there
+	execStop := strings.TrimSpace(must(compose + " ps -aq exec"))
+	must("sudo docker stop " + execStop)
+	if out := strings.TrimSpace(must("sudo docker inspect -f '{{.State.Running}}' $(" + compose + " ps -aq api)")); out != "true" {
+		t.Fatalf("the API container does not run while the executor is stopped (running=%s): the test cannot show what the purge does", out)
+	}
+	r = run(compose + " --profile teardown run --rm teardown --purge")
+	if r.Exit == 0 || !strings.Contains(r.Stdout, "is in use: the api container has it open") {
+		t.Errorf("teardown --purge while the API runs: exit %d, want a refusal that names the API\n%s", r.Exit, r.Stdout)
+	}
+	if r := run("sudo test -s /var/lib/chaosgw/state/config.json && sudo test -d /var/lib/chaosgw/secrets"); r.Exit != 0 {
+		t.Errorf("the purge that was refused removed data:\n%s", output("sudo ls -la /var/lib/chaosgw /var/lib/chaosgw/state"))
+	}
+	must("sudo docker start " + execStop)
+	waitHealthy(t, ctx, vm, compose, "exec")
+	waitBridge(t, ctx, vm, "br-iot")
+
+	// D16: a data directory of the API with a wrong owner (after a restore as root) is named by the API at start, with the user, the owner and
+	// the repair, and the host setup puts it right
+	must(compose + " stop api")
+	must("sudo chown root:root /var/lib/chaosgw/state")
+	must(compose + " start api")
+	waitLog(t, ctx, vm, compose, "api", "cannot be written by user 65532", 2*time.Minute)
+	if out := output(compose + " logs --no-color --tail 20 api"); !strings.Contains(out, "/var/lib/chaosgw/state") || !strings.Contains(out, "host-setup.sh --data-only") {
+		t.Errorf("the API names neither the directory nor the repair:\n%s", out)
+	}
+	if out := must("sudo sh /opt/chaosgw/host-setup.sh --data-only 2>&1"); !strings.Contains(out, "state") {
+		t.Errorf("the host setup says nothing of the state directory:\n%s", out)
+	}
+	if out := strings.TrimSpace(must("stat -c '%u:%g' /var/lib/chaosgw/state")); out != "65532:65532" {
+		t.Errorf("the host setup left the state directory with the owner %s", out)
+	}
+	waitHealthy(t, ctx, vm, compose, "api")
+	loginAgain("after the owner of the state directory was put right")
+	if st, state := api.call("GET", "/state", nil); st != 200 || state["active_revision"] != float64(1) || state["safe_mode"] != false {
+		t.Errorf("the state after the repair of the owner: %d %v", st, state)
+	}
+
+	// the executor is late: the API starts first and the executor a while after it (a reboot where the containers come in another order,
+	// or an executor that restarts), and the configuration is the one that was confirmed, applied and not rolled back. With the shipped
+	// containers the API cannot even begin to apply without the executor (the read of the host comes first), so this is the scenario and
+	// not the retry of P7-M27-05 (a failing apply that is repeated), which the engine tests hold.
+	apiID := strings.TrimSpace(must(compose + " ps -aq api"))
+	execID := strings.TrimSpace(must(compose + " ps -aq exec"))
+	must("sudo docker stop " + apiID + " " + execID)
+	must("sudo docker start " + apiID)
+	time.Sleep(25 * time.Second)
+	must("sudo docker start " + execID)
+	waitHealthy(t, ctx, vm, compose, "exec")
+	waitHealthy(t, ctx, vm, compose, "api")
+	waitBridge(t, ctx, vm, "br-iot")
+	loginAgain("after the executor came late")
+	waitFor(t, 3*time.Minute, "the configuration is applied again after the executor came late", func() bool {
+		st, state := api.call("GET", "/state", nil)
+		la, _ := state["last_apply"].(map[string]any)
+		return st == 200 && state["active_revision"] == float64(1) && state["safe_mode"] == false && (la == nil || la["result"] == "ok")
+	})
+	if st, rev := api.call("GET", "/revisions/1", nil); st != 200 || rev["status"] == "rolled_back" {
+		t.Errorf("revision 1 after the executor came late: %d %v", st, rev["status"])
+	}
+
 	// ---- uninstall.sh: out of the kernel and off the host's containers; the data, the files and the image stay
 	r = run("sudo sh /opt/chaosgw/uninstall.sh")
 	if r.Exit != 0 || !strings.Contains(r.Stdout, "Chaos Gateway is stopped and out of the kernel") {

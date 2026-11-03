@@ -396,7 +396,8 @@ func TestAHostnameFaultStillActsAfterTheForcedNewIPWithoutANewQueryOnTheRealKern
 		name = s.Name
 	}
 	want := moved + " . " + testbed.ServerAddr
-	deadline = time.Now().Add(10 * time.Second)
+	// the address of a moved device reaches the set with the full apply that follows the move: about 20 s under emulation (the weekly jobs)
+	deadline = time.Now().Add(60 * time.Second)
 	var listing string
 	for time.Now().Before(deadline) {
 		listing, _ = b.top.GW.Run(context.Background(), "nft", "list", "set", "inet", "chaosgw", name)

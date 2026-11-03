@@ -291,18 +291,9 @@ func TestDNSQuerySeenDecidesForADeviceOnTheRealKernel(t *testing.T) {
 		}
 	}
 
-	r := g.postRun(brokerRun("dns-asked", "10s", check("8s")), "")
-	if r.Status != 201 {
-		t.Fatalf("%d %s", r.Status, r.Body)
-	}
-	id := r.json(t)["id"].(string)
-	g.waitStep(id, "go", "applied")
-	if out, err := digA(top, top.A, testbed.LAN0Gateway); err != nil || out != "203.0.113.77" {
-		t.Fatalf("A does not resolve through the gateway: %q %v", out, err)
-	}
-	// A asks again every second until the run is over: the window of a positive check opens when the step is handed over and lasts
-	// 8 s, and on a slow machine (the weekly jobs run emulated) the apply of the step and the first query take seconds, so that one
-	// query after "applied" can fall behind the window. The check still decides on what the device asked inside it.
+	// A asks every second from before the run is made until it is over: the window of a positive check opens when the step is handed over
+	// and lasts 8 s, and on a slow machine (the weekly jobs run emulated) the apply of the step takes longer than that, so a query that A
+	// makes after "applied" falls behind the window. The check still decides on what the device asked inside it.
 	stopAsking := make(chan struct{})
 	asking := make(chan struct{})
 	go func() {
@@ -316,6 +307,15 @@ func TestDNSQuerySeenDecidesForADeviceOnTheRealKernel(t *testing.T) {
 			}
 		}
 	}()
+	r := g.postRun(brokerRun("dns-asked", "10s", check("8s")), "")
+	if r.Status != 201 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	id := r.json(t)["id"].(string)
+	g.waitStep(id, "go", "applied")
+	if out, err := digA(top, top.A, testbed.LAN0Gateway); err != nil || out != "203.0.113.77" {
+		t.Fatalf("A does not resolve through the gateway: %q %v", out, err)
+	}
 	done := g.waitRun(id, "passed", "failed", "error")
 	close(stopAsking)
 	<-asking

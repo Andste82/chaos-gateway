@@ -19,10 +19,10 @@ application-layer families (DNS faults, TLS cases, DHCP actions).
     generation, the faults with `overlay`, `sources` and the redirect `port`, and the ports to listen on) and `/internal/ntp/queries`
     (after `/internal/dns/queries`).
   - `make generate`, `make check-generated` (the committed generated Go is `internal/model/model.gen.go` and
-    `internal/apiserver/server.gen.go`), examples in `api/examples/{overlays,run-request,configuration}.yaml`, `make check-spec`.
+    `internal/apiserver/server.gen.go`), examples in `api/examples/{overlays,configuration}.yaml` and the new `api/examples/run-request-time.yaml` (a run request with a time scenario; `run-request.yaml` keeps the mqtt-outage one; the scenario `stale-clock` of the configuration carries the time step, the NTP wait and the NTP check; `api/examples/validate.py` and the example tests know the new file), `make check-spec`.
 - `internal/domain`: `overlay.go` (`overlayKinds`, `OverlayKindOf`, `ValidateOverlay`, `NewOverlay`, the key selector), `validate.go` (the code
-  `invalid_time_fault`, and its row in the error table of `docs/development.md`), `validate_fault.go` (a `timeFault` validator after
-  `dnsFault`; a time target is a device, a group or a network, never global; the profile part), `resolve.go` (the family, `timeCandidate`,
+  `invalid_time_fault`, and its row in the error table of `docs/development.md`), `timefault.go` (the `timeFault` validator, the offset arithmetic and the candidates of the family, kept in a file of their own;
+  `validate_fault.go` only points to it; a time target is a device, a group or a network, never global; the profile part), `resolve.go` (the family, `timeCandidate`,
   matching, the label; a time fault competes only with time faults, device over group over network, newer wins), `profile.go`,
   `validate_scenario.go` and `scenario_run.go` (step, wait, check; a hostname destination also needs DNS, as `ScenarioUsesDNS`).
 - `internal/engine/overlays.go`: the `Supported*` lists stay as they are until stage 2, so the engine answers `422 unsupported_feature`.
@@ -35,6 +35,8 @@ application-layer families (DNS faults, TLS cases, DHCP actions).
   rate limit per device (16 per second, drop); modes 6 and 7 get no answer; a reply is never larger than its request; `Follow` and an API client
   on `internal/svcapi` (long poll, back-off as `dnsproxy/apiclient.go`); a query log sink; the listening ports come from the config
   (decision D36). Level 0 tests with `clock.NewFake` and `JumpWall`; a fuzz target of the parser.
+  An `offset` is not bounded against the NTP epoch by the validation (it adds to the clock of the moment): the server decides what it serves
+  when `now + offset` is before 1900 or past the end of era 0 (2036), and the acceptance tests include both cases (a query of `-130y` and of `+20y`).
 - **`cmd/chaosgw/ntp.go`** after `dns.go` (flags, namespace watch, health probe), registered in `cmd/chaosgw/main.go` and `main_test.go`.
 - **Compiler:** `internal/compiler/ntp.go` (`compileNTP` after `compileDNS`: sources grouped by identical candidate lists, ordered by
   `domain.RankOrder`, the redirect port per distinct destination selector, at most 32); `Target.NTPFaults` beside `DNSFaults`;
@@ -44,7 +46,12 @@ application-layer families (DNS faults, TLS cases, DHCP actions).
   where the service namespace exists) and `dhcpaction.go`; `engine/explain.go` (the winner of the family `time`).
 - **Verify and teardown:** the service namespace's nft document (`internal/executor/plan.go` `serviceRedirectRuleset`) needs no rule for the
   server's own ports, but `apply/plan.go` `serviceDiffers` and the read-back must stay consistent with what the compiler emits.
-- **Engine and API:** `Snapshot.NTPFaults` (`engine/engine.go`, `owner.go`), the `Supported*` lists, `engine/events.go` (three events),
+- **Engine and API:** lift the family: empty `domain.unavailableFamilies` (`profile.go`) and replace the tests that pin the refusals of stage 1
+  (`TestATimeFaultAndAProfileWithATimePartAreRefusedUntilTheServerExists`, `TestATimeOverlayIsRefusedUntilTheServerExists`,
+  `TestAProfileWithATimePartIsListedAsUnavailableAndItsActivationIsRefused`, `TestATimeStepAndAProfileWithATimePartAreRefusedWhenTheRunIsCreated` and
+  `TestTheNtpWaitAndTheNtpCheckAreRefusedUntilTheRunnerHasThem` (stage 3 for the last one), the stub tests in `internal/api/ntpservice_test.go`); once an
+  activated profile can have a time part, `partsOf` in `internal/api/profiles.go` (its `FamilyTime` case, used by the effect of a profile) needs a test, since the
+  activation is refused in stage 1; `Snapshot.NTPFaults` (`engine/engine.go`, `owner.go`), the `Supported*` lists, `engine/events.go` (three events),
   `internal/api/ntpservice.go` after `dns.go` and `tlsservice.go` (config long poll with `lastPollAt`, the query post that adds the device by
   `Identity.OwnerOf`, counters and the 10-second event limit, `countFault`), `overlays.go` (`withNTP`, hits and epoch), `events.go`
   (`knownTypes`, `describe`), `system.go` (health component `ntp`, `Features`), `internal/preflight` (the check `host.clock` from `adjtimex`;

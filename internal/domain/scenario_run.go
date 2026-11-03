@@ -39,7 +39,7 @@ func CheckKind(c *model.Check) string {
 	for name, set := range map[string]bool{
 		"reconnected": c.Reconnected != nil, "no_connection": c.NoConnection != nil, "traffic_seen": c.TrafficSeen != nil,
 		"traffic_not_seen": c.TrafficNotSeen != nil, "dns_query_seen": c.DnsQuerySeen != nil,
-		"tls_rejected": c.TlsRejected != nil, "tls_accepted": c.TlsAccepted != nil,
+		"tls_rejected": c.TlsRejected != nil, "tls_accepted": c.TlsAccepted != nil, "ntp_queried": c.NtpQueried != nil,
 	} {
 		if set {
 			kind = name
@@ -64,7 +64,7 @@ func StepRequest(sc *model.Scenario, st *model.Step) (model.OverlayRequest, erro
 	if !StepCreatesOverlay(st) {
 		return model.OverlayRequest{}, fmt.Errorf("the step %q (%s) writes no overlay", st.Id, firstKind(*st))
 	}
-	req := model.OverlayRequest{Profile: st.Profile, Fault: st.Fault, Rule: st.Rule, Dns: st.Dns, Tls: st.Tls, Dhcp: st.Dhcp, Wireguard: st.Wireguard}
+	req := model.OverlayRequest{Profile: st.Profile, Fault: st.Fault, Rule: st.Rule, Dns: st.Dns, Tls: st.Tls, Dhcp: st.Dhcp, Time: st.Time, Wireguard: st.Wireguard}
 	target := sc.Target
 	if st.Target != nil {
 		target = *st.Target
@@ -77,7 +77,7 @@ func StepRequest(sc *model.Scenario, st *model.Step) (model.OverlayRequest, erro
 
 // ScenarioUsesDNS reports whether a scenario depends on the device resolving names through the
 // gateway: it has a DNS step, waits for a DNS query, or names a host name as the destination of a
-// step or a check (plan §2.10, precondition `uses_gateway_dns`).
+// step or a check, a time fault included (plan §2.10, precondition `uses_gateway_dns`).
 func ScenarioUsesDNS(sc *model.Scenario) bool {
 	named := func(d *model.Destination) bool { return d != nil && d.Hostname != nil }
 	for i := range sc.Steps {
@@ -90,6 +90,8 @@ func ScenarioUsesDNS(sc *model.Scenario) bool {
 		case st.Rule != nil && named(st.Rule.Destination):
 			return true
 		case st.Tls != nil && named(st.Tls.Destination):
+			return true
+		case st.Time != nil && named(st.Time.Destination):
 			return true
 		case st.Wait != nil && (st.Wait.For == model.WaitConditionForDnsQuery || named(st.Wait.Destination)):
 			return true

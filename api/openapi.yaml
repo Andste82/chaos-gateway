@@ -41,7 +41,7 @@ info:
     | Exactly one of | objects documented as "exactly one of …" (overlay and step types, scopes, destinations, check types) are validated by the server; schemas use `minProperties`/`maxProperties` where possible |
     | Device namespace | devices, WireGuard clients and probes share one UUID and one name namespace (a client or probe *is* a device; `Scope.device` can name all three) |
     | Secrets | private keys, password hashes and token values never appear in responses, events, logs or exports, except the one-time token value at creation, WireGuard exports and revision exports with `include_secrets=true`, which are explicitly secret downloads (scope `full`, audit-logged) |
-    | Internal API | paths under `/internal` (`x-internal: true`) are used only by Chaos Gateway's own service containers (DNS proxy, TLS responder, Kea hook) with a service token from the shared secrets volume (scope `service`); they are not part of the public client and may change between releases |
+    | Internal API | paths under `/internal` (`x-internal: true`) are used only by Chaos Gateway's own service containers (DNS proxy, TLS responder, NTP server, Kea hook) with a service token from the shared secrets volume (scope `service`); they are not part of the public client and may change between releases |
 
     ## Authentication and scopes
 
@@ -109,7 +109,7 @@ tags:
   - name: devices
     description: configured and discovered devices, flows, leases
   - name: overlays
-    description: runtime faults, profile activations, rules, DNS/TLS/DHCP overlays
+    description: runtime faults, profile activations, rules, DNS/TLS/DHCP/time overlays
   - name: runs
     description: scenario runs, reports
   - name: captures
@@ -1515,7 +1515,7 @@ paths:
       operationId: createOverlay
       summary: Create or replace an overlay (returns after verify)
       description: |
-        Exactly one of `profile`, `fault`, `rule`, `dns`, `tls`, `dhcp` must be set; it
+        Exactly one of `profile`, `fault`, `rule`, `dns`, `tls`, `dhcp`, `time`, `wireguard` must be set; it
         decides the overlay kind. An overlay with the same key *(owner, kind, target,
         selector)* is replaced and keeps its id (`200`); otherwise `201`.
       x-milestone: M8a
@@ -2224,6 +2224,53 @@ paths:
       responses:
         '204': {description: Accepted}
         default: {$ref: '#/components/responses/Problem'}
+  /internal/ntp/config:
+    get:
+      tags: [internal]
+      operationId: getNtpServiceConfig
+      summary: Everything the NTP server needs (long poll, as `/internal/dns/config`)
+      description: |
+        Returns the current configuration at once if its generation is newer than `after`,
+        otherwise waits up to 30 s and returns `204` if nothing changed. The NTP server calls
+        it at start (registration, plan §2.18) and then in a loop; it keeps no state of its own.
+        The configuration holds the time faults that are in force with the clients they apply to
+        and the port of the server each of them is redirected to (decision D36: the server tells
+        the server a device asked from the port it received the query on), and the ports to
+        listen on.
+      x-internal: true
+      x-milestone: M34
+      x-required-scope: service
+      parameters:
+        - name: after
+          in: query
+          schema: {type: integer, format: int64}
+      responses:
+        '200':
+          description: Configuration
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/NtpServiceConfig'}
+        '204': {description: Unchanged}
+        default: {$ref: '#/components/responses/Problem'}
+  /internal/ntp/queries:
+    post:
+      tags: [internal]
+      operationId: postNtpQueries
+      summary: Batch of query-log entries of the NTP server (asynchronous)
+      x-internal: true
+      x-milestone: M34
+      x-required-scope: service
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              maxItems: 10000
+              items: {$ref: '#/components/schemas/NtpQueryLogEntry'}
+      responses:
+        '204': {description: Accepted}
+        default: {$ref: '#/components/responses/Problem'}
   /internal/tls/config:
     get:
       tags: [internal]
@@ -2845,6 +2892,7 @@ components:
           description: Masquerade towards the uplink.
         dhcp: {$ref: '#/components/schemas/DhcpScope'}
         dns: {$ref: '#/components/schemas/NetworkDns'}
+        ntp: {$ref: '#/components/schemas/NetworkNtp'}
         routes:
           type: array
           description: Downstream routes for devices behind another router in this network.
@@ -2890,7 +2938,11 @@ components:
           description: Option 15.
         ntp_servers:
           type: array
-          description: Option 42.
+          description: |
+            Option 42. Default - the network's gateway address (the NTP server of Chaos Gateway, M34) for a network whose
+            time service is on (`ntp.enabled`) and where the service namespace exists; a network that names servers here
+            keeps them, and the time faults then reach a device only through the redirect of hardcoded servers
+            (`ntp.redirect_hardcoded`, or the automatic redirect of a scope with a time fault).
           items: {$ref: '#/components/schemas/Ipv4'}
         custom:
           type: array
@@ -2939,6 +2991,30 @@ components:
           type: array
           minItems: 1
           items: {$ref: '#/components/schemas/Ipv4'}
+    NetworkNtp:
+      type: object
+      description: |
+        The network's use of the gateway's NTP server (M34, plan §2.18). A network without the block has the defaults.
+        The server runs in the service namespace and answers UDP 123 on the network's gateway address, so a network
+        without the service namespace has no time service (the preview warns).
+      properties:
+        enabled:
+          type: boolean
+          default: true
+          description: |
+            The network's devices are served by the gateway's NTP server: queries to the gateway address (UDP 123)
+            are answered by it, and DHCP hands the gateway address out as NTP server (option 42) unless
+            `dhcp.options.ntp_servers` names others. On by default, as the DNS proxy (plan Q2).
+        redirect_hardcoded:
+          type: boolean
+          default: false
+          description: |
+            Redirect NTP (UDP 123) to other servers than the gateway to the NTP server (M34): the queries of the network's
+            devices are answered by it and the answer leaves with the address and port of the server the device asked, so
+            clients that check the source of the reply accept it. What stays inside the network and the networks behind its
+            routers is not redirected. The traffic of a scope with an active time fault is redirected whether or not this is
+            set (a time fault must not silently miss a device with a hardcoded server, plan Q3); this setting only decides
+            about redirecting without a fault. A network without the service namespace cannot redirect: the preview warns.
 
     WireGuardNetwork:
       type: object
@@ -3688,7 +3764,7 @@ components:
     # ============================================================ faults (plan §2.4, §2.5)
     FaultFamily:
       type: string
-      enum: [impairment, mtu, dns, tls, dhcp, tunnel]
+      enum: [impairment, mtu, dns, tls, dhcp, time, tunnel]
     NetemParams:
       type: object
       description: |
@@ -3788,8 +3864,8 @@ components:
         link: {$ref: '#/components/schemas/Ref'}
     FaultBody:
       description: |
-        A fault of family `impairment` (default), `mtu` or `tunnel`. Families `dns`, `tls`
-        and `dhcp` have their own bodies (`DnsFault`, `TlsCase`, `DhcpAction`).
+        A fault of family `impairment` (default), `mtu` or `tunnel`. Families `dns`, `tls`,
+        `dhcp` and `time` have their own bodies (`DnsFault`, `TlsCase`, `DhcpAction`, `TimeFault`).
         - `impairment` - `ImpairmentParams` plus an optional `TrafficMatch`.
         - `mtu` - `mtu` plus an optional `TrafficMatch`.
         - `tunnel` - `tunnel` plus `ImpairmentParams` limited to latency, jitter, loss,
@@ -3812,7 +3888,8 @@ components:
     ConfigFault:
       description: |
         A persistent fault (configuration layer). Only families `impairment`, `mtu` and
-        `tunnel`; DNS faults, TLS cases and DHCP actions exist only as overlays (plan §2.6–2.8).
+        `tunnel`; DNS faults, TLS cases, DHCP actions and time faults exist only as overlays (plan §2.6–2.8, §2.18; persistent
+        time faults follow with M39).
         `source` is required except for `tunnel`.
       allOf:
         - $ref: '#/components/schemas/FaultBody'
@@ -3980,6 +4057,82 @@ components:
       properties:
         search: {type: string}
         replace: {type: string}
+    TimeOffset:
+      type: string
+      pattern: '^[+-]?([0-9]+(\.[0-9]+)?(ms|s|m|h|d|w|y))+$'
+      maxLength: 64
+      example: '+400d'
+      description: |
+        A signed span of time: an optional sign and one or more numbers with a unit, `ms`, `s`, `m`, `h`, `d` (24 h), `w`
+        (7 d) and `y` (365 d). A missing sign is a plus. `+400d`, `-90s` and `-1y2d` are valid. It is a span of the
+        served time against the correct time, so it is not a `Duration`, which has no sign and no days. It has at most 64
+        characters and must fit about 292 years either way.
+    TimeFault:
+      description: |
+        Time family (plan §2.18, M34), implemented by the gateway's NTP server: an overlay of the kind `time`, or the
+        `time` part of an activated profile. The server answers a query of a client with the first time fault whose
+        scope contains the client and whose destination matches the server the client asked; the faults of one client
+        are ordered by the precedence of §2.4 (a device before a group before a network, the newer first at the same
+        level, a fault before a part of a profile on the same scope). A time fault competes only with other time faults:
+        a latency fault of the device does not cancel a wrong time. A time fault is an overlay only (persistent time
+        faults follow with M39); its target is a device, a group or a network, never the global scope.
+
+        What the server answers (plan §2.18):
+        - `offset` - the correct time plus the offset, in the receive, transmit and reference timestamps.
+        - `absolute` - that instant at the moment the fault takes effect, running on from there at the rate of the clock.
+        - `skew_ppm` - on top of `offset` or `absolute`, a time that drifts from the moment the fault takes effect on: after
+          10 s a skew of 1000 ppm adds 10 ms. The moment is the `updated_at` of the overlay, so a restart of the server or
+          a change of another overlay does not restart the drift.
+        - `leap` - leap indicator 1 (`insert`) or 2 (`delete`) in the answer.
+        - `answer` - how the server answers instead of the time: `normal` (the default, the answer is built from the fields
+          above), `unsynchronized` (leap indicator 3 and stratum 16), `kiss_of_death` (stratum 0 with `kiss_code` as the
+          reference id), `silence` (no answer, the query is counted) and the invalid answers `origin_mismatch` (the origin
+          timestamp is not the client's transmit timestamp), `zero_transmit` (a transmit timestamp of zero) and
+          `wrong_mode` (the mode of the answer is not 4).
+
+        A fault must change something: at least one of `offset`, `absolute`, `skew_ppm`, `leap` or an `answer` other than
+        `normal`. `offset` and `absolute` exclude each other. An `answer` other than `normal` is the whole fault: it
+        excludes `offset`, `absolute`, `skew_ppm` and `leap`. The activation and the removal of a fault are jumps of the
+        served time; a device sees either only when it polls next. An `absolute` time is not before 1900-01-01 (an NTP
+        timestamp starts there). An `offset` is not bounded against that date, because the served time is its sum with the
+        clock of the moment: how the server answers when it falls outside the era of the protocol is the server's matter.
+
+        The destination selector (`TrafficMatch`) narrows the fault to the server the device asked, an address or prefix
+        (`destination.cidr`) or a hostname of the DNS-derived set (`destination.hostname`, plan §2.6); `network` and
+        `uplink` are no destinations of a time fault. `protocol` is `udp` or omitted, `ports` default to 123; the ports
+        53, 67 and 68, which the gateway's DNS and DHCP services use, are refused (as a list entry or inside a range), since their
+        traffic would end in the NTP server. The redirect keys on the whole selector, the destination and the ports
+        together: a fault with `ports` and no destination redirects those ports of every server to a port of its own. The server
+        learns the destination from the port of the redirect it received the query on (decision D36): each distinct
+        destination selector of an active time fault gets a port of its own, at most 32 distinct destinations, and the
+        rest is served like the scope without a selector with a warning. A fault without a destination selector applies
+        to every server the scope's devices ask, the gateway's own address included.
+      allOf:
+        - $ref: '#/components/schemas/TrafficMatch'
+        - type: object
+          properties:
+            offset: {$ref: '#/components/schemas/TimeOffset'}
+            absolute:
+              type: string
+              format: date-time
+              description: RFC 3339 with time zone. The instant the served time shows when the fault takes effect.
+            skew_ppm:
+              type: number
+              minimum: -1000000
+              maximum: 1000000
+              description: Parts per million; positive runs fast, negative slow. -1000000 is a clock that stands still.
+            leap:
+              type: string
+              enum: [insert, delete]
+              description: Leap indicator 1 (a second is inserted at the end of the day, 23:59:60) or 2 (deleted).
+            answer:
+              type: string
+              enum: [normal, unsynchronized, kiss_of_death, silence, origin_mismatch, zero_transmit, wrong_mode]
+              default: normal
+            kiss_code:
+              type: string
+              enum: [RATE, DENY, RSTR]
+              description: Required for `kiss_of_death`, not allowed with another `answer`.
     DhcpAction:
       type: object
       description: |
@@ -4046,6 +4199,13 @@ components:
         mtu: {$ref: '#/components/schemas/MtuParams'}
         dns: {$ref: '#/components/schemas/DnsFault'}
         tls: {$ref: '#/components/schemas/TlsCase'}
+        time:
+          allOf: [{$ref: '#/components/schemas/TimeFault'}]
+          description: |
+            A part competes like a time fault of its own, so a profile with this part is activated on a device, a group or
+            a network, never on the global scope or a remote network: the activation is refused with `target_kind` as a
+            whole (a profile with a time part has no partial activation). If a profile that is already active gains the
+            part later, the part does not apply on such a target and the other parts do.
 
     # ============================================================ scenarios (plan §2.10)
     Scenario:
@@ -4104,7 +4264,7 @@ components:
     Step:
       type: object
       description: |
-        Exactly one of `profile`, `fault`, `rule`, `dns`, `tls`, `dhcp`, `wireguard`,
+        Exactly one of `profile`, `fault`, `rule`, `dns`, `tls`, `dhcp`, `time`, `wireguard`,
         `capture`, `wait`, `remove`, `restore`. `at` is the offset on the run's timeline; a
         `wait` step stops the timeline until its condition holds, so later steps shift by the
         waiting time. Steps with the same `at` run in list order. Tunnel faults and WireGuard
@@ -4123,6 +4283,7 @@ components:
         dns: {$ref: '#/components/schemas/DnsFault'}
         tls: {$ref: '#/components/schemas/TlsCase'}
         dhcp: {$ref: '#/components/schemas/DhcpAction'}
+        time: {$ref: '#/components/schemas/TimeFault'}
         wireguard: {$ref: '#/components/schemas/WireGuardAction'}
         capture:
           type: string
@@ -4150,18 +4311,22 @@ components:
           properties:
             for:
               type: string
-              enum: [online, connected, dns_query]
-              description: '`connected` - a new connection matching the `TrafficMatch`; `dns_query` - a query for `name`.'
+              enum: [online, connected, dns_query, ntp_query_seen]
+              description: |
+                `connected` - a new connection matching the `TrafficMatch`; `dns_query` - a query for `name`;
+                `ntp_query_seen` - a device of the target asks the gateway's NTP server for the time (M34): a time fault
+                shows only when the device polls next, so a scenario waits for the query instead of guessing. The
+                `TrafficMatch` is not used.
             name: {$ref: '#/components/schemas/Hostname'}
             timeout: {$ref: '#/components/schemas/Duration'}
     Check:
       type: object
       description: |
         Exactly one check type besides `window` and `name`. Checks observe the scenario
-        target (flows, DNS log, TLS handshake events) inside the window. A step has two moments: the timeline
+        target (flows, DNS log, NTP queries, TLS handshake events) inside the window. A step has two moments: the timeline
         hands its change to the engine, and the engine answers that the apply is verified; the change takes effect
         in the kernel somewhere between the two. The window is placed so that this cannot make the check wrong.
-        A positive check (`reconnected`, `traffic_seen`, `dns_query_seen`) looks for what the change makes possible:
+        A positive check (`reconnected`, `traffic_seen`, `dns_query_seen`, `ntp_queried`) looks for what the change makes possible:
         its window opens when `window.from` is handed over and, with `until`, closes at the answer of that step.
         A negative check (`no_connection`, `traffic_not_seen`) claims that nothing happens while the change is in
         force: its window opens at the answer of `window.from` and, with `until`, closes when that step is handed over.
@@ -4174,7 +4339,7 @@ components:
         connection that began after `window_end` does not count, however late the poll reads it. A connection
         without a start time cannot be dated and is judged by the poll. DNS queries are placed by the time stamp
         in the DNS log, not by the moment the log is read. A positive check (`reconnected`, `traffic_seen`,
-        `dns_query_seen`) passes at its first observation and fails when the window closes without one;
+        `dns_query_seen`, `ntp_queried`) passes at its first observation and fails when the window closes without one;
         a negative check (`no_connection`, `traffic_not_seen`) fails at its first observation and passes when
         the window closes. A run lasts until its last check is decided, so a window may reach past the last
         step; the overlays of the run stay until then. A run with a failed check ends as `failed`; one with a
@@ -4212,6 +4377,7 @@ components:
             gateway drops in the forward path leaves no entry, so a blocked destination is never "seen" (see `Check`).
         traffic_not_seen: {$ref: '#/components/schemas/TrafficNotSeenCheck'}
         dns_query_seen: {$ref: '#/components/schemas/DnsQueryCheck'}
+        ntp_queried: {$ref: '#/components/schemas/NtpQueriedCheck'}
         tls_rejected:
           allOf: [{$ref: '#/components/schemas/TrafficMatch'}]
           description: |
@@ -4238,6 +4404,16 @@ components:
       required: [name]
       properties:
         name: {$ref: '#/components/schemas/Hostname'}
+    NtpQueriedCheck:
+      type: object
+      description: |
+        A device of the target asks the gateway's NTP server for the time inside the window (M34): the query is in the
+        server's log with a time stamp inside the window, whatever the server answered (a time fault, silence included).
+        That the device asked is what the network shows; whether it took the answer is not visible there, its effect is
+        (a TLS check, or the device's own log). A device with a hardcoded server asks the gateway only where its
+        queries are redirected (`ntp.redirect_hardcoded`, or a time fault of its scope), so a missing query can mean
+        that the device uses NTS or another source of time (plan §6, risk 37). The block has no fields: `ntp_queried: {}`.
+      additionalProperties: false
     TrafficNotSeenCheck:
       description: |
         No packet of a connection of the target matching the selector (and none of `except`) is seen inside the window.
@@ -4285,11 +4461,11 @@ components:
       description: Owner of an overlay - `user`, `token` or `run`.
     OverlayKind:
       type: string
-      enum: [fault, profile, rule, dns, tls, dhcp, wireguard]
+      enum: [fault, profile, rule, dns, tls, dhcp, time, wireguard]
     OverlayRequest:
       type: object
       description: |
-        Exactly one of `profile`, `fault`, `rule`, `dns`, `tls`, `dhcp`, `wireguard`.
+        Exactly one of `profile`, `fault`, `rule`, `dns`, `tls`, `dhcp`, `time`, `wireguard`.
         `target` is required except for tunnel faults and WireGuard actions. Example (plan §2.15):
         `{"target": {"device": "esp32-42"}, "profile": "bad-lte", "ttl": "5m"}`.
 
@@ -4304,14 +4480,18 @@ components:
         | `dns` | the set of `names` |
         | `tls` | `TrafficMatch` + `sni` |
         | `dhcp` | `action` |
+        | `time` | `TrafficMatch` (the destination selector of the asked server; none - the scope's whole NTP traffic) |
         | `wireguard` | `client` or `link` + `action` |
 
         **Order of overlay rules:** newest first (by `updated_at`), all before configured rules.
 
         **Specificity of non-impairment families** (plan §2.4 levels): DNS `names` and TLS
         `TrafficMatch`/`sni` count as destination/port; DHCP actions target a device (level 4)
-        or a network (level 8); tunnel faults are resolved per tunnel only (overlay before
-        configuration, newest wins) and have no level.
+        or a network (level 8); a time fault (M34) always has a port part, its `ports` or 123, like a TLS case, and its
+        destination selector counts as destination (a device level 1 with a destination and 3 without, a group 5, a
+        network 7). A fault for one server beats a fault of the same scope for every server on a device scope
+        only (level 1 against 3); on a group and on a network both have the level of the table of §2.4 and the newer one
+        comes first, as for every other family; tunnel faults are resolved per tunnel only (overlay before configuration, newest wins) and have no level.
       properties:
         target: {$ref: '#/components/schemas/Scope'}
         ttl:
@@ -4335,6 +4515,7 @@ components:
         dns: {$ref: '#/components/schemas/DnsFault'}
         tls: {$ref: '#/components/schemas/TlsCase'}
         dhcp: {$ref: '#/components/schemas/DhcpAction'}
+        time: {$ref: '#/components/schemas/TimeFault'}
         wireguard: {$ref: '#/components/schemas/WireGuardAction'}
     WireGuardAction:
       type: object
@@ -4847,7 +5028,7 @@ components:
         version: {type: string}
         features:
           type: array
-          description: Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `tls.cases`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `wireguard.actions`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `diagnostics`, `probes`, `metrics`, `port_forwards`.
+          description: Feature flags of this build, e.g. `networks.lan`, `networks.wireguard`, `routing.bird`, `dhcp`, `dns.proxy`, `dns.faults`, `dns.hostname_selectors`, `tls.cases`, `faults.impairment`, `faults.mtu`, `faults.tunnel`, `wireguard.actions`, `rules`, `profiles`, `runs`, `checks`, `captures`, `tls.responder`, `tls.intercept`, `dhcp.actions`, `time.faults`, `ntp.server`, `diagnostics`, `probes`, `metrics`, `port_forwards`.
           items: {type: string}
         overlay_kinds:
           type: array
@@ -4907,7 +5088,7 @@ components:
             properties:
               name:
                 type: string
-                enum: [api, executor, svcns, dns, tls, tls_proxy, kea, bird]
+                enum: [api, executor, svcns, dns, tls, tls_proxy, ntp, kea, bird]
               status:
                 type: string
                 enum: [healthy, degraded, unhealthy, disabled]
@@ -5478,7 +5659,8 @@ components:
           description: |
             False while a part of the profile is not in this build. Every part is available since M22 (the `dns` family
             since M20, the certificate and handshake cases of the `tls` family, `tls-broken` among them, since M21, and the
-            case `intercept` since M22), so this is true for every profile today; the field stays for a part a later
+            case `intercept` since M22) except the `time` part (M34): a profile with a `time` part is false here, with the
+            milestone M34 in `unavailable_reason`, until the NTP server is in the build; the field stays for a part a later
             milestone adds. A profile with a part that is not in the build can be defined and shown, but activating it
             is refused with `unsupported_feature`. So is applying a revision that gives a profile
             such a part while an overlay activates it (the profile and the milestone are named; remove
@@ -5607,7 +5789,9 @@ components:
             maintainer on 2026-10-11. The families `dns` and `dhcp` are resolved for every destination: a DHCP
             action overlay whose scope covers the device and a DNS fault without names are winners for any
             address asked, although they act on the device's name resolution and lease, not on a connection to
-            that address; a client that draws what acts on a connection takes `impairment`, `mtu`, `tls` and
+            that address. The family `time` is resolved like `tls`, for UDP traffic to the NTP port or to the ports the
+            fault names, and for no other: a query without a protocol and a port, or for a TCP flow, has no time
+            winner. A client that draws what acts on a connection takes `impairment`, `mtu`, `tls`, `time` and
             `tunnel`.
           items:
             type: object
@@ -5745,7 +5929,7 @@ components:
         id: {$ref: '#/components/schemas/StepId'}
         type:
           type: string
-          enum: [profile, fault, rule, dns, tls, dhcp, wireguard, capture, wait, remove, restore]
+          enum: [profile, fault, rule, dns, tls, dhcp, time, wireguard, capture, wait, remove, restore]
         status:
           type: string
           enum: [pending, applied, skipped, error]
@@ -5793,7 +5977,7 @@ components:
         name: {type: string}
         type:
           type: string
-          enum: [reconnected, no_connection, traffic_seen, traffic_not_seen, dns_query_seen, tls_rejected, tls_accepted]
+          enum: [reconnected, no_connection, traffic_seen, traffic_not_seen, dns_query_seen, ntp_queried, tls_rejected, tls_accepted]
         status:
           type: string
           description: '`pending` until decided (and for good when the run ended first); `error` when the check could not be decided, e.g. the connections could not be read when its window closed.'
@@ -6186,7 +6370,11 @@ components:
         (`data`: `overlay`, `network`, for a device's action `device`, and `count`). `events_lost` is synthetic: the server sends it instead of a replay
         when a client's `Last-Event-ID` is from an earlier boot or older than the replay buffer, so
         the client knows to treat its own state as possibly stale (`data.reason`: `restart` or
-        `expired`).
+        `expired`). `ntp_answered` says that a time fault shaped an answer of the NTP server (`data`: `overlay`, `device`,
+        `answer`, at most one per device and fault every 10 s); `ntp_query_seen` that a device asked the server for the
+        time (`data`: `device`; the wait condition of that name reads the server's own record of the queries and does not
+        depend on this event, so the event may be limited without a wait missing a query); `nts_seen` that a device made an
+        NTS key-establishment connection (TCP 4460), which the server cannot answer (once per device).
       enum:
         - applied
         - apply_failed
@@ -6214,6 +6402,9 @@ components:
         - dhcp_leases_deleted
         - dns_fault_triggered
         - dns_set_epoch
+        - ntp_answered
+        - ntp_query_seen
+        - nts_seen
         - tls_handshake
         - http_fault_triggered
         - wireguard_peer_online
@@ -6488,6 +6679,124 @@ components:
           type: array
           items: {$ref: '#/components/schemas/DnsQueryLogEntry'}
         next_cursor: {type: string}
+    NtpServiceConfig:
+      type: object
+      required: [generation, networks, faults, listen]
+      properties:
+        generation: {type: integer, format: int64}
+        networks:
+          type: array
+          description: The networks whose devices the server serves; the server's reference id in an answer is the gateway address of the client's network.
+          items:
+            type: object
+            required: [network, gateway]
+            properties:
+              network: {$ref: '#/components/schemas/Uuid'}
+              gateway:
+                allOf: [{$ref: '#/components/schemas/Ipv4'}]
+                description: The network's gateway address the clients query.
+              clients:
+                allOf: [{$ref: '#/components/schemas/Ipv4Cidr'}]
+                description: Source range of the network's clients.
+        faults:
+          type: array
+          description: |
+            Resolved time faults, the precedence of §2.4 already applied per group of sources and per redirect port: for a
+            query the first entry whose `sources` contain the client and whose `port` is the port the query arrived on
+            decides, and the server walks no further. A query that no entry decides is answered with the correct time.
+
+            The compiler emits one entry for every group of sources with the same ranked list of time faults and for every
+            port that queries of the group can arrive on (123 and the redirect ports of the selectors in its list): the
+            first fault of the ranked list that has no destination selector or whose selector is redirected to that port
+            (`domain.TimeWinner`). A fault without a destination selector therefore appears once for each of those
+            ports, a fault for one server on the port of that server only, and a newer fault without a selector hides an
+            older fault for one server. The destination NAT of a selector is limited to the sources of the groups that
+            have it in their list and is ordered like the list, so a query arrives on the port of the first fault whose
+            selector matches the server asked; the queries of other sources to that server arrive on 123 like all the rest.
+            A selector is the destination together with `ports` and `port_ranges`: a fault with other ports and no
+            destination has a selector of its own, and it is a fault "without a destination selector" only when it has
+            neither a destination nor ports other than 123.
+          items:
+            allOf:
+              - $ref: '#/components/schemas/TimeFault'
+              - type: object
+                required: [overlay, since, sources, port]
+                properties:
+                  overlay: {$ref: '#/components/schemas/Uuid'}
+                  since:
+                    type: string
+                    format: date-time
+                    description: |
+                      The instant the fault took effect: the `updated_at` of the overlay (of the activation, for the part of a
+                      profile), so it changes when the overlay is replaced and not when the configuration changes or the
+                      server restarts. The server serves `absolute` plus the time elapsed since then, and a skew of
+                      `skew_ppm` times the time elapsed since then, from this instant and not from the moment it received
+                      the entry.
+                  sources:
+                    type: array
+                    items: {$ref: '#/components/schemas/Ipv4OrCidr'}
+                  port:
+                    type: integer
+                    minimum: 1
+                    maximum: 65535
+                    description: |
+                      The port of the server the fault's destination selector is redirected to (decision D36): 123 for the
+                      gateway address and for a fault without a destination selector, further ports from 12301 upward, one
+                      per distinct destination selector.
+        listen:
+          type: array
+          maxItems: 33
+          description: The UDP ports the server listens on (123 and the redirect ports of the faults, at most 32 of them, decision D36), in the service namespace.
+          items:
+            type: integer
+            minimum: 1
+            maximum: 65535
+    NtpQueryLogEntry:
+      type: object
+      required: [time, client, port]
+      properties:
+        time:
+          type: string
+          format: date-time
+          description: When the query arrived (the kernel's receive time stamp).
+        client: {$ref: '#/components/schemas/Ipv4'}
+        device:
+          allOf: [{$ref: '#/components/schemas/Uuid'}]
+          description: Filled in by the API from the observed state.
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: The port of the server the query arrived on; it tells the destination selector it was redirected for (decision D36).
+        kind:
+          type: string
+          enum: [query, nts_ke]
+          default: query
+          description: '`nts_ke` - a connection to the server''s NTS key-establishment port (TCP 4460) that the server cannot answer (plan §2.18); the fields below are absent.'
+        version:
+          type: integer
+          minimum: 0
+          maximum: 7
+          description: The NTP version of the query.
+        answer:
+          type: string
+          enum: [normal, unsynchronized, kiss_of_death, silence, origin_mismatch, zero_transmit, wrong_mode, dropped]
+          description: How the server answered; `dropped` - not answered because the device's rate limit (16 per second) was exceeded.
+        served_time:
+          type: string
+          format: date-time
+          description: The transmit time stamp of the answer; absent without an answer.
+        offset_ms:
+          type: integer
+          format: int64
+          description: The served time minus the correct time, in milliseconds.
+        fault:
+          allOf: [{$ref: '#/components/schemas/Uuid'}]
+          description: The time fault overlay that shaped the answer.
+        server:
+          type: string
+          maxLength: 64
+          description: The server the device asked (`ip:port`), known where a destination selector has a fault; the API fills in the server for other redirected servers from the flows it observes, best effort.
     InterceptFlowReport:
       type: object
       required: [time, client, original_dst, protocol]

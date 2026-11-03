@@ -25,7 +25,7 @@ const EventDHCPLeasesDeleted = "dhcp_leases_deleted"
 // that names one is checked, one that does not gets a free address of the pools of the device's network. Every write of the
 // action chooses again, so writing it again moves the device again. The request has passed ValidateOverlay.
 func (o *owner) completeDHCPAction(cfg *model.Configuration, req *model.OverlayRequest) error {
-	if req.Dhcp == nil || req.Dhcp.Action != model.ForceNewIp || req.Target == nil || req.Target.Device == nil {
+	if req.Dhcp == nil || req.Dhcp.Action != model.DhcpActionActionForceNewIp || req.Target == nil || req.Target.Device == nil {
 		return nil
 	}
 	bad := func(path, format string, a ...any) error {

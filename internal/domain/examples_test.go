@@ -28,7 +28,7 @@ func exampleConfiguration(t *testing.T) *model.Configuration {
 
 func TestTheExampleConfigurationDecodesAndValidates(t *testing.T) {
 	cfg := exampleConfiguration(t)
-	if len(deref(cfg.Networks)) != 3 || len(deref(cfg.Faults)) != 5 || len(deref(cfg.Scenarios)) != 1 {
+	if len(deref(cfg.Networks)) != 3 || len(deref(cfg.Faults)) != 5 || len(deref(cfg.Scenarios)) != 2 {
 		t.Fatalf("networks %d, faults %d, scenarios %d", len(deref(cfg.Networks)), len(deref(cfg.Faults)), len(deref(cfg.Scenarios)))
 	}
 }

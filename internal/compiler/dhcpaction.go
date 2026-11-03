@@ -253,15 +253,15 @@ func (a *dhcpLayer) network(i int, c domain.Candidate) bool {
 	a.was(i)
 	s := &a.cfg.Subnets[i]
 	switch c.DHCP.Action {
-	case model.ShortLease:
+	case model.DhcpActionActionShortLease:
 		secs, ok := leaseSeconds(c.DHCP)
 		if !ok {
 			return false
 		}
 		s.LeaseSeconds, s.LeaseMin, s.LeaseMax = secs, secs, secs
-	case model.SetOptions:
+	case model.DhcpActionActionSetOptions:
 		s.SetOptions(applyOptions(s.Options(), c.DHCP.Options))
-	case model.Silence:
+	case model.DhcpActionActionSilence:
 		if a.silence == nil {
 			a.silence = map[int]*kea.Silence{}
 		}
@@ -279,16 +279,16 @@ func (a *dhcpLayer) device(i int, c domain.Candidate, dev dhcpDevice, netAct dom
 	s := &a.cfg.Subnets[i]
 	mine := c.DHCP.Action
 	switch mine {
-	case model.Silence:
+	case model.DhcpActionActionSilence:
 		a.devices = append(a.devices, dev.macs...)
 		return true
-	case model.ShortLease:
+	case model.DhcpActionActionShortLease:
 		secs, ok := leaseSeconds(c.DHCP)
 		if !ok {
 			return false
 		}
 		a.lease(dev.macs, secs, secs, secs)
-	case model.ForceNewIp:
+	case model.DhcpActionActionForceNewIp:
 		if c.DHCP.Ip == nil {
 			return false // the engine fills the address in when the action is written
 		}
@@ -298,7 +298,7 @@ func (a *dhcpLayer) device(i int, c domain.Candidate, dev dhcpDevice, netAct dom
 		}
 		r := reservationOf(s, dev.macs[0])
 		r.IP = ip
-	case model.SetOptions:
+	case model.DhcpActionActionSetOptions:
 		r := reservationOf(s, dev.macs[0])
 		r.Options = applyOptions(base.Options(), c.DHCP.Options)
 	default:
@@ -309,14 +309,14 @@ func (a *dhcpLayer) device(i int, c domain.Candidate, dev dhcpDevice, netAct dom
 	}
 	// what the network's action changed and the device's does not: the device keeps the configured one
 	switch netAct.DHCP.Action {
-	case model.ShortLease:
+	case model.DhcpActionActionShortLease:
 		a.lease(dev.macs, base.LeaseSeconds, base.LeaseMin, base.LeaseMax)
-	case model.SetOptions:
-		if mine != model.SetOptions {
+	case model.DhcpActionActionSetOptions:
+		if mine != model.DhcpActionActionSetOptions {
 			r := reservationOf(s, dev.macs[0])
 			r.Options = base.Options()
 		}
-	case model.Silence:
+	case model.DhcpActionActionSilence:
 		if sl := a.silence[i]; sl != nil {
 			sl.Except = append(sl.Except, dev.macs...)
 		}

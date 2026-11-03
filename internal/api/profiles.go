@@ -124,6 +124,8 @@ func partsOf(p model.Profile, family string) model.ProfileParts {
 		out.Dns = p.Parts.Dns
 	case domain.FamilyTLS:
 		out.Tls = p.Parts.Tls
+	case domain.FamilyTime:
+		out.Time = p.Parts.Time
 	}
 	return out
 }

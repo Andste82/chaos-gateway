@@ -49,11 +49,12 @@ const (
 	FamilyDNS        = "dns"
 	FamilyTLS        = "tls"
 	FamilyDHCP       = "dhcp"
+	FamilyTime       = "time"
 	FamilyTunnel     = "tunnel"
 )
 
 // resolvedFamilies is the order in which families are reported.
-var resolvedFamilies = []string{FamilyImpairment, FamilyMTU, FamilyDNS, FamilyTLS, FamilyDHCP}
+var resolvedFamilies = []string{FamilyImpairment, FamilyMTU, FamilyDNS, FamilyTLS, FamilyDHCP, FamilyTime}
 
 // World is the input of a resolution: a configuration whose references are UUIDs (see
 // Normalize) and the active overlays, also with UUID references (see ValidateOverlay).
@@ -156,7 +157,7 @@ type Query struct {
 	NotUplink []netip.Prefix
 }
 
-// Candidate is a fault, a part of an activated profile or a DHCP action that competes in a
+// Candidate is a fault, a part of an activated profile, a DHCP action or a time fault that competes in a
 // family.
 type Candidate struct {
 	Family string
@@ -175,6 +176,7 @@ type Candidate struct {
 	DNS        *model.DnsFault
 	TLS        *model.TlsCase
 	DHCP       *model.DhcpAction
+	Time       *model.TimeFault
 	Tunnel     *model.TunnelRef
 }
 
@@ -342,6 +344,10 @@ func (w *World) buildCandidates() []Candidate {
 			if o.Target != nil && o.Dhcp != nil && o.Dhcp.Action != "delete_lease" {
 				out = append(out, dhcpCandidate(LayerOverlay, id, "", since, *o.Target, *o.Dhcp))
 			}
+		case "time":
+			if o.Target != nil && o.Time != nil && timeScopeAllowed(*o.Target) {
+				out = append(out, timeCandidate(LayerOverlay, id, "", since, *o.Target, *o.Time))
+			}
 		case "profile":
 			if o.Target == nil || o.Profile == nil {
 				continue
@@ -381,6 +387,9 @@ func (w *World) profileParts(overlayID string, since time.Time, scope model.Scop
 	}
 	if p.Parts.Tls != nil {
 		out = append(out, tag(tlsCandidate(LayerOverlay, overlayID, "", since, scope, *p.Parts.Tls)))
+	}
+	if p.Parts.Time != nil && timeScopeAllowed(scope) {
+		out = append(out, tag(timeCandidate(LayerOverlay, overlayID, "", since, scope, *p.Parts.Time)))
 	}
 	return out
 }
@@ -594,6 +603,9 @@ func (w *World) candidateMatches(c Candidate, q Query) bool {
 		return w.trafficMatches(m, q)
 	case FamilyDHCP:
 		return true
+	case FamilyTime:
+		// the match is complete (timeMatch): the protocol udp and, without ports, the NTP port
+		return w.trafficMatches(c.Match, q)
 	}
 	return false
 }
@@ -1002,6 +1014,10 @@ func (c Candidate) Summary() string {
 	case FamilyTLS:
 		if c.TLS != nil {
 			return "tls " + string(c.TLS.Case)
+		}
+	case FamilyTime:
+		if c.Time != nil {
+			return timeSummary(*c.Time)
 		}
 	case FamilyDHCP:
 		if c.DHCP != nil {

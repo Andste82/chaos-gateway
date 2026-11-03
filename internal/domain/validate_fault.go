@@ -307,7 +307,7 @@ func (v *validator) faults() {
 	}
 }
 
-// ---- DNS, TLS, DHCP, WireGuard actions --------------------------------------------------
+// ---- DNS, TLS, DHCP, WireGuard actions (the time family: timefault.go) --------------------------------------------------
 
 func (v *validator) dnsFault(path string, d model.DnsFault) {
 	action := string(d.Action)
@@ -466,7 +466,7 @@ func (v *validator) dhcpTarget(path string, target *model.Scope, d model.DhcpAct
 	switch k := scopeKind(target); {
 	case k != "device" && k != "network":
 		v.add(path, CodeTargetKind, "a DHCP action targets a device or a network, not a %s", k)
-	case k != "device" && d.Action == model.ForceNewIp:
+	case k != "device" && d.Action == model.DhcpActionActionForceNewIp:
 		v.add(path, CodeTargetKind, "the action force_new_ip moves a device's reservation: it targets a device, not a %s", k)
 	}
 }
@@ -500,5 +500,8 @@ func (v *validator) profileParts(path string, parts model.ProfileParts) {
 	}
 	if parts.Tls != nil {
 		v.tlsCase(path+"/tls", *parts.Tls)
+	}
+	if parts.Time != nil {
+		v.timeFault(path+"/time", *parts.Time)
 	}
 }

@@ -467,7 +467,7 @@ func TestEveryExampleFileIsCheckedByTheDomain(t *testing.T) {
 					t.Errorf("%s[%d]: %v", name, i, errs)
 				}
 			}
-		case "run-request.yaml":
+		case "run-request.yaml", "run-request-time.yaml":
 			// the inline scenario of a run is validated against the configuration like any scenario
 			doc, _ := ParseDocument(raw, FormatYAML)
 			v, err := Schemas()

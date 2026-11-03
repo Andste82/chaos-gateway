@@ -17,7 +17,7 @@ func (v *validator) scenarios() {
 }
 
 // stepKinds lists the kinds of step in the order the spec names them.
-var stepKinds = []string{"profile", "fault", "rule", "dns", "tls", "dhcp", "wireguard", "capture", "wait", "remove", "restore"}
+var stepKinds = []string{"profile", "fault", "rule", "dns", "tls", "dhcp", "time", "wireguard", "capture", "wait", "remove", "restore"}
 
 // stepKind returns the kinds a step sets.
 func stepKind(s model.Step) []string {
@@ -33,6 +33,7 @@ func stepKind(s model.Step) []string {
 	add("dns", s.Dns != nil)
 	add("tls", s.Tls != nil)
 	add("dhcp", s.Dhcp != nil)
+	add("time", s.Time != nil)
 	add("wireguard", s.Wireguard != nil)
 	add("capture", s.Capture != nil)
 	add("wait", s.Wait != nil)
@@ -44,7 +45,7 @@ func stepKind(s model.Step) []string {
 // createsOverlay reports whether a step of that kind creates an overlay of the run.
 func createsOverlay(kind string) bool {
 	switch kind {
-	case "profile", "fault", "rule", "dns", "tls", "dhcp", "wireguard":
+	case "profile", "fault", "rule", "dns", "tls", "dhcp", "time", "wireguard":
 		return true
 	}
 	return false
@@ -160,6 +161,11 @@ func (v *validator) step(path string, i int, st model.Step, sc model.Scenario, f
 	case "dhcp":
 		v.dhcpAction(path+"/dhcp", *st.Dhcp)
 		v.dhcpTarget(path+"/dhcp", &target, *st.Dhcp)
+	case "time":
+		v.timeFault(path+"/time", *st.Time)
+		v.timeTarget(path+"/time", &target)
+	case "profile":
+		v.profileTimeTarget(path+"/profile", &target, *st.Profile)
 	case "wireguard":
 		v.wireguardAction(path+"/wireguard", *st.Wireguard)
 		v.tunnelInsideTarget(path+"/wireguard", &model.TunnelRef{Client: st.Wireguard.Client, Link: st.Wireguard.Link}, target)
@@ -239,7 +245,11 @@ func (v *validator) tunnelInsideTarget(path string, t *model.TunnelRef, target m
 }
 
 func (v *validator) wait(path string, w model.WaitCondition) {
-	v.match(path, convert[model.TrafficMatch](w))
+	if w.For == model.WaitConditionForNtpQuerySeen {
+		v.ntpWait(path, w)
+	} else {
+		v.match(path, convert[model.TrafficMatch](w))
+	}
 	if got, ok := parseDuration(w.Timeout); !ok || got <= 0 {
 		v.add(path+"/timeout", CodeInvalidDuration, "the timeout must be longer than zero")
 	}
@@ -313,7 +323,7 @@ func (v *validator) inGroup(device, group string) bool {
 }
 
 // checkKinds lists the check types.
-var checkKinds = []string{"reconnected", "no_connection", "traffic_seen", "traffic_not_seen", "dns_query_seen", "tls_rejected", "tls_accepted"}
+var checkKinds = []string{"reconnected", "no_connection", "traffic_seen", "traffic_not_seen", "dns_query_seen", "tls_rejected", "tls_accepted", "ntp_queried"}
 
 func (v *validator) check(path string, c model.Check, sc model.Scenario, first map[string]int, position map[int]int) {
 	var kinds []string
@@ -329,8 +339,12 @@ func (v *validator) check(path string, c model.Check, sc model.Scenario, first m
 	add("dns_query_seen", c.DnsQuerySeen != nil)
 	add("tls_rejected", c.TlsRejected != nil)
 	add("tls_accepted", c.TlsAccepted != nil)
+	add("ntp_queried", c.NtpQueried != nil)
 	if len(kinds) != 1 {
 		v.add(path, CodeStepKind, "a check has exactly one of: %s (found %d)", strings.Join(checkKinds, ", "), len(kinds))
+	}
+	if c.NtpQueried != nil {
+		v.ntpQueried(path+"/ntp_queried", *c.NtpQueried)
 	}
 	for name, m := range map[string]*model.TrafficMatch{
 		"reconnected": c.Reconnected, "no_connection": c.NoConnection, "traffic_seen": c.TrafficSeen,

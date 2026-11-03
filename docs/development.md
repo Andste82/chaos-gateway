@@ -7242,7 +7242,7 @@ the capture path (`OpenRoot`, ownership of the files), the protocol (`server.go`
 
 ### Preparation for the external review
 
-The external review itself is a human activity. It is not part of V1: it moves to M38 (After V1), decided 2026-10-31 (P7-M29-01 in `docs/open-items.md`), and the release notes say that the interface has not been reviewed from outside. What is ready to hand over:
+The external review itself is a human activity. It is not part of V1, and the maintainer dropped it on 2026-11-03 (moved to M38 on 2026-10-31, P7-M29-01 in `docs/open-items.md`; no external review is planned); the release notes of 1.0.0 say that the interface has not been reviewed from outside. What was made ready for a reviewer, and stays as the record of the self-review:
 
 - this section (threat model, accepted risks, the table of mitigations and the tests that hold them);
 - the source of the interface: `internal/executor/{op,validate,plan,scope,server,proto,runner,exec,capture,probe,dnssets,netlinkset,nftdup,tcgrammar,hostpreflight}.go` (about 6,500 lines without the tests) and the compose file of the container (`deploy/compose.executor.yaml`);
@@ -7279,7 +7279,7 @@ Level 2: the existing deployment tests follow the image's new default user (`--u
 | Scope: secret-free exports | `TestNoSecretIsInAResponseAnEventAnAuditEntryOrALog`, `TestAnExportWithoutSecretsHoldsNoKeyInAnyFormat`, `TestExportWithSecretsNeedsFullAndIsAudited` |
 | Scope: rate limiting on login | the M5 tests named above |
 | Scope: container hardening review (capabilities, read-only root file systems) | the table above; `TestEveryContainerNamesItsUserAndTheImageDefaultsToTheUnprivilegedOne`, `TestTheContainersMountFromTheHostOnlyWhatTheReviewAllows`, `TestNoContainerWidensItsSandbox`, `TestOnlyTheExecutorIsPrivilegedAndTheCapabilitiesAreThoseOfThePlan` |
-| Scope: external review of the executor interface | moved to M38 (decided 2026-10-31, P7-M29-01): the threat model, the fuzz targets and the package above are what is ready to hand over |
+| Scope: external review of the executor interface | dropped (moved to M38 on 2026-10-31, dropped by the maintainer on 2026-11-03, P7-M29-01): the threat model, the fuzz targets and the package above are the record of the self-review |
 | Tests: test networks and test-role WireGuard clients cannot reach the UI/API (regression of M4) | level 1 `TestTheUIAndTheAPIAreReachedFromTheManagementNetworkOnlyOnTheRealKernel` (the real server), `TestRolesDecideWhoReachesTheControlPlane` (M4b) |
 | Tests: tokens with insufficient scope are rejected | `TestEveryOperationRefusesACallerWithoutTheScopeItNeeds` |
 | Tests: exports contain no secrets | `TestNoSecretIsInAResponseAnEventAnAuditEntryOrALog` |

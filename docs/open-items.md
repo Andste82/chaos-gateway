@@ -3364,7 +3364,7 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 
 ### P7-M29-01 Who reviews the executor's interface from outside, when, and for how long
 
-- Status: closed (2026-10-31): decided by the maintainer, option (c): the external review of the executor interface is not part of V1 and moves to M38 (After V1); the plan (M29 Scope, M38), `docs/development.md` and the release notes say so
+- Status: closed (2026-10-31): decided by the maintainer, option (c): the external review of the executor interface is not part of V1 and moves to M38 (After V1) and was dropped altogether by the maintainer on 2026-11-03 (no external review is planned); the plan (M29 Scope, M38), `docs/development.md` and the release notes say so
 - Severity: major
 - Reason: needs-decision. The plan's M29 Scope ends with the "external review of the executor interface". A review by someone who did not write the code is a human activity: it needs a reviewer, a date and a scope, and it is a gate of the release (M30). What can be prepared is done and checked in: the threat model, the accepted risks, the table of mitigations with the test that holds each, the six fuzz targets (`make fuzz`, nightly with 45 minutes each), the source list and the command lines to run the tests, all in `docs/development.md` "Security hardening (M29)" ("Preparation for the external review"). No code can decide who reviews or whether V1 may ship without the review.
 - Evidence: `docs/plan.md` M29 Scope, `docs/development.md` "Security hardening (M29)", "Preparation for the external review" (the hand-over package), `Makefile` (`fuzz`), `.github/workflows/nightly.yml` (job `fuzz`).

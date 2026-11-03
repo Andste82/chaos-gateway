@@ -424,6 +424,11 @@ host counts. The host setup writes `net.ipv4.ping_group_range=0 2147483647` into
 before M24, run the host setup again (it is safe to run again), or set the sysctl by hand (`sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"` and the
 same line in `/etc/sysctl.d/`); until then a ping answers `cannot open an ICMP socket …` and the other diagnostics work.
 
+## Docker's own networks
+
+The containers of the gateway use no Docker network: every service runs in the network namespace of the host or in that of `svcns`, so `docker compose up` creates no bridge for the gateway. The bridges on a host come from Docker itself (`docker0` is 172.17.0.0/16) and from other Compose projects: Docker gives each user-defined network the next free range of its address pools (172.18.0.0/16, 172.19.0.0/16 and so on).
+If one of them collides with a network you reach through the gateway or with another service of your fleet (the preflight check `host.docker_pools` warns when a range overlaps an address of the uplink, the management interface or a test network), pin the ranges in `/etc/docker/daemon.json` and restart Docker: `default-address-pools` (a list of `base` and `size`) for the networks Docker creates, `bip` for `docker0`. A network that exists keeps its range until it is removed and made again (`docker network ls` and `docker network inspect` show which project owns it). The same file on every host of a fleet keeps them alike.
+
 ## Updating
 
 `/opt/chaosgw/update.sh` pulls the image and restarts the containers when no run is active (plan §3.9). The shortest way, once you have a

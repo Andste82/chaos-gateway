@@ -27,7 +27,8 @@ It is built for firmware and IoT developers, QA and CI: plug the device into a t
 - **Break the network.** Latency, jitter, loss, rate limits, reordering, duplication, corruption, blackouts, flapping, MTU and path MTU
   faults. Per device, group, network or for everything. Built-in profiles (LTE and others) and your own.
 - **Break the protocols.** DNS faults, TLS certificate and handshake cases with a test CA, DHCP actions (short lease, deleted lease,
-  new address, odd options). Optionally an interception proxy that rewrites the HTTP exchanges of a device that trusts the test CA.
+  new address, odd options), and time faults from the gateway's own NTP server (a clock a year ahead, 1970, 2038, a leap second, a
+  kiss-of-death, no answer). Optionally an interception proxy that rewrites the HTTP exchanges of a device that trusts the test CA.
 - **Run tests.** Scenarios are timelines of faults with checks ("the device must reconnect within 30 s"). A run leaves a JUnit and a
   JSON report, the events and, if you want, a packet capture. Faults can have a TTL, so nothing stays broken by accident.
 - **Show what happened.** Packet captures (pcapng), counters per rule and fault, a live flow view, diagnostics from the gateway or from
@@ -85,7 +86,7 @@ Next: the [user guide](docs/user-guide.md) walks through faults, scenarios and c
 
 ## Limits
 
-Test networks are IPv4 only; there are no VLANs yet, no NTP server or time faults, and faults do not apply to connections that reach a
+Test networks are IPv4 only; there are no VLANs yet, time faults reach a device only through plain NTP (not NTS, HTTP `Date` headers or a device's own clock), and faults do not apply to connections that reach a
 device through a port forward. The performance targets for a Raspberry Pi are not measured on real hardware yet
 ([#151](https://github.com/Andste82/chaos-gateway/issues/151)). The interception proxy has no supported screen in the web app yet; use the API or
 `chaosctl`.

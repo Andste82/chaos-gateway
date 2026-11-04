@@ -1,0 +1,28 @@
+{
+  "time-1970": {
+    "absolute": "1970-01-01T00:00:00Z"
+  },
+  "time-2038": {
+    "absolute": "2038-01-19T03:09:07Z"
+  },
+  "time-kiss-of-death": {
+    "answer": "kiss_of_death",
+    "kiss_code": "DENY"
+  },
+  "time-leap-second": {
+    "absolute": "2016-12-31T23:55:00Z",
+    "leap": "insert"
+  },
+  "time-minus-1d": {
+    "offset": "-1d"
+  },
+  "time-ntp-era-1": {
+    "absolute": "2036-02-07T06:23:16Z"
+  },
+  "time-plus-1y": {
+    "offset": "+1y"
+  },
+  "time-unsynchronized": {
+    "answer": "unsynchronized"
+  }
+}

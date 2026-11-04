@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Overlay } from '../api/generated/model';
-import { describeMatch, describeOwner, describeScope, faultChips, impairmentCombines, impairmentOf, overlayChips, tlsChips, withImpairment } from './faults';
+import { describeMatch, describeOwner, describeScope, faultChips, impairmentCombines, impairmentOf, overlayChips, timeChips, tlsChips, withImpairment } from './faults';
 
 const names = { device: (id: string) => ({ d1: 'ESP32-42' })[id], network: (id: string) => ({ n1: 'IoT' })[id], group: () => 'Sensors' };
 
@@ -150,5 +150,32 @@ describe('impairment parameter sets', () => {
     expect(impairmentCombines({ loss: '1%', burst_loss: { p: '5%', r: '30%' } })).toBe(false);
     expect(impairmentCombines({ blackout: true, flapping: { up: '20s', down: '10s' } })).toBe(false);
     expect(impairmentCombines({ download: { latency: '10ms', jitter: '20ms' } })).toBe(false);
+  });
+});
+
+describe('time fault chips (M34)', () => {
+  it('say what the server answers', () => {
+    expect(timeChips({ offset: '+400d' })).toEqual(['Time +400d']);
+    expect(timeChips({ offset: '90s' })).toEqual(['Time +90s']);
+    expect(timeChips({ offset: '-1d' })).toEqual(['Time -1d']);
+    expect(timeChips({ absolute: '1970-01-01T00:00:00Z' })).toEqual(['Time 1970-01-01 00:00:00 UTC']);
+    expect(timeChips({ absolute: '2016-12-31T23:55:00Z', skew_ppm: 500, leap: 'insert' })).toEqual(['Time 2016-12-31 23:55:00 UTC · skew 500 ppm · leap insert']);
+    expect(timeChips({ skew_ppm: -1000000 })).toEqual(['Time skew -1000000 ppm']);
+    expect(timeChips({ answer: 'unsynchronized' })).toEqual(['Time unsynchronized']);
+    expect(timeChips({ answer: 'kiss_of_death', kiss_code: 'RATE' })).toEqual(['Time kiss-of-death RATE']);
+    expect(timeChips({ answer: 'origin_mismatch' })).toEqual(['Time origin mismatch']);
+    expect(timeChips({ answer: 'silence' })).toEqual(['Time silence']);
+  });
+
+  it('name the server asked and the ports last', () => {
+    expect(timeChips({ offset: '+1y', destination: { hostname: 'time.google.com' } })).toEqual(['Time +1y · time.google.com']);
+    expect(timeChips({ answer: 'silence', destination: { cidr: '192.0.2.123/32' }, protocol: 'udp', ports: [12300] })).toEqual(['Time silence · 192.0.2.123/32 · UDP 12300']);
+    expect(timeChips({ offset: '+1y', protocol: 'udp', port_ranges: [{ from: 12301, to: 12310 }] })).toEqual(['Time +1y · UDP 12301-12310']);
+  });
+
+  it('are the chips of an overlay of the kind time, and of a profile part', () => {
+    const base = { id: 'o', owner: { type: 'user', id: 'admin' }, created_at: '', updated_at: '', generation: 1, kind: 'time' } as const;
+    expect(overlayChips({ ...base, time: { offset: '+400d' } } as Overlay)).toEqual(['Time +400d']);
+    expect(overlayChips({ ...base } as Overlay)).toEqual(['Time fault']);
   });
 });

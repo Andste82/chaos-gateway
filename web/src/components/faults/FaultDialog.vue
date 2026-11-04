@@ -7,7 +7,8 @@
 // or link whose encrypted traffic it impairs, with the parameters a tunnel takes), a DNS fault (the
 // proxy's action, the names, the delay, the addresses or the TTL) and a TLS case (the responder's
 // case, ports, destination, server names, cutting existing connections, with the download of the
-// test CA; M23b); the last two are overlays only, as the API has no configured fault of their
+// test CA; M23b) and a time fault (what the NTP server answers instead of the correct time, the server the device asked,
+// with presets; M34); the last three are overlays only, as the API has no configured fault of their
 // families; a live preview sentence. A fault is edited with all its parameters: saving never drops one. Each message stands under its field and Apply stays
 // disabled until the form is valid; the gateway's refusal (422) is put under the fields it names.
 // An overlay is written at once (`POST /overlays`, the answer comes after the verify) and appears
@@ -42,6 +43,7 @@ import {
   overlayOnlyFamilies,
   overlayToForm,
   previewSentence,
+  timeTargetOk,
   trafficPresets,
   ttlText,
   type FaultField,
@@ -63,6 +65,7 @@ import ScopeSelect from '../ui/ScopeSelect.vue';
 import SegmentedControl from '../ui/SegmentedControl.vue';
 import DnsFields from './DnsFields.vue';
 import ImpairmentFields from './ImpairmentFields.vue';
+import TimeFields from './TimeFields.vue';
 import TlsFields from './TlsFields.vue';
 import TrafficFields from './TrafficFields.vue';
 
@@ -141,12 +144,12 @@ const tunnels = computed(() => tunnelOptions(networks.data.value ?? []));
 const capabilities = useCapabilities();
 const canIntercept = useCanIntercept();
 /**
- * The kinds a new fault can be: a tunnel fault has no target, so not on a device's page; a DNS fault and a TLS case are overlays
+ * The kinds a new fault can be: a tunnel fault has no target, so not on a device's page; a DNS fault, a TLS case and a time fault are overlays
  * only, so not while the fault is saved in the configuration, and only when the gateway has them.
  */
 const families = computed(() => {
   const kinds = capabilities.data.value?.overlay_kinds;
-  return (['impairment', 'mtu', 'tunnel', 'dns', 'tls'] as const)
+  return (['impairment', 'mtu', 'tunnel', 'dns', 'tls', 'time'] as const)
     .filter((f) => f !== 'tunnel' || !props.fixedTarget)
     .filter((f) => !overlayOnlyFamilies.includes(f) || (layer.value === 'overlay' && (!kinds || (kinds as string[]).includes(f))))
     .map((value) => ({ value, label: familyLabels[value] }));
@@ -164,7 +167,8 @@ const mtuHint = computed(() => mtuModes.find((m) => m.value === form.value.mtuMo
 
 const targets = computed(() => {
   const n = names.value;
-  const out: { value: string; label: string }[] = [{ value: 'global', label: 'Everything' }];
+  // the NTP server tells a client's scope from its address: a time fault has no global scope and no remote network
+  const out: { value: string; label: string }[] = form.value.family === 'time' ? [] : [{ value: 'global', label: 'Everything' }];
   for (const net of networks.data.value ?? []) out.push({ value: `network:${net.id}`, label: `Network · ${n.network?.(net.id) ?? net.id}` });
   for (const g of groupList.value) out.push({ value: `group:${g.id}`, label: `Group · ${g.name}` });
   for (const d of devices.data.value ?? []) {
@@ -173,9 +177,28 @@ const targets = computed(() => {
     out.push({ value: `device:${d.id}`, label: `Device · ${d.name}` });
   }
   // the client networks of the WireGuard clients, the links' prefixes and a prefix inside them (P3-M13-08)
-  out.push(...remoteScopeOptions(networks.data.value ?? []));
+  if (form.value.family !== 'time') out.push(...remoteScopeOptions(networks.data.value ?? []));
   return out;
 });
+
+// a new time fault cannot keep the target "everything" or a remote network: it starts on the first target it can have, and the
+// target the user had comes back when the kind is left while that first target is still the one chosen
+let targetBeforeTime: { was: string; chosen: string } | undefined;
+watch(
+  () => form.value.family,
+  (family) => {
+    if (family === 'time') {
+      if (timeTargetOk(form.value.target)) return;
+      const chosen = targets.value[0]?.value;
+      if (!chosen) return;
+      targetBeforeTime = { was: form.value.target, chosen };
+      form.value.target = chosen;
+      return;
+    }
+    if (targetBeforeTime && form.value.target === targetBeforeTime.chosen) form.value.target = targetBeforeTime.was;
+    targetBeforeTime = undefined;
+  },
+);
 
 const groupList = computed(() => (groups.data.value ?? []).map((g) => ({ id: g.id, name: g.config.name })));
 const scopeOfTarget = computed(() => formToOverlay(form.value).target);
@@ -324,9 +347,9 @@ const errId = (f: string) => `${uid}-${f}-error`;
         <span class="label">Kind</span>
         <SegmentedControl v-model="form.family" label="Kind" :options="families" />
         <p v-if="overlayOnly" class="m-0 mt-1.5 text-[13px] text-text-2" data-testid="overlay-only-note">
-          {{ form.family === 'dns' ? 'A DNS fault' : 'A TLS case' }} is an overlay: it applies now and goes with its duration; it cannot be saved in the configuration.
+          {{ form.family === 'dns' ? 'A DNS fault' : form.family === 'time' ? 'A time fault' : 'A TLS case' }} is an overlay: it applies now and goes with its duration; it cannot be saved in the configuration.
         </p>
-        <p v-else-if="allowConfig && layer === 'config'" class="m-0 mt-1.5 text-[13px] text-text-2">DNS faults and TLS cases are overlays: choose Overlay under Save as to make one.</p>
+        <p v-else-if="allowConfig && layer === 'config'" class="m-0 mt-1.5 text-[13px] text-text-2">DNS faults, TLS cases and time faults are overlays: choose Overlay under Save as to make one.</p>
       </div>
 
       <div v-if="form.family === 'tunnel'">
@@ -402,6 +425,7 @@ const errId = (f: string) => `${uid}-${f}-error`;
         <p class="m-0 text-[13px] text-text-2" data-testid="mtu-hint">{{ mtuHint }}</p>
       </template>
       <DnsFields v-else-if="form.family === 'dns'" v-model="form.dns" :errors="errors" />
+      <TimeFields v-else-if="form.family === 'time'" v-model="form.time" :errors="errors" />
       <TlsFields
         v-else-if="form.family === 'tls'"
         v-model="form.tls"

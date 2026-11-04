@@ -293,6 +293,14 @@ async function submit() {
           <label class="flex items-center gap-2 text-sm"><input v-model="form.redirectDns" type="checkbox" /> Redirect DNS to other resolvers to the gateway's DNS proxy</label>
           <label class="flex items-center gap-2 text-sm"><input v-model="form.blockDot" type="checkbox" /> Block DNS over TLS (TCP 853)</label>
         </fieldset>
+        <fieldset class="m-0 flex flex-col gap-1 border-0 p-0" data-testid="network-ntp">
+          <legend class="label">Time (NTP)</legend>
+          <label class="flex items-center gap-2 text-sm"><input v-model="form.timeService" type="checkbox" /> The gateway's NTP server serves the devices (UDP 123 on the gateway address)</label>
+          <label class="flex items-center gap-2 text-sm"><input v-model="form.redirectNtp" type="checkbox" /> Redirect NTP to other servers to the gateway's NTP server</label>
+          <p class="m-0 mt-1 text-xs text-text-3">
+            With the redirect the devices that use a hardcoded server get the gateway's time, and a reply leaves with the address of the server they asked. A time fault redirects the traffic of its target whether or not this is set.
+          </p>
+        </fieldset>
       </template>
 
       <template v-else>
@@ -330,7 +338,7 @@ async function submit() {
             <TextField v-model="form.router" label="DHCP router (option 3)" mono :error="shown('router')" hint="Empty: the gateway address." />
             <TextField v-model="form.dhcpDns" label="DHCP DNS servers (option 6)" mono :error="shown('dhcpDns')" hint="Empty: the gateway (DNS faults apply)." />
             <TextField v-model="form.domain" label="Domain (option 15)" mono :error="shown('domain')" />
-            <TextField v-model="form.ntp" label="NTP servers (option 42)" mono :error="shown('ntp')" />
+            <TextField v-model="form.ntp" label="NTP servers (option 42)" mono :error="shown('ntp')" hint="Empty: the gateway, while its time service is on." />
             <TextField v-model="form.customOptions" class="col-span-2" label="Custom options (code and value per line)" mono :rows="2" placeholder="66 tftp.lab" :error="shown('customOptions')" />
           </div>
           <TextField

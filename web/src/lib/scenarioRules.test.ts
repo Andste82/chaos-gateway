@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Scenario, Scope, Step } from '../api/generated/model';
 import { checkFormErrors, emptyCheckForm } from './checkForm';
-import { createsOverlay, scopeKey, scopeWithin, startsCapture, tunnelOutsideTarget, type Topology } from './scenarioRules';
+import { createsOverlay, profileTimeTargetProblem, scopeKey, scopeWithin, startsCapture, timeTargetProblem, tunnelOutsideTarget, type Topology } from './scenarioRules';
 import { scenarioProblems } from './scenarios';
 import { emptyStepForm, stepFormErrors, type StepForm } from './stepForm';
 
@@ -212,5 +212,54 @@ describe('the scope within a scope', () => {
     expect(scopeWithin({ group: GROUP }, { group: GROUP.toUpperCase() }, topology)).toBe(true);
     expect(scopeWithin({ network: IOT }, { device: DEV }, topology)).toBe(false);
     expect(scopeWithin({ device: DEV }, { global: true }, topology)).toBe(true);
+  });
+});
+
+describe('the target of a time fault (M34)', () => {
+  it('a device, a group or a network; not everything and not a remote network', () => {
+    expect(timeTargetProblem({ device: DEV })).toBeUndefined();
+    expect(timeTargetProblem({ group: GROUP })).toBeUndefined();
+    expect(timeTargetProblem({ network: IOT })).toBeUndefined();
+    expect(timeTargetProblem({ remote_network: { client: CLIENT } })).toMatch(/not a remote network/);
+    expect(timeTargetProblem({ global: true })).toMatch(/not everything/);
+    expect(timeTargetProblem({})).toBeUndefined();
+  });
+
+  it('a time step makes an overlay that a later step can remove', () => {
+    expect(createsOverlay({ id: 'a', at: '0s', time: { offset: '+1y' } })).toBe(true);
+    expect(createsOverlay({ id: 'a', at: '0s', wait: { for: 'ntp_query_seen', timeout: '1m' } })).toBe(false);
+  });
+
+  it('a step narrowed to a remote network is a problem at the step; the step dialog says it under the narrowing', () => {
+    const steps: Step[] = [{ id: 'a', at: '0s', target: { remote_network: { client: CLIENT } }, time: { offset: '+1y' } }];
+    expect(at(base(steps, { network: HUB }))).toContain('/steps/0/time');
+    const f: StepForm = { ...emptyStepForm('time', 'a'), narrow: `remote_network:client:${CLIENT}` };
+    expect(stepFormErrors(f, { others: [], earlier: [], target: { network: HUB }, steps, topology }).narrow).toMatch(/not a remote network/);
+  });
+
+  it('a profile step whose profile has a time part follows the same rule as a time step, at the pointer the gateway reports', () => {
+    const timed: Topology = { ...topology, hasTimePart: (p) => (p === 'time-2038' ? true : p === 'lte' ? false : undefined) };
+    const on = (profile: string, own?: Scope): Step => ({ id: 'a', at: '0s', profile, ...(own ? { target: own } : {}) }) as Step;
+    const remote: Scope = { remote_network: { client: CLIENT } };
+    // a scenario's target is a device, a group or a network, so only a step that narrows to a remote network can be refused
+    expect(at(base([on('time-2038', remote)], { network: HUB }), timed)).toEqual(['/steps/0/profile']);
+    expect(at(base([on('time-2038')], { group: GROUP }), timed)).toEqual([]);
+    expect(at(base([on('time-2038', { device: DEV })], { group: GROUP }), timed)).toEqual([]);
+    // a profile without a time part, and one that is not known, are not this rule's
+    expect(at(base([on('lte', remote)], { network: HUB }), timed)).toEqual([]);
+    expect(at(base([on('other', remote)], { network: HUB }), timed)).toEqual([]);
+    expect(at(base([on('time-2038', remote)], { network: HUB }))).toEqual([]);
+    expect(profileTimeTargetProblem('time-2038', { global: true }, timed)).toMatch(/profile with a time part targets a device, a group or a network, not everything/);
+    expect(profileTimeTargetProblem('time-2038', { device: DEV }, timed)).toBeUndefined();
+  });
+
+  it('the step dialog says it under the profile field', () => {
+    const timed: Topology = { ...topology, hasTimePart: (p) => p === 'time-2038' };
+    const f: StepForm = { ...emptyStepForm('profile', 'a'), profile: 'time-2038' };
+    const steps: Step[] = [{ id: 'a', at: '0s', profile: 'time-2038' }];
+    const ctx = { others: [], earlier: [], target: { network: HUB }, steps, topology: timed };
+    expect(stepFormErrors({ ...f, narrow: `remote_network:client:${CLIENT}` }, ctx).profile).toMatch(/not a remote network/);
+    expect(stepFormErrors(f, ctx)).toEqual({});
+    expect(stepFormErrors({ ...f, narrow: `device:${CLIENT}` }, ctx)).toEqual({});
   });
 });

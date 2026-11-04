@@ -10,18 +10,18 @@ import {
   createRunBodyTwoInlineOneStepsItemIdRegExp as stepIdRegExp,
 } from '../api/generated/zod/runs/runs';
 import { accessLabel, describeDestination, resetError, type FieldChange } from './rules';
-import { createsOverlay, dhcpTargetProblem, messages, reservedStepId, scopeWithin, startsCapture, tunnelOutsideTarget, type Topology } from './scenarioRules';
-import { describeMatch, describeScope, dhcpChips, dnsChips, faultChips, tlsChips, type Names } from './faults';
+import { createsOverlay, dhcpTargetProblem, messages, reservedStepId, scopeWithin, profileTimeTargetProblem, startsCapture, timeTargetProblem, tunnelOutsideTarget, type Topology } from './scenarioRules';
+import { describeMatch, describeScope, dhcpChips, dnsChips, faultChips, timeChips, tlsChips, type Names } from './faults';
 import { durationMs, formatDuration } from './format';
 import { jsonEqual } from './mergePatch';
 import { profileTitle } from './profileNames';
 
-export type StepType = 'profile' | 'fault' | 'rule' | 'dns' | 'tls' | 'dhcp' | 'wireguard' | 'capture' | 'wait' | 'remove' | 'restore';
-export type CheckType = 'reconnected' | 'no_connection' | 'traffic_seen' | 'traffic_not_seen' | 'dns_query_seen' | 'tls_rejected' | 'tls_accepted';
+export type StepType = 'profile' | 'fault' | 'rule' | 'dns' | 'tls' | 'dhcp' | 'time' | 'wireguard' | 'capture' | 'wait' | 'remove' | 'restore';
+export type CheckType = 'reconnected' | 'no_connection' | 'traffic_seen' | 'traffic_not_seen' | 'dns_query_seen' | 'tls_rejected' | 'tls_accepted' | 'ntp_queried';
 export type Zero = 'warning' | 'error';
 
 /** The step types in the order the editor offers them. */
-export const stepTypes: StepType[] = ['profile', 'fault', 'dns', 'tls', 'dhcp', 'rule', 'wireguard', 'capture', 'wait', 'remove', 'restore'];
+export const stepTypes: StepType[] = ['profile', 'fault', 'dns', 'tls', 'time', 'dhcp', 'rule', 'wireguard', 'capture', 'wait', 'remove', 'restore'];
 
 export const stepTypeLabels: Record<StepType, string> = {
   profile: 'Profile',
@@ -30,6 +30,7 @@ export const stepTypeLabels: Record<StepType, string> = {
   dns: 'DNS fault',
   tls: 'TLS case',
   dhcp: 'DHCP action',
+  time: 'Time fault',
   wireguard: 'WireGuard action',
   capture: 'Capture',
   wait: 'Wait',
@@ -45,6 +46,7 @@ export const stepTypeTone: Record<StepType, 'fault' | 'block' | 'normal'> = {
   dns: 'fault',
   tls: 'fault',
   dhcp: 'fault',
+  time: 'fault',
   wireguard: 'fault',
   capture: 'normal',
   wait: 'normal',
@@ -52,7 +54,7 @@ export const stepTypeTone: Record<StepType, 'fault' | 'block' | 'normal'> = {
   restore: 'normal',
 };
 
-export const checkTypes: CheckType[] = ['reconnected', 'no_connection', 'traffic_seen', 'traffic_not_seen', 'dns_query_seen', 'tls_rejected', 'tls_accepted'];
+export const checkTypes: CheckType[] = ['reconnected', 'no_connection', 'traffic_seen', 'traffic_not_seen', 'dns_query_seen', 'tls_rejected', 'tls_accepted', 'ntp_queried'];
 
 export const checkTypeLabels: Record<CheckType, string> = {
   reconnected: 'Reconnected',
@@ -62,6 +64,7 @@ export const checkTypeLabels: Record<CheckType, string> = {
   dns_query_seen: 'DNS query seen',
   tls_rejected: 'TLS rejected',
   tls_accepted: 'TLS accepted',
+  ntp_queried: 'NTP queried',
 };
 
 /** What a check type asserts, for the editor. */
@@ -73,9 +76,10 @@ export const checkTypeHints: Record<CheckType, string> = {
   dns_query_seen: 'A device of the target asks the gateway for the name inside the window.',
   tls_rejected: 'A device of the target aborts a TLS handshake with the gateway\'s responder inside the window: it was shown a certificate and did not take it. Passes at the first one.',
   tls_accepted: 'A device of the target completes a TLS handshake with the responder inside the window: it took the certificate. The finding of the security check, for a case it must reject.',
+  ntp_queried: 'A device of the target asks the gateway\'s NTP server for the time inside the window, whatever the server answered (a time fault, silence included). That the device asked is what the network shows; whether it took the answer is not. A device that uses NTS or another source of time never asks.',
 };
 
-const stepKeys: StepType[] = ['profile', 'fault', 'rule', 'dns', 'tls', 'dhcp', 'wireguard', 'capture', 'wait', 'remove', 'restore'];
+const stepKeys: StepType[] = ['profile', 'fault', 'rule', 'dns', 'tls', 'dhcp', 'time', 'wireguard', 'capture', 'wait', 'remove', 'restore'];
 
 /** The type of a step: the one member it has besides `id`, `at` and `target`; undefined for a step that has none. */
 export function stepType(s: Step): StepType | undefined {
@@ -152,6 +156,7 @@ export function stepText(s: Step, names: ScenarioNames = {}): string {
       const t = `timeout ${formatDuration(w.timeout)}`;
       if (w.for === 'online') return `Wait until the target is online · ${t}`;
       if (w.for === 'dns_query') return `Wait for a DNS query for ${w.name ?? 'a name'} · ${t}`;
+      if (w.for === 'ntp_query_seen') return `Wait for the next NTP query of the target · ${t}`;
       return `Wait for a new connection${describeMatch(w, names) ? ` ${describeMatch(w, names)}` : ''} · ${t}`;
     }
     case 'remove':
@@ -165,6 +170,8 @@ export function stepText(s: Step, names: ScenarioNames = {}): string {
       return tlsChips(s.tls!, names).join(', ');
     case 'dhcp':
       return dhcpChips(s.dhcp!).join(', ');
+    case 'time':
+      return timeChips(s.time!).join(', ');
     default:
       return 'Step without a type';
   }
@@ -176,6 +183,8 @@ export function checkText(c: Check, names: ScenarioNames = {}): string {
   switch (type) {
     case 'dns_query_seen':
       return `a query for ${c.dns_query_seen!.name}`;
+    case 'ntp_queried':
+      return 'a query of the NTP server';
     case 'traffic_not_seen': {
       const t = c.traffic_not_seen!;
       const except = (t.except ?? []).map((d) => describeDestination(d, names)).join(', ');
@@ -297,6 +306,10 @@ export function scenarioProblems(sc: Scenario, others: string[] = [], topology: 
     const dhcp = obj(s.dhcp);
     const dhcpProblem = dhcp && effective ? dhcpTargetProblem(str(dhcp.action), effective) : undefined;
     if (dhcpProblem) add(`${p}/dhcp`, dhcpProblem);
+    const timeProblem = obj(s.time) && effective ? timeTargetProblem(effective) : undefined;
+    if (timeProblem) add(`${p}/time`, timeProblem);
+    const profileProblem = effective ? profileTimeTargetProblem(str(s.profile), effective, topology) : undefined;
+    if (profileProblem) add(`${p}/profile`, profileProblem);
     const fault = obj(s.fault);
     const tunnel = fault?.family === 'tunnel' ? obj(fault.tunnel) : obj(s.wireguard);
     if (effective && tunnel && tunnelOutsideTarget({ client: str(tunnel.client), link: str(tunnel.link) }, effective, topology)) {

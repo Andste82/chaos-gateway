@@ -9,6 +9,7 @@ import {
   formatCount,
   formatDuration,
   formatRemaining,
+  instantText,
   subnetOf,
 } from './format';
 
@@ -59,5 +60,15 @@ describe('format', () => {
     expect(subnetOf('10.10.0.1/24')).toBe('10.10.0.0/24');
     expect(subnetOf('172.16.5.200/20')).toBe('172.16.0.0/20');
     expect(subnetOf('garbage')).toBe('garbage');
+  });
+});
+
+describe('an instant in words (M34)', () => {
+  it('is the UTC date and time, without milliseconds that are zero', () => {
+    expect(instantText('1970-01-01T00:00:00Z')).toBe('1970-01-01 00:00:00 UTC');
+    expect(instantText('2038-01-19T04:09:07+01:00')).toBe('2038-01-19 03:09:07 UTC');
+    expect(instantText('2016-12-31T23:55:00.500Z')).toBe('2016-12-31 23:55:00.500 UTC');
+    // a text that is no instant is shown as it is
+    expect(instantText('soon')).toBe('soon');
   });
 });

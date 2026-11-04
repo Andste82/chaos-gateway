@@ -4,7 +4,7 @@
 // latency, jitter, loss and the advanced parameters) and an MTU part (size and mode). A custom
 // profile is an object of the configuration: "Add to the changes" puts it into the draft, and the
 // unapplied-changes bar, the preview and the apply take it to the gateway, like a configured fault.
-// A DNS or TLS part the profile has (defined over the API) is kept. What the gateway refused in the
+// A DNS, TLS or time part the profile has (defined over the API) is kept. What the gateway refused in the
 // last candidate stands under the fields its pointer names. The request the preview would send is
 // shown under `</> API`.
 import { computed, ref, useId, watch } from 'vue';
@@ -220,8 +220,8 @@ const mtuHint = computed(() => mtuModes.find((m) => m.value === form.value.mtuMo
         <p v-else class="m-0 text-[13px] text-text-3">No MTU limit.</p>
       </fieldset>
 
-      <p v-if="kept.dns || kept.tls" class="m-0 text-[13px] text-text-2" data-testid="profile-kept">
-        Its {{ [kept.dns ? 'DNS' : '', kept.tls ? 'TLS' : ''].filter(Boolean).join(' and ') }} part is kept as it is; it is defined over the API.
+      <p v-if="kept.dns || kept.tls || kept.time" class="m-0 text-[13px] text-text-2" data-testid="profile-kept">
+        Its {{ [kept.dns ? 'DNS' : '', kept.tls ? 'TLS' : '', kept.time ? 'time' : ''].filter(Boolean).join(' and ') }} part is kept as it is; it is defined over the API.
       </p>
       <p v-if="errors.parts" class="field-error m-0" role="alert">{{ errors.parts }}</p>
 

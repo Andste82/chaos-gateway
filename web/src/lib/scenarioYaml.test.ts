@@ -142,6 +142,44 @@ describe('the scenario as YAML', () => {
   });
 });
 
+describe('a scenario with a time step, a wait for the NTP query and the NTP check (M34)', () => {
+  const timed: Scenario = {
+    name: 'time-1970',
+    target: { device: ESP },
+    steps: [
+      { id: 'back', at: '0s', time: { destination: { hostname: 'time.google.com' }, absolute: '1970-01-01T00:00:00Z', skew_ppm: 500 } },
+      { id: 'next', at: '1s', wait: { for: 'ntp_query_seen', timeout: '10m' } },
+      { id: 'restore', at: '2s', restore: true },
+    ],
+    checks: [{ name: 'asked', ntp_queried: {}, window: { from: 'back', within: '10m' } }],
+  };
+
+  it('has the step and the check in the order of the spec, and reads back as the same scenario', () => {
+    const text = scenarioToYaml(timed, index);
+    expect(text).toContain('  - id: back\n    at: 0s\n    time:\n      destination:\n        hostname: time.google.com\n      absolute: 1970-01-01T00:00:00Z\n      skew_ppm: 500\n');
+    expect(text).toContain('  - name: asked\n    ntp_queried: {}\n    window:\n      from: back\n      within: 10m\n');
+    const r = parseScenarioYaml(text, index);
+    expect(r.problems).toEqual([]);
+    expect(r.scenario).toEqual(timed);
+  });
+
+  it('is the text a user writes: the time as a string, a flow-style block', () => {
+    const r = parseScenarioYaml(
+      `name: t
+target: { device: esp32-42 }
+steps:
+  - { id: a, at: 0s, time: { offset: +400d } }
+  - { id: b, at: 1s, time: { answer: kiss_of_death, kiss_code: RATE } }
+checks:
+  - { ntp_queried: {}, window: { from: a, within: 5m } }
+`,
+      index,
+    );
+    expect(r.problems).toEqual([]);
+    expect((r.scenario as Scenario).steps.map((s) => s.time)).toEqual([{ offset: '+400d' }, { answer: 'kiss_of_death', kiss_code: 'RATE' }]);
+  });
+});
+
 describe('the problems of a YAML text', () => {
   const problems = (text: string, others: string[] = []) => parseScenarioYaml(text, index, others).problems;
 

@@ -7,6 +7,7 @@ import type { WireGuardNetwork } from '../api/generated/model';
 import type { Topology } from '../lib/scenarioRules';
 import type { RefIndex } from '../lib/scenarioYaml';
 import type { ScopeOption } from '../lib/scopes';
+import { useDraftStore } from '../stores/draft';
 import { useGroups, useNames, useProfiles } from './gateway';
 
 export function useScenarioTargets() {
@@ -32,6 +33,8 @@ export function useScenarioTargets() {
  */
 export function useTopology() {
   const t = useScenarioTargets();
+  const profiles = useProfiles();
+  const draft = useDraftStore();
   return computed<Topology>(() => {
     const network = new Map<string, string>();
     for (const d of t.devices.data.value ?? []) if (d.network) network.set(d.id, d.network);
@@ -41,7 +44,23 @@ export function useTopology() {
       for (const id of Object.keys((n.config as WireGuardNetwork).clients ?? {})) network.set(id, n.id);
     }
     const members = new Map((t.groups.data.value ?? []).map((g) => [g.id, g.config.members ?? []]));
-    return { networkOf: (id) => network.get(id), membersOf: (id) => members.get(id) };
+    // a profile with a time part is bound to a device, a group or a network; the draft's custom profiles count before they are applied
+    const timed = new Set<string>();
+    const known = new Set<string>();
+    for (const p of profiles.data.value ?? []) {
+      known.add(p.id).add(p.config.name);
+      if (p.config.parts.time) timed.add(p.id).add(p.config.name);
+    }
+    for (const [id, p] of Object.entries(draft.effectiveProfiles)) {
+      known.add(id).add(p.name);
+      if (p.parts.time) timed.add(id).add(p.name);
+      else timed.delete(id);
+    }
+    return {
+      networkOf: (id) => network.get(id),
+      membersOf: (id) => members.get(id),
+      hasTimePart: (ref) => (known.has(ref) ? timed.has(ref) : undefined),
+    };
   });
 }
 

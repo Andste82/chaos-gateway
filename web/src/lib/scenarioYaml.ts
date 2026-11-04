@@ -126,8 +126,8 @@ export function withIds(sc: unknown, index: RefIndex): { scenario: unknown; unkn
 
 // the order the spec and the plan's example give the members in
 const scenarioOrder = ['name', 'description', 'target', 'capture', 'zero_hit', 'preconditions', 'steps', 'checks'];
-const stepOrder = ['id', 'at', 'target', 'profile', 'fault', 'rule', 'dns', 'tls', 'dhcp', 'wireguard', 'capture', 'wait', 'remove', 'restore'];
-const checkOrder = ['name', 'reconnected', 'no_connection', 'traffic_seen', 'traffic_not_seen', 'dns_query_seen', 'tls_rejected', 'tls_accepted', 'window'];
+const stepOrder = ['id', 'at', 'target', 'profile', 'fault', 'rule', 'dns', 'tls', 'dhcp', 'time', 'wireguard', 'capture', 'wait', 'remove', 'restore'];
+const checkOrder = ['name', 'reconnected', 'no_connection', 'traffic_seen', 'traffic_not_seen', 'dns_query_seen', 'tls_rejected', 'tls_accepted', 'ntp_queried', 'window'];
 
 function ordered(o: unknown, keys: string[]): unknown {
   if (!isObj(o)) return o;

@@ -1,8 +1,9 @@
 // The profile editor (plan §2.9, §2.17 "Profiles"; P3-M13-03): a custom profile is an object of the
 // configuration (`profiles`), made and changed through the draft and the preview like a configured
 // fault. The form has the name, the description and the parts the editor makes — an impairment part
-// (the fault dialog's impairment fields, `netemForm`) and an MTU part (size and mode); a DNS or TLS
-// part a profile already has (defined over the API; the dns part is available since M20, the tls part since M21) is kept as it is.
+// (the fault dialog's impairment fields, `netemForm`) and an MTU part (size and mode); a DNS, TLS or time
+// part a profile already has (defined over the API; the dns part is available since M20, the tls part since M21, the time part since M34, where
+// the built-in profiles `time-*` have it) is kept as it is.
 import type { Profile, ProfileParts } from '../api/generated/model';
 import { completeSetupBodyConfigurationOneProfilesNameRegExp as nameRegExp } from '../api/generated/zod/system/system';
 import { mtuOf, type MtuMode } from './faultForm';
@@ -48,11 +49,12 @@ export function profileToForm(p: Profile): ProfileForm {
   return f;
 }
 
-/** The parts of `base` the editor does not make (DNS, TLS): kept as they are. */
-export function keptParts(base: Profile | undefined): Pick<ProfileParts, 'dns' | 'tls'> {
-  const out: Pick<ProfileParts, 'dns' | 'tls'> = {};
+/** The parts of `base` the editor does not make (DNS, TLS, time): kept as they are. */
+export function keptParts(base: Profile | undefined): Pick<ProfileParts, 'dns' | 'tls' | 'time'> {
+  const out: Pick<ProfileParts, 'dns' | 'tls' | 'time'> = {};
   if (base?.parts.dns) out.dns = base.parts.dns;
   if (base?.parts.tls) out.tls = base.parts.tls;
+  if (base?.parts.time) out.time = base.parts.time;
   return out;
 }
 
@@ -81,7 +83,7 @@ export function profileFormErrors(f: ProfileForm, others: string[], base?: Profi
   else if (others.some((o) => o.toLowerCase() === lower)) e.name = 'Another profile has this name.';
   if (f.description.trim().length > 500) e.description = 'At most 500 characters.';
   const kept = keptParts(base);
-  if (!f.impairmentOn && !f.mtuOn && !kept.dns && !kept.tls) e.parts = 'Give the profile an impairment or an MTU part.';
+  if (!f.impairmentOn && !f.mtuOn && !kept.dns && !kept.tls && !kept.time) e.parts = 'Give the profile an impairment or an MTU part.';
   if (f.impairmentOn) Object.assign(e, impairmentErrors(f.impairment));
   if (f.mtuOn) {
     const size = Number(f.mtuSize);

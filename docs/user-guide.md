@@ -14,6 +14,7 @@ does not work see [troubleshooting](troubleshooting.md) and [recovery](recovery.
 - [Faults and profiles](#faults-and-profiles)
 - [Access rules](#access-rules)
 - [DNS faults](#dns-faults)
+- [Time faults and the NTP server](#time-faults-and-the-ntp-server)
 - [TLS cases and interception](#tls-cases-and-interception)
 - [DHCP actions](#dhcp-actions)
 - [Scenarios and runs](#scenarios-and-runs)
@@ -51,7 +52,7 @@ and removes it again when the time is up. A test that crashes does not leave the
 | **Network** | a test network: a subnet with the gateway's address on a bridge, DHCP and DNS, the physical ports attached to it. Also WireGuard networks and the management and uplink networks, which the operating system keeps |
 | **Device** | a device under test, recognised by MAC, IP address or WireGuard peer. *Configured* (you described it) or *discovered* (the gateway saw it) |
 | **Group** | a named set of devices |
-| **Fault** | a way to impair traffic that matches a selector (who, to where, which protocol and ports, which direction). A fault belongs to one *family*: impairment (latency, jitter, loss, rate, reorder, duplicate, corrupt, blackout, flapping), MTU, DNS, TLS, DHCP or tunnel |
+| **Fault** | a way to impair traffic that matches a selector (who, to where, which protocol and ports, which direction). A fault belongs to one *family*: impairment (latency, jitter, loss, rate, reorder, duplicate, corrupt, blackout, flapping), MTU, DNS, TLS, DHCP, time (the NTP server) or tunnel |
 | **Profile** | a named bundle of fault parameters ("Bad LTE"), built in or your own |
 | **Access rule** | allow, drop, reject or TCP reset for traffic that matches a selector; an ordered list, first match wins |
 | **Overlay** | a change that lives at run time: a fault, profile activation, rule, DNS fault, TLS case or DHCP action with an owner and an expiry. Never part of the configuration; gone at a restart |
@@ -96,7 +97,7 @@ forwards, scenarios), which go with it in the same change.
 The device page shows the identity, the faults in force with their parameters, the packets they affected and the time left, the path
 from the device through the gateway to one of its destinations (blue as configured, orange where a fault wins, red where a rule drops),
 the device's newest connections, its ten newest DNS queries (an answer that a DNS fault changed in orange), its DHCP lease and DHCP
-actions, its captures and the port forwards to it, with the buttons for a fault, a DNS fault, a TLS test and a capture.
+actions, the **Time** panel (below), its captures and the port forwards to it, with the buttons for a fault, a DNS fault, a TLS test and a capture.
 
 ## Faults and profiles
 
@@ -104,7 +105,7 @@ actions, its captures and the port forwards to it, with the buttons for a fault,
 and those from overlays marked, with the packets each affected, the time left and "overridden by X" where another fault wins.
 **Add fault** opens the dialog:
 
-1. the **kind** (impairment, MTU/PMTUD, tunnel, DNS, TLS);
+1. the **kind** (impairment, MTU/PMTUD, tunnel, DNS, TLS, Time (NTP));
 2. the **target**: a device, group, network or everything (a tunnel fault: a WireGuard client or link);
 3. the **traffic**: all of it, or a destination (address, prefix, host name, network), protocol and ports;
 4. the **direction**: both (the same in each) or upload and download each with its own values;
@@ -113,11 +114,11 @@ and those from overlays marked, with the packets each affected, the time left an
 6. **Save as**: an *overlay* (applies now and goes with its duration or at the next restart) or *Configuration* (a persistent fault in
    the next revision). Test faults are overlays.
 
-The preview sentence under the form says what it will do ("ESP32-42 upload: +200 ms ± 50 ms"). A DNS fault and a TLS case are always
+The preview sentence under the form says what it will do ("ESP32-42 upload: +200 ms ± 50 ms"). A DNS fault, a TLS case and a time fault are always
 overlays. A fault that matched no packet shows 0 affected packets: that is how you notice that it never hit the traffic you meant.
 
 **Profiles** has a card per profile (built in: Normal, LTE, Bad LTE, Satellite, Congested WiFi, Offline, Intermittent, DNS broken, TLS
-broken) with its parameters and where it is active. Activate one on a scope with a duration, or make your own (name, description,
+broken, and the eight time presets) with its parameters and where it is active. Activate one on a scope with a duration, or make your own (name, description,
 impairment and MTU parts) through the draft and preview. One profile can be active per scope. **Measure with probe** on a card checks on a
 probe that the link really behaves like the profile says ([Diagnostics and probes](#diagnostics-and-probes)). The built-in values are
 starting points, not measurements of a particular network.
@@ -145,6 +146,71 @@ SERVFAIL, no answer, delayed answer, wrong answer, truncated answer, short TTL),
 and the target. The DNS log of a device (the device page) shows what it asked. The device has to use the gateway's DNS (DHCP gives it
 out); *redirect hardcoded DNS* on a network sends queries to other resolvers to the proxy too.
 
+## Time faults and the NTP server
+
+Wrong time is a frequent cause of failures in IoT devices: a certificate that is "not yet valid" after a reset to 1970, a token that
+expires at once, the 2038 overflow. Devices take their time from NTP, and NTP is not authenticated, so the gateway runs its **own NTP
+server** (`chaosgw ntp`, in the service namespace like the DNS proxy) and answers instead of the real one. It never forwards a query.
+
+**Normal operation.** The server serves the clock of the gateway's host: stratum 2, leap indicator 0, receive time from the kernel's
+time stamp of the packet. While the host clock is not synchronized (the preflight check `host.clock` warns, and the health component
+`ntp` says so) the server honestly answers stratum 16 with leap indicator 3, which a correct client ignores (a fault with an absolute
+time does not use the host clock and is served as it is): start `chrony` or
+`systemd-timesyncd` on the host. A test network has the time service on by default, and DHCP hands out the gateway's address as the
+NTP server (option 42) unless the network names other servers. Control and private modes (6 and 7) get no answer, no reply is larger
+than its query, and a device that asks more than 16 times a second is not answered beyond that.
+
+**Hardcoded servers.** Most firmware has its NTP server compiled in. A network setting **Redirect NTP to other servers to the gateway's
+NTP server** (Networks, Edit, group *Time (NTP)*) sends such queries to the gateway's server, and the reply leaves with the address
+and port of the server the device asked. A time fault redirects the NTP traffic of its target by itself, whether or not the network
+setting is on, because a fault that silently misses the device would let a test pass that should fail. Where the redirect cannot work
+(the service namespace is gone) the traffic fails closed: the real server is not reached.
+
+**Time faults.** **Add fault**, kind *Time (NTP)*, target a device, group or network (not *Everything*, not a remote network).
+Choose what the server answers:
+
+| Answer | What the server does | What it tests |
+|---|---|---|
+| a time of your choice | the correct time plus an **offset** (`+400d`, `-90s`, `-1y2d`; a year has 365 days), or an **absolute** instant that runs on from the moment the fault starts; on top of it a **drift** in ppm (1000 ppm adds 10 ms in 10 s) and a **leap** indicator (insert or delete) | certificates "not yet valid" or expired, tokens, schedules, clock discipline, leap-second handling |
+| unsynchronized | leap indicator 3, stratum 16 | a correct client ignores the server; a careless one takes its time |
+| kiss-of-death | stratum 0 with the code `RATE` (poll less often), `DENY` or `RSTR` (stop using the server) | the back-off of the client |
+| silence | no answer; the query is counted | no time at boot, fallback servers, retry back-off (a drop rule would not count the queries and would hit more than NTP) |
+| an invalid answer | the origin timestamp is wrong, the transmit timestamp is zero, or the mode is not 4 | a correct client discards it; a careless one is open to spoofing |
+
+The **presets** are +1 year, -1 day, 1970, 2038 (five minutes before a signed 32-bit `time_t` overflows), NTP era 1 (five minutes before
+the 32-bit seconds of NTP roll over), leap second (five minutes before the end of 2016-12-31 with a second inserted), unsynchronized and
+kiss-of-death; the same eight are the built-in profiles `time-plus-1y`, `time-minus-1d`, `time-1970`, `time-2038`, `time-ntp-era-1`,
+`time-leap-second`, `time-unsynchronized` and `time-kiss-of-death` (the profile editor of the web app keeps a time part but does not edit one: a
+profile of your own with a time part is made with the API). A preview sentence under the form says what it will do. The traffic
+fields name the **server the device asked** (an address, a prefix or a host name; ports default to 123): then only queries to that server get
+the wrong time ("only `time.google.com` is wrong"), and the other servers of the device are answered correctly. Without it the fault applies
+to every server the device asks. The ports 53, 67 and 68 are refused.
+
+Things to know:
+
+- **The change is a jump.** The served time jumps when a fault starts and jumps back when it ends (the second jump is often the more
+  interesting test), and a device sees either only when it polls next, which may be minutes or hours. A scenario waits for the next
+  query with the wait **NTP query seen** (`chaosctl wait ntp`) instead of guessing.
+- **A time fault competes only with time faults**, by the rules of the other families (device before group before network, the newer first).
+  A latency fault of the device does not cancel a wrong time. A delayed or asymmetric NTP path is a latency fault with the selector
+  UDP port 123 (a delay in one direction shifts the offset a client measures by half of it).
+- **What is not covered.** NTS (authenticated NTP) cannot be answered by a third party: a device that uses it gets no time from the gateway,
+  and the Time panel notes the key-establishment connections (TCP 4460) that it saw. Block NTS-KE with a rule to make such a device fall
+  back. HTTP `Date` headers, cellular time, GPS and the device's own RTC are not affected. IPv6 follows with the IPv6 milestone, and time
+  faults are overlays only, like DNS faults and TLS cases.
+- **The Time panel** of the device page shows the last query (when, how it was answered), the server asked where the gateway knows it (an
+  address when a fault names one or the gateway sees the flow; "an external server (redirected)" for a hardcoded server nothing settles), the time served and its
+  difference from the correct one, the time faults in force for the device, the counters (queries, left unanswered by a fault, over the
+  rate limit), a note when the device tried NTS, and the last queries. It reads the state every five seconds. The event *NTP answered* (orange on the Overview) marks an answer that a time fault
+  shaped; the server reports at most one per device and fault every ten seconds.
+- **A scenario** has the step type *time* (the same fields as the dialog), the wait *NTP query seen* and the check *NTP queried*: the
+  device asked the server in the window, whatever the answer was. Whether the device took the time is not visible on the network;
+  its effect is (a TLS check, the device's own log). The run warns `zero_hit` for a time fault that shaped no answer, which usually means the
+  device does not ask the gateway (a hardcoded server on a network without the redirect, which a time fault redirects anyway, or NTS).
+
+From a script: `chaosctl time set offset --offset +400d --device esp32-42 --ttl 5m`, and the recipe in the
+[cookbook](cookbook.md#a-device-whose-clock-is-wrong).
+
 ## TLS cases and interception
 
 A **TLS case** is a certificate or handshake that is wrong in one way, shown to a device that connects to a port you choose: untrusted CA,
@@ -169,7 +235,7 @@ overlays: they end with their duration. The DHCP leases of a network, its reserv
 ## Scenarios and runs
 
 A **scenario** is a timeline: steps at offsets (a profile, a fault, a rule, a DNS fault, a TLS case, a DHCP action, a WireGuard action,
-a capture start or stop, a wait, a removal, a restore), and **checks** that say what the device must do. The Scenarios screen lists
+a time fault, a capture start or stop, a wait, a removal, a restore), and **checks** that say what the device must do. The Scenarios screen lists
 them with the target, length, steps and last result; a scenario has the tabs *Timeline*, *YAML* and *Runs*. Press **Run**: the page
 shows the run live (the current step, checks turning to passed or failed), and the artifacts appear at the end (JUnit, JSON, events,
 captures). **Abort** ends a run and removes its overlays.
@@ -191,7 +257,7 @@ checks:
 
 - Every step creates or **replaces** an overlay owned by the run: `lossy` has the same key as `slow` (same family, same traffic), so it
   replaces it with its complete parameter set. `remove: <step>` removes one step's overlay, `restore` all of them.
-- A `wait` step (`online`, `connected`, `dns_query`) holds the timeline until its condition is true; later steps shift by the waiting time,
+- A `wait` step (`online`, `connected`, `dns_query`, `ntp_query_seen`) holds the timeline until its condition is true; later steps shift by the waiting time,
   and a timeout ends the run as `error`.
 - Before the first step a run checks that the device is online, uses the gateway's DNS (when the scenario has DNS or host name
   steps) and has no foreign overlays on it; if not, the run ends as `error` and says why.
@@ -234,8 +300,8 @@ because of the machine, not of the fault.
 ## Networks, WireGuard and port forwarding
 
 **Networks** has a card per test network, the management network and the uplink. A test network has its subnet and gateway address, the
-ports attached to it, DHCP (pools, lease time, reservations, options), DNS (static entries, redirect of hardcoded DNS) and the DHCP
-leases. The test interfaces belong to the gateway alone: the operating system must not configure them (the setup and the preflight say
+ports attached to it, DHCP (pools, lease time, reservations, options), DNS (static entries, redirect of hardcoded DNS), the time
+service (on or off, redirect of hardcoded NTP servers) and the DHCP leases. The test interfaces belong to the gateway alone: the operating system must not configure them (the setup and the preflight say
 what to remove). IPv6 is blocked in this version.
 
 - **WireGuard networks** are a *hub* with many clients (a remote lab host, a phone that tests from outside, with *client networks*: the
@@ -288,8 +354,8 @@ esp32-42 (10.10.0.31, network IoT) -> 203.0.113.10 tcp/8883
 removed 1 overlays, aborted 0 runs (generation …)
 ```
 
-A profile is activated with `chaosctl with --profile` for the length of a command, or with `overlay create`. The most used commands: `fault set`, `dns set`, `tls set`, `dhcp set`, `overlay list|create|delete|renew`,
-`run -f scenario.yaml --wait --junit report.xml`, `wait device`, `with … -- command`, `explain`, `reset`, and with the full scope
+A profile is activated with `chaosctl with --profile` for the length of a command, or with `overlay create`. The most used commands: `fault set`, `dns set`, `tls set`, `dhcp set`, `time set`, `overlay list|create|delete|renew`,
+`run -f scenario.yaml --wait --junit report.xml`, `wait device`, `wait ntp`, `with … -- command`, `explain`, `reset`, and with the full scope
 `probe add|remove`, `wg export` and `certificate install|reset` (`certificate show` needs only `read`). Every command has `--help` with examples; the exit codes are in the
 [API guide](api-guide.md#clients).
 
@@ -311,7 +377,7 @@ A profile is activated with `chaosctl with --profile` for the length of a comman
 
 ## What it does not do
 
-IPv4 only (IPv6 forwarding is blocked, so faults cannot be bypassed over IPv6); no VLANs yet; no time (NTP) faults; faults on
+IPv4 only (IPv6 forwarding is blocked, so faults cannot be bypassed over IPv6); no VLANs yet; time faults reach a device only through NTP (not NTS, HTTP `Date`, cellular time, GPS or an RTC); faults on
 connections that reach a device through a port forward are a later extension; QUIC (HTTP/3) is not intercepted (block UDP 443 instead);
 hostname rules depend on what the gateway's DNS handed out; a PMTU fault with ICMP is cached by the server for the shared NAT address
 for up to ten minutes, which can affect other devices that talk to the same server (the MSS clamp has no such side effect). The

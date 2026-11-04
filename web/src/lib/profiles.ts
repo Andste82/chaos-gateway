@@ -1,7 +1,7 @@
 // Profiles in the user's words (plan §2.9, §2.17 "Profiles"): the built-in profiles' display names,
 // the parameters of a profile as fault chips, and where it is active.
 import type { ProfileParts } from '../api/generated/model';
-import { faultChips } from './faults';
+import { faultChips, timeChips } from './faults';
 
 export { builtinProfileNames, profileTitle } from './profileNames';
 
@@ -12,5 +12,6 @@ export function profileChips(parts: ProfileParts): string[] {
   if (parts.mtu) out.push(...faultChips({ family: 'mtu', mtu: parts.mtu }));
   if (parts.dns) out.push(`DNS ${parts.dns.action}`);
   if (parts.tls) out.push(`TLS ${parts.tls.case.replace(/_/g, ' ')}`);
+  if (parts.time) out.push(...timeChips(parts.time));
   return out;
 }

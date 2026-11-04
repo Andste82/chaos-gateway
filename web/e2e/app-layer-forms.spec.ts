@@ -46,7 +46,7 @@ test('a DNS fault: made in the Add fault dialog of a device, with its checks und
   await page.goto(`/devices/${ESP}`);
   await page.getByRole('button', { name: 'Add fault' }).first().click();
   const d = faultDialog(page);
-  await expect(d.getByRole('group', { name: 'Kind' }).getByRole('button')).toHaveText(['Impairment', 'MTU / PMTUD', 'DNS', 'TLS']);
+  await expect(d.getByRole('group', { name: 'Kind' }).getByRole('button')).toHaveText(['Impairment', 'MTU / PMTUD', 'DNS', 'TLS', 'Time (NTP)']);
   await kind(page, 'DNS').click();
   // a DNS fault has no traffic, no impairment fields and no direction; the target is the device
   await expect(d.getByLabel('Traffic', { exact: true })).toHaveCount(0);
@@ -106,7 +106,7 @@ test('a DNS fault for a network from the faults screen; it cannot be saved in th
   // saving in the configuration is for the kinds the configuration has
   await d.getByRole('group', { name: 'Save as' }).getByRole('button', { name: /^Configuration/ }).click();
   await expect(d.getByRole('group', { name: 'Kind' }).getByRole('button')).toHaveText(['Impairment', 'MTU / PMTUD', 'Tunnel']);
-  await expect(d.getByText('DNS faults and TLS cases are overlays: choose Overlay under Save as to make one.')).toBeVisible();
+  await expect(d.getByText('DNS faults, TLS cases and time faults are overlays: choose Overlay under Save as to make one.')).toBeVisible();
   await d.getByRole('group', { name: 'Save as' }).getByRole('button', { name: /^Overlay/ }).click();
   await kind(page, 'DNS').click();
   await expect(d.getByRole('group', { name: 'Save as' })).toHaveCount(0);

@@ -6,6 +6,7 @@ import {
   checkName,
   checkText,
   checkType,
+  checkTypes,
   freeStepId,
   lengthText,
   newScenario,
@@ -16,6 +17,7 @@ import {
   stepReferences,
   stepText,
   stepType,
+  stepTypes,
   stepsBefore,
   timelineOrder,
   windowText,
@@ -275,5 +277,49 @@ describe('what changed', () => {
     expect(scenarioChanges(mqttOutage, { ...mqttOutage, preconditions: { skip: ['target_online'] } }, names)).toEqual([
       { field: 'skipped preconditions', from: '—', to: 'target_online' },
     ]);
+  });
+});
+
+// M34: the step type `time`, the wait `ntp_query_seen` and the check `ntp_queried` in the user's words.
+describe('time steps, the wait for an NTP query and the NTP check', () => {
+  it('a step with a time member is a time step; the check with ntp_queried is the NTP check', () => {
+    expect(stepType({ id: 'x', at: '0s', time: { offset: '+1y' } })).toBe('time');
+    expect(stepTypes).toContain('time');
+    expect(checkType({ ntp_queried: {}, window: { from: 'start', within: '1m' } })).toBe('ntp_queried');
+    expect(checkTypes).toContain('ntp_queried');
+  });
+
+  it('says what each does', () => {
+    expect(stepText({ id: 'a', at: '0s', time: { offset: '+400d' } }, names)).toBe('Time +400d');
+    expect(stepText({ id: 'a', at: '0s', time: { answer: 'silence', destination: { hostname: 'time.google.com' } } }, names)).toBe('Time silence · time.google.com');
+    expect(stepText({ id: 'a', at: '0s', wait: { for: 'ntp_query_seen', timeout: '10m' } }, names)).toBe('Wait for the next NTP query of the target · timeout 10 min');
+    expect(checkText({ ntp_queried: {}, window: { from: 'start', within: '1m' } }, names)).toBe('a query of the NTP server');
+  });
+
+  it('is in the length of the timeline like any other step and check', () => {
+    const sc: Scenario = {
+      name: 'x',
+      target: { device: ESP },
+      steps: [{ id: 'late', at: '10s', time: { offset: '+1y' } }, { id: 'next', at: '20s', wait: { for: 'ntp_query_seen', timeout: '10m' } }],
+      checks: [{ ntp_queried: {}, window: { from: 'next', within: '5m' } }],
+    };
+    expect(scenarioLength(sc)).toBe(20_000 + 300_000);
+    expect(problems(sc)).toEqual([]);
+    expect(GetScenarioResponse.shape.config.safeParse(sc).success).toBe(true);
+  });
+
+  it('a time step on a remote network is a problem at the step, as the gateway reports it', () => {
+    const sc = (step: Step): Scenario => ({ name: 'x', target: { network: IOT }, steps: [step] });
+    expect(problems(sc({ id: 'a', at: '0s', time: { offset: '+1y' } }))).toEqual([]);
+    expect(problems(sc({ id: 'a', at: '0s', target: { remote_network: { cidr: '10.60.0.0/24' } }, time: { offset: '+1y' } }))).toContain('/steps/0/time');
+  });
+
+  it('a later step can remove the overlay of a time step', () => {
+    const sc: Scenario = {
+      name: 'x',
+      target: { device: ESP },
+      steps: [{ id: 'late', at: '0s', time: { offset: '+1y' } }, { id: 'back', at: '5s', remove: 'late' }],
+    };
+    expect(problems(sc)).toEqual([]);
   });
 });

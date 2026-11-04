@@ -7,7 +7,7 @@
 // IP, set options, silence) are made and listed in the DHCP card beside the lease (M23b); a DNS fault or a TLS
 // case of the device is made in the fault dialog and edited where it is listed. The path view (the device, the gateway, the
 // uplink and a destination of its connections, with the fault badge), the device's connections and its recent DNS queries are
-// panels of M26; the HTTP exchanges of an interception case that acts on the device are listed in
+// panels of M26; the Time panel (the last NTP query, the server asked, the time served and the time faults, M34); the HTTP exchanges of an interception case that acts on the device are listed in
 // a panel (M23c). The port forwards to the device (M35a)
 // are listed with their status and counter, each with a link to edit it on the networks page, which also
 // adds one to the device.
@@ -28,6 +28,7 @@ import RemoveDeviceDialog from '../components/devices/RemoveDeviceDialog.vue';
 import CapturePanel from '../components/captures/CapturePanel.vue';
 import DeviceDnsQueries from '../components/flows/DeviceDnsQueries.vue';
 import DeviceFlows from '../components/flows/DeviceFlows.vue';
+import DeviceTime from '../components/flows/DeviceTime.vue';
 import PathView from '../components/flows/PathView.vue';
 import DeviceExchanges from '../components/intercept/DeviceExchanges.vue';
 import DhcpActionsCard from '../components/dhcp/DhcpActionsCard.vue';
@@ -324,6 +325,8 @@ useApiScreen('this device', () => [
         </SectionCard>
 
         <DeviceDnsQueries :device="{ id: d.id, name: d.name }" />
+
+        <DeviceTime :device="{ id: d.id, name: d.name }" :overlays="overlays.data.value ?? []" />
 
         <DeviceExchanges :device="{ id: d.id, name: d.name }" :active="intercepted" />
 

@@ -21,6 +21,7 @@ describe('the check form', () => {
       { traffic_seen: {}, window: { from: 'start', within: '1s' } },
       { tls_rejected: { protocol: 'tcp', ports: [8883] }, window: { from: 'start', within: '1m' } },
       { traffic_not_seen: {}, window: { from: 'start', within: '1m' } },
+      { name: 'asked for the time', ntp_queried: {}, window: { from: 'cut', within: '10m' } },
     ];
     for (const c of checks) {
       expect(formToCheck(checkToForm(c))).toEqual(c);
@@ -36,6 +37,16 @@ describe('the check form', () => {
     expect(observesTraffic('reconnected')).toBe(true);
     expect(observesTraffic('traffic_not_seen')).toBe(true);
     expect(observesTraffic('dns_query_seen')).toBe(false);
+    // the NTP check has no selector: `ntp_queried: {}`
+    expect(observesTraffic('ntp_queried')).toBe(false);
+  });
+
+  it('the NTP check has no fields: a selector left in the form from another type is not sent', () => {
+    const f = { ...emptyCheckForm('ntp_queried'), dnsName: 'broker.example.com' };
+    f.traffic = { protocol: 'tcp', ports: '8883', destKind: 'any', destination: '' };
+    expect(formToCheck(f)).toEqual({ ntp_queried: {}, window: { from: 'start', within: '30s' } });
+    expect(checkFormErrors(f, { steps })).toEqual({});
+    expect(checkToForm({ ntp_queried: {}, window: { from: 'start', within: '5m' } }).type).toBe('ntp_queried');
   });
 });
 

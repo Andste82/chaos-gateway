@@ -39,12 +39,12 @@ function expiry(f: ActiveFault): string {
 }
 
 /**
- * The device's own fault overlays (impairment, MTU, tunnel), DNS faults and TLS cases can be edited where they are (a wider
+ * The device's own fault overlays (impairment, MTU, tunnel), DNS faults, TLS cases and time faults can be edited where they are (a wider
  * scope's on the faults screen; a DHCP action in the DHCP card beside the lease).
  */
 function canEdit(f: ActiveFault): boolean {
   const o = f.overlay;
-  return !!props.editable && !f.widerScope && (o?.kind === 'fault' || o?.kind === 'dns' || o?.kind === 'tls');
+  return !!props.editable && !f.widerScope && (o?.kind === 'fault' || o?.kind === 'dns' || o?.kind === 'tls' || o?.kind === 'time');
 }
 
 function requestRemove(f: ActiveFault) {

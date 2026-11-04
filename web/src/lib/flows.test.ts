@@ -30,6 +30,7 @@ describe('what a connection is called', () => {
     expect(serviceLabel({ protocol: 'icmp' })).toBe('ICMP');
     expect(serviceLabel({ protocol: 'tcp', dport: 443, service: 'tls_responder' })).toBe('TLS test');
     expect(serviceLabel({ protocol: 'udp', dport: 5000, service: 'dns_proxy' })).toBe('DNS');
+    expect(serviceLabel({ protocol: 'udp', dport: 12301, service: 'ntp_server' })).toBe('NTP');
   });
 
   it('shows the name the DNS proxy returned for the address, with the port', () => {
@@ -175,6 +176,20 @@ describe('the badge of the path', () => {
       { family: 'tunnel', text: 'wireguard blackhole' },
     ]);
     expect(faultBadgeText({ family: 'dhcp', layer: 'config', id: 'e' })).toBe('dhcp');
+  });
+
+  it('lists a time fault apart as well: it changes what the NTP server answers, not the packets of a connection (M34)', () => {
+    const e = explanation({
+      faults: [
+        { family: 'impairment', winner: { family: 'impairment', layer: 'config', id: 'a', name: 'lte' } },
+        { family: 'time', winner: { family: 'time', layer: 'overlay', id: 'h', summary: 'Time +400d' } },
+      ],
+    });
+    const state = pathState(e);
+    expect(state.faults.map((f) => f.family)).toEqual(['impairment']);
+    expect(state.elsewhere).toEqual([{ family: 'time', text: 'Time +400d' }]);
+    // and alone, it leaves the path as configured
+    expect(pathState(explanation({ faults: [{ family: 'time', winner: { family: 'time', layer: 'overlay', id: 'h', summary: 'Time +400d' } }] })).faults).toEqual([]);
   });
 
   it('keeps a DNS or DHCP fault off the path: GET /explain resolves them for every destination, and they do not act on a connection (P6-AUDIT-50)', () => {

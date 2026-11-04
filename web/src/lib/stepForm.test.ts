@@ -30,6 +30,10 @@ describe('the step form', () => {
       { id: 'i', at: '9s', fault: { family: 'tunnel', tunnel: { client: ESP }, latency: '300ms' } },
       { id: 'j', at: '10s', dns: { action: 'nxdomain' } },
       { id: 'k', at: '11s', dhcp: { action: 'silence' } },
+      { id: 'n', at: '14s', time: { offset: '+400d' } },
+      { id: 'o', at: '15s', time: { destination: { hostname: 'time.google.com' }, absolute: '1970-01-01T00:00:00Z', skew_ppm: 500 } },
+      { id: 'p', at: '16s', time: { answer: 'kiss_of_death', kiss_code: 'RATE' } },
+      { id: 'q', at: '17s', wait: { for: 'ntp_query_seen', timeout: '10m' } },
     ];
     for (const s of steps) {
       expect(formToStep(stepToForm(s))).toEqual(s);
@@ -37,7 +41,7 @@ describe('the step form', () => {
     }
     // the editor makes every type of this build: nothing is kept as it was
     for (const s of steps) expect(stepToForm(s).kept).toBeUndefined();
-    for (const t of ['dns', 'tls', 'dhcp'] as const) expect(editableTypes.has(t)).toBe(true);
+    for (const t of ['dns', 'tls', 'dhcp', 'time'] as const) expect(editableTypes.has(t)).toBe(true);
     // the settings and the rules of an interception case are edited (M23c), and come back as they were
     const intercept: Step = { id: 'l', at: '12s', tls: { case: 'intercept', ports: [443], intercept: { keylog: false, http_rules: [{ action: 'status', status: 503, match: { path_prefix: '/v1' } }] } } };
     expect(formToStep(stepToForm(intercept))).toEqual(intercept);
@@ -289,5 +293,66 @@ describe('the example through the forms', () => {
   it('is the same scenario', () => {
     const sc: Scenario = { ...mqttOutage, steps: mqttOutage.steps.map((s) => formToStep(stepToForm(s))) };
     expect(sc).toEqual(mqttOutage);
+  });
+});
+
+// M34: the step type `time` has the fields of the fault dialog's time kind, and the wait `ntp_query_seen` has no field but the timeout.
+describe('the time step and the wait for an NTP query', () => {
+  const ctx2 = { others: [] as string[], earlier: [] as string[], target: { device: ESP } as Scope };
+
+  it('a new time step is a complete time fault; the fields of the other answers stay out of the step', () => {
+    const f = emptyStepForm('time', 'skew', '5s');
+    expect(stepFormErrors(f, ctx2)).toEqual({});
+    expect(formToStep(f)).toEqual({ id: 'skew', at: '5s', time: { offset: '+1y' } });
+    f.time.answer = 'silence';
+    expect(formToStep(f).time).toEqual({ answer: 'silence' });
+    expect(spec(formToStep(f))).toBe(true);
+  });
+
+  it('has the checks of the time kind under its fields', () => {
+    const f = emptyStepForm('time', 'late');
+    f.time.offset = 'later';
+    f.time.traffic.destKind = 'network';
+    f.time.traffic.destination = IOT;
+    f.time.traffic.ports = '53';
+    const e = stepFormErrors(f, ctx2);
+    expect(e.timeOffset).toBeDefined();
+    expect(e.destination).toBeDefined();
+    expect(e.ports).toMatch(/DNS and DHCP/);
+    f.time.shift = 'none';
+    f.time.traffic = { protocol: 'any', ports: '', destKind: 'any', destination: '' };
+    expect(stepFormErrors(f, ctx2).timeChange).toBeDefined();
+  });
+
+  it('acts on a device, a group or a network: a narrowing to a remote network is refused', () => {
+    const f = emptyStepForm('time', 'late');
+    f.narrow = 'remote_network:cidr:10.60.0.0/24';
+    expect(stepFormErrors(f, ctx2).narrow).toBeDefined();
+    f.narrow = `device:${ESP}`;
+    expect(stepFormErrors(f, ctx2)).toEqual({});
+    // a scenario on a network is fine too
+    expect(stepFormErrors(emptyStepForm('time', 'late'), { ...ctx2, target: { network: IOT } })).toEqual({});
+  });
+
+  it('a wait for the next NTP query has the timeout and nothing else', () => {
+    const f = emptyStepForm('wait', 'next');
+    f.waitFor = 'ntp_query_seen';
+    f.timeout = '10m';
+    // a name or a selector left in the form from another wait is not sent
+    f.name = 'broker.example.com';
+    f.traffic = { protocol: 'tcp', ports: '8883', destKind: 'any', destination: '' };
+    expect(formToStep(f)).toEqual({ id: 'next', at: '0s', wait: { for: 'ntp_query_seen', timeout: '10m' } });
+    expect(stepFormErrors(f, ctx2)).toEqual({});
+    f.timeout = '0s';
+    expect(stepFormErrors(f, ctx2).timeout).toBeDefined();
+  });
+
+  it("puts the gateway's pointers on the fields", () => {
+    expect(stepFieldOf('time/offset')).toBe('timeOffset');
+    expect(stepFieldOf('time/kiss_code')).toBe('timeKiss');
+    expect(stepFieldOf('time/destination/cidr')).toBe('destination');
+    expect(stepFieldOf('time/ports/0')).toBe('ports');
+    expect(stepFieldOf('time')).toBe('timeChange');
+    expect(stepFieldOf('wait/for')).toBe('waitFor');
   });
 });

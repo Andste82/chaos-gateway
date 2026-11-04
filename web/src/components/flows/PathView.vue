@@ -59,7 +59,7 @@ const sentence = computed(() => {
   if (state.value.faults.length) return `${state.value.faults.length === 1 ? 'A fault acts' : 'Faults act'} on the way from ${props.device.name} to ${t.label}.`;
   return `No fault acts on the way: ${props.device.name}'s traffic to ${t.label} passes unimpaired.`;
 });
-const families: Record<string, string> = { impairment: 'Impairment', mtu: 'MTU', dns: 'DNS', tls: 'TLS', dhcp: 'DHCP', tunnel: 'Tunnel' };
+const families: Record<string, string> = { impairment: 'Impairment', mtu: 'MTU', dns: 'DNS', tls: 'TLS', time: 'Time (NTP)', dhcp: 'DHCP', tunnel: 'Tunnel' };
 </script>
 
 <template>

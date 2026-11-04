@@ -411,7 +411,8 @@ func TestBuildingAnAnswerTakesLessThanAMillisecond(t *testing.T) {
 	}
 	sort.Slice(took, func(i, j int) bool { return took[i] < took[j] })
 	// the typical answer takes microseconds: it must be under a millisecond whatever else runs. The tail is looser, because a
-	// garbage collection or another test's load on a shared machine may delay an answer; the level 1 test measures the tail.
+	// garbage collection or another test's load on a shared machine may delay an answer. This is the server's own work only
+	// (the level 1 test adds the time the operating system takes to run the server once a datagram is in, which has a long tail).
 	if median := took[len(took)/2]; median >= time.Millisecond {
 		t.Errorf("the median answer took %v, want less than a millisecond", median)
 	}

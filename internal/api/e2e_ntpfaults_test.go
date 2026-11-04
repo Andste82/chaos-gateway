@@ -317,9 +317,12 @@ func TestAnUnsynchronizedAnswerMakesChronyRejectTheServerOnTheRealKernel(t *test
 	b.until(t, "synchronized again", a, ntpGateway, func(r sntpReply) bool { return r.StrictOK && r.Stratum == 2 })
 }
 
-// M34 level 1: a kiss-of-death DENY makes chrony drop the server (it stops asking), RATE lengthens its poll interval (the
-// counters of the server show the queries per time), and both are stratum 0 with the kiss code as reference id.
-func TestAKissOfDeathDENYMakesChronyDropTheServerAndRATELengthensItsPollIntervalOnTheRealKernel(t *testing.T) {
+// M34 level 1: a kiss-of-death RATE lengthens the poll interval of chrony (the counters of the server show the queries per
+// time), a DENY is not taken as time, and both are stratum 0 with the kiss code as reference id. RFC 5905 tells a client to stop
+// using a server that says DENY or RSTR; chrony (4.8, ntp_core.c) does not: it reacts to RATE only and treats the other codes as
+// an unsynchronized answer, so that it goes on asking at its normal interval. The test asserts what chrony does, and the
+// stopping is for the client under test to show.
+func TestAKissOfDeathRATELengthensThePollIntervalOfChronyAndDENYIsNotTakenOnTheRealKernel(t *testing.T) {
 	b := newNTPBed(t, withDevices)
 	a := b.top.A
 	window := 20 * time.Second
@@ -359,7 +362,7 @@ func TestAKissOfDeathDENYMakesChronyDropTheServerAndRATELengthensItsPollInterval
 	})
 	b.remove(t, rate)
 
-	// DENY: chrony does not take the server and stops using it
+	// DENY: chrony does not take the server (it asks on: only RATE changes its behaviour)
 	deny := b.overlay(t, `{"target":{"device":"`+clientA+`"},"time":{"answer":"kiss_of_death","kiss_code":"DENY"}}`)
 	r = b.until(t, "the DENY answer", a, ntpGateway, func(r sntpReply) bool { return r.Replied && r.Stratum == 0 })
 	if r.RefIDASCII != "DENY" || r.Leap != 3 {
@@ -369,8 +372,9 @@ func TestAKissOfDeathDENYMakesChronyDropTheServerAndRATELengthensItsPollInterval
 		t.Errorf("chrony took a server that said DENY: %v\n%s", res.Offset, res.Output)
 	}
 	denied := queries(pollingFor(window))
-	if denied > 3 {
-		t.Errorf("chrony asked %d times in %v after DENY, want it to give up after the first answers", denied, window)
+	t.Logf("chrony asked %d times in %v under DENY and %d times without a fault", denied, window, normal)
+	if denied == 0 {
+		t.Errorf("the server received no query in %v under DENY", window)
 	}
 	b.remove(t, deny)
 
@@ -460,7 +464,7 @@ func TestADestinationSelectorOnAHostnameAffectsOnlyQueriesToTheAddressesOfThatNa
 	b := newNTPBed(t, withDNS)
 	a := b.top.A
 	b.startFakeNTP(t, b.top.Server, testbed.ServerAddr, "REAL")
-	b.startFakeNTP(t, b.top.Server, testbed.ServerAddr2, "RL2")
+	b.startFakeNTP(t, b.top.Server, testbed.ServerAddr2, "REL2")
 	broker, other := testbed.ServerAddr+":123", testbed.ServerAddr2+":123"
 	resolve := func(name string) string {
 		out, err := a.Run(context.Background(), "dig", "+short", "+time=2", "+tries=1", "@"+testbed.LAN0Gateway, name)
@@ -485,7 +489,7 @@ func TestADestinationSelectorOnAHostnameAffectsOnlyQueriesToTheAddressesOfThatNa
 	}
 	// the other name's address is not selected: its own server answers, with its own time
 	o := b.ask(t, a, other)
-	if !o.Replied || o.RefIDASCII != "RL2" || o.From != testbed.ServerAddr2 || !o.correct(clockTolerance()) {
+	if !o.Replied || o.RefIDASCII != "REL2" || o.From != testbed.ServerAddr2 || !o.correct(clockTolerance()) {
 		t.Errorf("the server of other.test: %+v", o)
 	}
 	// and the gateway address is not part of a selector that names a server
@@ -932,7 +936,7 @@ func TestAScenarioWithATimeStepShiftsTheServedTimeUntilTheRunEndsOnTheRealKernel
 // server, which answers with the fault of the step and reports it to the API, and the wait ends at it. The check passes on the same
 // query with the answer in its evidence, and the fault, which shaped the answer, is no zero hit.
 func TestAScenarioWithATimeStepAWaitForTheQueryAndTheCheckSeesTheQueryOfARealClientOnTheRealKernel(t *testing.T) {
-	b := newNTPBed(t)
+	b := newNTPBed(t, withDevices)
 	g, a := b.g, b.top.A
 	g.mintToken("overlays")
 	body := inlineRun("time-wait", iotTarget,
@@ -982,32 +986,28 @@ func TestAScenarioWithATimeStepAWaitForTheQueryAndTheCheckSeesTheQueryOfARealCli
 	}
 }
 
-// M34 acceptance (plan §3.10): the server answers 5,000 queries per second and adds less than a millisecond to an answer. The
-// load comes from the namespace of a device, through the redirect (DNAT, the link into the service namespace and back through
-// connection tracking), from many sockets at once, with the rate limit off. The time the server added is in the packet: the
-// transmit time stamp minus the receive time stamp. Where the timing is meaningful (native or KVM) the figures are asserted and
-// recorded in the measurement record; under software emulation they are only recorded and the test asserts that the load is
-// answered at all.
-func TestTheServerAnswersFiveThousandQueriesPerSecondThroughTheRedirectAndAddsLessThanAMillisecondOnTheRealKernel(t *testing.T) {
-	b := newNTPBed(t)
-	a := b.top.A
-	b.until(t, "A is answered", a, ntpGateway, func(r sntpReply) bool { return r.Replied })
+// ntpLoad is what one run of load against the server came to.
+type ntpLoad struct {
+	sent, answered, bad int64
+	added               []time.Duration // the time the server added to each answer: transmit minus receive time stamp
+	elapsed             time.Duration
+}
 
-	const (
-		workers = 16
-		length  = 5 * time.Second
-	)
+// ntpLoadFrom sends queries to the gateway from the namespace of a device through the redirect, from workers sockets for length.
+// With every zero each socket sends the next query as soon as the answer is in (a flood, to find what the server can answer);
+// otherwise each socket sends one query per every (a steady load, to measure what the server adds when it is not saturated).
+func ntpLoadFrom(ns string, workers int, length, every time.Duration) ntpLoad {
 	var sent, answered, bad atomic.Int64
 	var mu sync.Mutex
 	var added []time.Duration
-	deadline := time.Now().Add(length)
-	var wg sync.WaitGroup
 	start := time.Now()
+	deadline := start.Add(length)
+	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
-		go func() {
+		go func(w int) {
 			defer wg.Done()
-			conn, err := testbed.DialerIn(a.Name)(context.Background(), "udp", ntpGateway)
+			conn, err := testbed.DialerIn(ns)(context.Background(), "udp", ntpGateway)
 			if err != nil {
 				bad.Add(1)
 				return
@@ -1015,7 +1015,12 @@ func TestTheServerAnswersFiveThousandQueriesPerSecondThroughTheRedirectAndAddsLe
 			defer func() { _ = conn.Close() }()
 			var mine []time.Duration
 			buf := make([]byte, 512)
+			next := start.Add(every * time.Duration(w) / time.Duration(workers)) // the sockets do not all send at the same instant
 			for i := uint64(1); time.Now().Before(deadline); i++ {
+				if every > 0 {
+					time.Sleep(time.Until(next))
+					next = next.Add(every)
+				}
 				q := ntpserver.Packet{Version: 4, Mode: ntpserver.ModeClient, Transmit: ntpserver.Timestamp(i<<20 | 1)}
 				if _, err := conn.Write(q.Marshal()); err != nil {
 					bad.Add(1)
@@ -1033,53 +1038,80 @@ func TestTheServerAnswersFiveThousandQueriesPerSecondThroughTheRedirectAndAddsLe
 					continue
 				}
 				answered.Add(1)
-				mine = append(mine, p.Transmit.Time(time.Now()).Sub(p.Receive.Time(time.Now())))
+				now := time.Now()
+				mine = append(mine, p.Transmit.Time(now).Sub(p.Receive.Time(now)))
 			}
 			mu.Lock()
 			added = append(added, mine...)
 			mu.Unlock()
-		}()
+		}(w)
 	}
 	wg.Wait()
-	elapsed := time.Since(start)
-	if len(added) == 0 {
-		t.Fatalf("no query of %d was answered", sent.Load())
+	return ntpLoad{sent: sent.Load(), answered: answered.Load(), bad: bad.Load(), added: added, elapsed: time.Since(start)}
+}
+
+func (l ntpLoad) rate() float64 { return float64(l.answered) / l.elapsed.Seconds() }
+func (l ntpLoad) lost() float64 { return 1 - float64(l.answered)/float64(l.sent) }
+
+// M34 acceptance (plan §3.10): the server answers 5,000 queries per second and adds less than a millisecond to an answer. The
+// load comes from the namespace of a device, through the redirect (DNAT, the link into the service namespace and back through
+// connection tracking), from many sockets at once, with the rate limit off. The time the server added is in the packet: the
+// transmit time stamp minus the receive time stamp. Two runs measure two things: a flood shows what the server can answer, and
+// a steady load of 5,000 queries per second shows what it adds to an answer when it is not saturated (under a flood the
+// datagrams queue in the socket, and that wait is the load's, not the server's). Where the timing is meaningful (native or KVM)
+// the figures are asserted and recorded in the measurement record; under software emulation they are only recorded and the test
+// asserts that the load is answered at all.
+func TestTheServerAnswersFiveThousandQueriesPerSecondThroughTheRedirectAndAddsLessThanAMillisecondOnTheRealKernel(t *testing.T) {
+	b := newNTPBed(t)
+	a := b.top.A
+	b.until(t, "A is answered", a, ntpGateway, func(r sntpReply) bool { return r.Replied })
+
+	const (
+		workers = 16
+		length  = 5 * time.Second
+		target  = 5000 // queries per second
+	)
+	flood := ntpLoadFrom(a.Name, workers, length, 0)
+	steady := ntpLoadFrom(a.Name, workers, length, workers*time.Second/target)
+	if len(flood.added) == 0 || len(steady.added) == 0 {
+		t.Fatalf("no query was answered: %d of %d in the flood, %d of %d at the steady load", flood.answered, flood.sent, steady.answered, steady.sent)
 	}
-	rate := float64(answered.Load()) / elapsed.Seconds()
-	p99 := testbed.Percentile(added, 99)
-	t.Logf("%d of %d queries answered in %v by %d sockets: %.0f per second; the server added %v at the 99th percentile (median %v)", answered.Load(), sent.Load(), elapsed, workers, rate, p99, testbed.Median(added))
-	if bad.Load() > 0 {
-		t.Errorf("%d answers were wrong or a socket failed", bad.Load())
+	p99 := testbed.Percentile(steady.added, 99)
+	t.Logf("flood: %d of %d queries answered in %v by %d sockets: %.0f per second (the server added %v at the 99th percentile, median %v)", flood.answered, flood.sent, flood.elapsed, workers, flood.rate(), testbed.Percentile(flood.added, 99), testbed.Median(flood.added))
+	t.Logf("steady: %d of %d queries answered in %v: %.0f per second; the server added %v at the 99th percentile (median %v)", steady.answered, steady.sent, steady.elapsed, steady.rate(), p99, testbed.Median(steady.added))
+	if flood.bad+steady.bad > 0 {
+		t.Errorf("%d answers were wrong or a socket failed", flood.bad+steady.bad)
 	}
-	lost := 1 - float64(answered.Load())/float64(sent.Load())
-	low, high := 5000.0, 1.0 // queries per second, milliseconds
+	low, high := float64(target), 1.0 // queries per second, milliseconds
+	lost := flood.lost()
 	rec := testbed.Measure(t, "NTP through the redirect")
+	ms := float64(p99) / float64(time.Millisecond)
 	if testbed.Accurate() {
 		err := error(nil)
-		if rate < low || lost > 0.01 {
-			err = fmt.Errorf("%.0f queries per second answered with a loss of %.2f %%, want at least 5,000 per second with a loss below 1 %%", rate, lost*100)
+		if flood.rate() < low || lost > 0.01 {
+			err = fmt.Errorf("%.0f queries per second answered with a loss of %.2f %%, want at least 5,000 per second with a loss below 1 %%", flood.rate(), lost*100)
 		}
-		_ = rec.Record("rate", testbed.Measurement{Quantity: "answers per second", Unit: "1/s", N: int(sent.Load()), Configured: 5000, Value: rate, Low: &low, Loss: &lost}, err)
+		_ = rec.Record("rate", testbed.Measurement{Quantity: "answers per second", Unit: "1/s", N: int(flood.sent), Configured: target, Value: flood.rate(), Low: &low, Loss: &lost}, err)
 		if err != nil {
 			t.Error(err)
 		}
 		err = nil
-		if p99 >= time.Millisecond {
-			err = fmt.Errorf("the server added %v at the 99th percentile, want less than 1 ms", p99)
+		if steadyLost := steady.lost(); steadyLost > 0.01 {
+			err = fmt.Errorf("%.2f %% of the queries at the steady load of 5,000 per second were not answered, want less than 1 %%", steadyLost*100)
+		} else if p99 >= time.Millisecond {
+			err = fmt.Errorf("the server added %v at the 99th percentile at the steady load of 5,000 per second, want less than 1 ms", p99)
 		}
-		ms := float64(p99) / float64(time.Millisecond)
-		_ = rec.Record("added time", testbed.Measurement{Quantity: "added time at the 99th percentile", Unit: "ms", N: len(added), Configured: 1, Value: ms, High: &high}, err)
+		_ = rec.Record("added time", testbed.Measurement{Quantity: "added time at the 99th percentile at 5,000 queries per second", Unit: "ms", N: len(steady.added), Configured: 1, Value: ms, High: &high}, err)
 		if err != nil {
 			t.Error(err)
 		}
 		return
 	}
 	// under emulation the figures are recorded for the trend and the test asserts the function
-	ms := float64(p99) / float64(time.Millisecond)
-	_ = rec.Record("rate", testbed.Measurement{Quantity: "answers per second", Unit: "1/s", N: int(sent.Load()), Configured: 5000, Value: rate, Loss: &lost}, nil)
-	_ = rec.Record("added time", testbed.Measurement{Quantity: "added time at the 99th percentile", Unit: "ms", N: len(added), Configured: 1, Value: ms}, nil)
-	if answered.Load() < 500 || math.IsNaN(rate) {
-		t.Errorf("only %d queries were answered under load", answered.Load())
+	_ = rec.Record("rate", testbed.Measurement{Quantity: "answers per second", Unit: "1/s", N: int(flood.sent), Configured: target, Value: flood.rate(), Loss: &lost}, nil)
+	_ = rec.Record("added time", testbed.Measurement{Quantity: "added time at the 99th percentile at 5,000 queries per second", Unit: "ms", N: len(steady.added), Configured: 1, Value: ms}, nil)
+	if flood.answered < 500 || math.IsNaN(flood.rate()) {
+		t.Errorf("only %d queries were answered under load", flood.answered)
 	}
 }
 

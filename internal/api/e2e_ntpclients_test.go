@@ -5,6 +5,7 @@ package api_test
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -92,13 +93,34 @@ func (b *ntpBed) chronyConf(t *testing.T, server string, extra ...string) string
 	return path
 }
 
+// chronydBinary returns a copy of the chronyd executable in a private directory. Where the host confines chronyd by the path of its
+// executable (the AppArmor profile of the Ubuntu package is loaded on the host and applies to a privileged container, too), the
+// original cannot open a configuration file in a temporary directory ("Could not open ...chrony.conf: Permission denied", level 1
+// in the container, while the VMs, which load no profile, run it); a copy has another path and runs unconfined.
+func chronydBinary(t *testing.T) string {
+	t.Helper()
+	orig, err := exec.LookPath("chronyd")
+	if err != nil {
+		t.Skipf("chronyd is not installed: %v", err)
+	}
+	data, err := os.ReadFile(orig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "chronyd")
+	if err := os.WriteFile(path, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 // chronyQ runs `chronyd -Q` from a namespace against a server: it measures the offset (with four samples, as iburst does) and
 // prints it without setting the clock, or, when no source is usable, runs until the timeout and prints nothing of the kind.
 func (b *ntpBed) chronyQ(t *testing.T, from *testbed.Namespace, server string) chronyResult {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	out, _ := from.Run(ctx, "chronyd", "-Q", "-u", "root", "-t", "25", "-f", b.chronyConf(t, server, "iburst"))
+	out, _ := from.Run(ctx, chronydBinary(t), "-Q", "-u", "root", "-t", "25", "-f", b.chronyConf(t, server, "iburst"))
 	return parseChronyQ(out)
 }
 
@@ -106,7 +128,7 @@ func (b *ntpBed) chronyQ(t *testing.T, from *testbed.Namespace, server string) c
 // queries it sends are what the counters of the server show.
 func (b *ntpBed) startChronyd(t *testing.T, from *testbed.Namespace, server string) *testbed.Process {
 	t.Helper()
-	return from.Start("chronyd", "-d", "-x", "-u", "root", "-f", b.chronyConf(t, server, "minpoll 0 maxpoll 6"))
+	return from.Start(chronydBinary(t), "-d", "-x", "-u", "root", "-f", b.chronyConf(t, server, "minpoll 0 maxpoll 6"))
 }
 
 // ntpdig asks a server once with the ntpsec client, which prints the offset and sets nothing without -s or -S.

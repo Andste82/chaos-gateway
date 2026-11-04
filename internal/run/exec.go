@@ -736,6 +736,8 @@ func describeWait(w *model.WaitCondition) string {
 		return "the device to be online"
 	case model.WaitConditionForConnected:
 		return "a new connection"
+	case model.WaitConditionForNtpQuerySeen:
+		return "an NTP query"
 	}
 	return "a DNS query for " + deref(w.Name)
 }
@@ -758,6 +760,13 @@ func (m *Manager) condition(r *runState, w *model.WaitCondition, target model.Sc
 			return true, ""
 		}
 		return false, "no query seen"
+	case model.WaitConditionForNtpQuerySeen:
+		// a time fault shows only when a device polls next: the wait ends at the first query after it began, whatever the
+		// server answered (a fault of silence is a query too)
+		if len(m.cfg.Observer.NTPQueries(ids(devs), since)) > 0 {
+			return true, ""
+		}
+		return false, "no NTP query seen (a device with a hardcoded server asks the gateway only where its queries are redirected, and one with NTS or another time source not at all)"
 	case model.WaitConditionForConnected:
 		flows, err := m.cfg.Observer.Flows(r.ctx)
 		if err != nil {

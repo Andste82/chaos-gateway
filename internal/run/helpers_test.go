@@ -184,7 +184,7 @@ func (g *fakeGateway) PutOverlay(ctx context.Context, w engine.OverlayWrite) (en
 	}
 	kind, _ := domain.OverlayKindOf(&w.Request)
 	ov := model.Overlay{Id: id, Kind: model.OverlayKind(kind), Owner: w.Owner, Target: w.Request.Target, Profile: w.Request.Profile,
-		Fault: w.Request.Fault, Rule: w.Request.Rule, Dns: w.Request.Dns, Wireguard: w.Request.Wireguard, Run: w.Run, Generation: int64(g.gen)}
+		Fault: w.Request.Fault, Rule: w.Request.Rule, Dns: w.Request.Dns, Time: w.Request.Time, Wireguard: w.Request.Wireguard, Run: w.Run, Generation: int64(g.gen)}
 	g.byID[id], g.key[key] = ov, id
 	verb := "put"
 	if replaced {
@@ -341,8 +341,10 @@ type fakeObserver struct {
 	answered map[string][]string
 	// handshakes are the handshakes the gateway's TLS responder reported
 	handshakes []run.TLSHandshake
-	flowErr    error
-	flowPolls  int
+	// ntp are the queries the gateway's NTP server logged
+	ntp       []run.NTPQuery
+	flowErr   error
+	flowPolls int
 	// block, when set, holds every read of the connections until it is closed or the read is cancelled
 	block chan struct{}
 	// readDelay holds every read of the counters for that long on the fake clock (a slow executor)
@@ -403,6 +405,20 @@ func (o *fakeObserver) TLSHandshakes(devices []string, since time.Time) []run.TL
 		for _, d := range devices {
 			if h.Device == d && !h.Time.Before(since) {
 				out = append(out, h)
+			}
+		}
+	}
+	return out
+}
+
+func (o *fakeObserver) NTPQueries(devices []string, since time.Time) []run.NTPQuery {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var out []run.NTPQuery
+	for _, q := range o.ntp {
+		for _, d := range devices {
+			if q.Device == d && !q.Time.Before(since) {
+				out = append(out, q)
 			}
 		}
 	}

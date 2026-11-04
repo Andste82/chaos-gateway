@@ -242,3 +242,197 @@ func (a *app) lookDevice(ctx context.Context, cl *client, name string) (*model.D
 	}
 	return &dv, nil
 }
+
+// ntpHint is what a wait for an NTP query that ran out of time may mean besides a device that does not ask: the queries the
+// server sees are those to the gateway's address and, where the network redirects hardcoded servers or a time fault covers the
+// device, those to other servers (plan §2.18, risk 37).
+const ntpHint = "the device did not ask the gateway's NTP server (a device with a hardcoded server asks it only where the network redirects hardcoded NTP or a time fault covers it; a device with NTS or another source of time never does; many devices poll once an hour or less)"
+
+func (a *app) waitNTPCmd() *cobra.Command {
+	var timeout time.Duration
+	cmd := &cobra.Command{
+		Use:   "ntp <device>",
+		Short: "Wait until a device asks the gateway's NTP server for the time",
+		Long: `Waits for the next query of the device to the gateway's NTP server that arrives after the command began, whatever the server
+answered, and returns 0 with the answer it gave. A time fault shows on a device only when it polls next, so a test sets the
+fault and waits for this query instead of guessing how long the device takes. A query that the rate limit dropped, and a
+connection to the NTS key-establishment port, are not queries. The time of a query is the gateway's own, and so is the moment the
+command began (the time of the first answer, to the nanosecond), so the clock of the machine that runs the command does not
+matter. The server reports its queries in batches of half a second, so a query is seen that late.
+
+Returns 1 when the time runs out without a query, and 2 when the gateway cannot be asked (ten polls in a row fail, or the time
+runs out while the latest poll failed or none was answered). A device the gateway does not know yet is waited for too.`,
+		Example: `  chaosctl time set offset --offset +400d --device esp32-42 --ttl 10m
+  chaosctl wait ntp esp32-42 --timeout 5m`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sigs, stop := a.signals()
+			defer stop()
+			cl, err := a.client()
+			if err != nil {
+				return err
+			}
+			return a.waitNTP(cmd.Context(), cl, args[0], timeout, sigs)
+		},
+	}
+	cmd.Flags().DurationVar(&timeout, "timeout", time.Minute, "give up after this time (exit 1)")
+	return cmd
+}
+
+// lookNTP reads the NTP log of the device from `since` on and returns the first query after it (nil when there is none) and the
+// start of the wait on the gateway's clock; known says whether the gateway knows the device. Without a `since` (the first poll)
+// the start is the time the gateway names in its answer (`now`, to the nanosecond): a query counts when its time is not before
+// it, so one that arrived between the start of the command and its first poll is not taken for an old one, and one answered
+// before the command began, with the fault not yet in force, does not end the wait. A gateway that sends no `now` gets the Date
+// of the answer, which has a resolution of a second, so a query of the second before the command may count then. When the
+// answer has neither, the newest time in the log is the start and nothing counts yet (the log is in the order of arrival, not
+// of time: the server reports in batches).
+func (a *app) lookNTP(ctx context.Context, cl *client, name string, since time.Time) (query *model.NtpQueryLogEntry, start time.Time, known bool, err error) {
+	q := url.Values{"device": {name}, "limit": {"500"}}
+	if !since.IsZero() {
+		q.Set("since", since.UTC().Format(time.RFC3339Nano))
+	}
+	var pg model.NtpQueryPage
+	hdr, err := cl.call(ctx, http.MethodGet, "/ntp/queries", q, nil, &pg)
+	if err != nil {
+		if ae := asAPIError(err); ae != nil && ae.Status == http.StatusNotFound {
+			return nil, dateOf(hdr), false, nil
+		}
+		return nil, time.Time{}, false, err
+	}
+	start = since
+	if start.IsZero() {
+		if start = pg.Now; start.IsZero() {
+			start = dateOf(hdr)
+		}
+		if start.IsZero() {
+			for i := range pg.Items {
+				if pg.Items[i].Time.After(start) {
+					start = pg.Items[i].Time
+				}
+			}
+			return nil, start.Add(time.Nanosecond), true, nil // the entry that sets the start is not after it
+		}
+	}
+	for i := range pg.Items { // newest first
+		e := &pg.Items[i]
+		isQuery := (e.Kind == nil || *e.Kind == model.Query) && (e.Answer == nil || *e.Answer != model.NtpQueryLogEntryAnswerDropped)
+		if isQuery && !e.Time.Before(start) && (query == nil || e.Time.Before(query.Time)) {
+			query = e // the oldest by time: the log is in the order of arrival
+		}
+	}
+	return query, start, true, nil
+}
+
+// dateOf is the time in the Date header of an answer, zero when it has none.
+func dateOf(h http.Header) time.Time {
+	t, err := http.ParseTime(h.Get("Date"))
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+func (a *app) waitNTP(ctx context.Context, cl *client, name string, timeout time.Duration, sigs <-chan os.Signal) error {
+	started := a.clk().Monotonic()
+	deadline := a.clk().NewTimer(timeout)
+	defer deadline.Stop()
+	wctx, endWatch := watch(ctx, sigs, deadline.C(), fmt.Errorf("timed out after %v", timeout))
+	defer endWatch(context.Canceled)
+	tick := a.clk().NewTicker(a.env.Poll)
+	defer tick.Stop()
+	// base is when the wait began on the gateway's clock (see lookNTP): a query counts when it is not earlier
+	var base time.Time
+	var missing string
+	var lastErr error
+	asked := false
+	failures := 0
+	for {
+		// no poll after the wait has ended: it would be cut off at once and say nothing about the gateway
+		if wctx.Err() == nil {
+			began := a.clk().Monotonic()
+			pctx, pcancel := context.WithTimeout(wctx, a.pollTimeout())
+			hit, start, known, err := a.lookNTP(pctx, cl, name, base)
+			pcancel()
+			if err != nil {
+				if ae := asAPIError(err); ae != nil && (ae.Status == http.StatusUnauthorized || ae.Status == http.StatusForbidden) {
+					return apiFail(err)
+				}
+				if wctx.Err() != nil {
+					// the end of the wait cut the poll off: it says something about the gateway only if it had time to be answered in
+					if a.clk().Monotonic()-began >= slowPoll {
+						lastErr = errors.New("the poll was not answered when the time ran out")
+					}
+				} else {
+					lastErr = err
+					failures++
+					fmt.Fprintf(a.env.Stderr, "the gateway does not answer (%d of %d): %v\n", failures, pollFailures, err)
+					if failures >= pollFailures {
+						return failf(ExitError, "lost the gateway while waiting for the NTP query of device %s: %v", name, err)
+					}
+				}
+			} else {
+				asked, lastErr = true, nil
+				failures = 0
+				if base.IsZero() {
+					base = start // the first answer fixes the start, also of a device the gateway does not know yet
+				}
+				switch {
+				case !known:
+					missing = "the gateway does not know the device"
+				case hit != nil:
+					fmt.Fprintf(a.env.Stdout, "device %s asked the NTP server after %.1fs: %s\n", name, a.since(started), describeNTPQuery(hit))
+					return nil
+				default:
+					missing = ntpHint
+				}
+			}
+		}
+		select {
+		case <-tick.C():
+		case <-wctx.Done():
+		}
+		if wctx.Err() == nil {
+			continue
+		}
+		var se *signalError
+		var de *deadlineError
+		switch cause := context.Cause(wctx); {
+		case errors.As(cause, &se):
+			return failf(ExitError, "%v received while waiting for the NTP query of device %s", se.sig, name)
+		case errors.As(cause, &de):
+			// a time that ran out while the gateway could not be asked is no verdict on the device
+			if lastErr != nil || !asked {
+				if lastErr == nil {
+					lastErr = errors.New("no poll was answered")
+				}
+				return failf(ExitError, "%v, and the gateway could not be asked: %v", cause, lastErr)
+			}
+			return failf(ExitFailed, "%v: %s", cause, missing)
+		}
+		return failf(ExitError, "interrupted while waiting for the NTP query of device %s", name)
+	}
+}
+
+// describeNTPQuery says how the server answered a query: the answer, the time served and how far it is from the correct
+// time, the fault that shaped it and the server asked.
+func describeNTPQuery(e *model.NtpQueryLogEntry) string {
+	answer := "unknown"
+	if e.Answer != nil {
+		answer = strings.ReplaceAll(string(*e.Answer), "_", "-")
+	}
+	parts := []string{"answer " + answer}
+	if e.ServedTime != nil {
+		parts = append(parts, "served "+e.ServedTime.UTC().Format(time.RFC3339))
+	}
+	if e.OffsetMs != nil {
+		parts = append(parts, fmt.Sprintf("offset %dms", *e.OffsetMs))
+	}
+	if e.Fault != nil {
+		parts = append(parts, "fault "+e.Fault.String())
+	}
+	if e.Server != nil && *e.Server != "" {
+		parts = append(parts, "server "+*e.Server)
+	}
+	return strings.Join(parts, ", ")
+}

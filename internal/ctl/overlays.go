@@ -27,6 +27,8 @@ type targetFlags struct {
 	global                 bool
 	// deviceOrNetwork is set by addDeviceOrNetwork: only --device and --network are registered.
 	deviceOrNetwork bool
+	// noGlobal is set by addNotGlobal: --global is not registered
+	noGlobal bool
 }
 
 func (t *targetFlags) add(fs *pflag.FlagSet) {
@@ -41,6 +43,15 @@ func (t *targetFlags) add(fs *pflag.FlagSet) {
 func (t *targetFlags) addDeviceOrNetwork(fs *pflag.FlagSet) {
 	t.deviceOrNetwork = true
 	fs.StringVar(&t.device, "device", "", "target: a device (name or UUID)")
+	fs.StringVar(&t.network, "network", "", "target: a network")
+}
+
+// addNotGlobal registers the targets of what a device, a group or a network has and everything has not (a time fault: the NTP
+// server answers a client by its own scope, plan §2.18); `scope` then names exactly one of the three.
+func (t *targetFlags) addNotGlobal(fs *pflag.FlagSet) {
+	t.noGlobal = true
+	fs.StringVar(&t.device, "device", "", "target: a device (name or UUID)")
+	fs.StringVar(&t.group, "group", "", "target: a group")
 	fs.StringVar(&t.network, "network", "", "target: a network")
 }
 
@@ -61,6 +72,9 @@ func (t *targetFlags) scope() (map[string]any, error) {
 	if n != 1 {
 		if t.deviceOrNetwork {
 			return nil, failf(ExitError, "name exactly one target: --device or --network")
+		}
+		if t.noGlobal {
+			return nil, failf(ExitError, "name exactly one target: --device, --group or --network")
 		}
 		return nil, failf(ExitError, "name exactly one target: --device, --group, --network or --global")
 	}

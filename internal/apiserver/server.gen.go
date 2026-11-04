@@ -75,6 +75,9 @@ type ServerInterface interface {
 	// GetDevice One device with observed state and active faults
 	// (GET /devices/{deviceId})
 	GetDevice(c *gin.Context, deviceId DeviceId, params GetDeviceParams)
+	// GetDeviceNtp What one device did with the gateway's NTP server (M34)
+	// (GET /devices/{deviceId}/ntp)
+	GetDeviceNtp(c *gin.Context, deviceId DeviceId)
 	// RunDiagnostic Run one diagnostic from the gateway or a probe (synchronous, max. 60 s)
 	// (POST /diagnostics)
 	RunDiagnostic(c *gin.Context)
@@ -165,6 +168,9 @@ type ServerInterface interface {
 	// ListLeases Current DHCP leases of a local network
 	// (GET /networks/{networkId}/leases)
 	ListLeases(c *gin.Context, networkId NetworkId, params ListLeasesParams)
+	// ListNtpQueries Query log of the NTP server, newest first
+	// (GET /ntp/queries)
+	ListNtpQueries(c *gin.Context, params ListNtpQueriesParams)
 	// ListOverlays Active overlays
 	// (GET /overlays)
 	ListOverlays(c *gin.Context, params ListOverlaysParams)
@@ -836,6 +842,31 @@ func (siw *ServerInterfaceWrapper) GetDevice(c *gin.Context) {
 	}
 
 	siw.Handler.GetDevice(c, deviceId, params)
+}
+
+// GetDeviceNtp operation middleware
+func (siw *ServerInterfaceWrapper) GetDeviceNtp(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "deviceId" -------------
+	var deviceId DeviceId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deviceId", c.Param("deviceId"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter deviceId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetDeviceNtp(c, deviceId)
 }
 
 // RunDiagnostic operation middleware
@@ -1856,6 +1887,57 @@ func (siw *ServerInterfaceWrapper) ListLeases(c *gin.Context) {
 	}
 
 	siw.Handler.ListLeases(c, networkId, params)
+}
+
+// ListNtpQueries operation middleware
+func (siw *ServerInterfaceWrapper) ListNtpQueries(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListNtpQueriesParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", c.Request.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter cursor: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "device" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "device", c.Request.URL.Query(), &params.Device, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter device: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "since" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "since", c.Request.URL.Query(), &params.Since, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter since: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListNtpQueries(c, params)
 }
 
 // ListOverlays operation middleware
@@ -3633,6 +3715,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/routing/routes", wrapper.ListRoutes)
 	router.GET(options.BaseURL+"/devices", wrapper.ListDevices)
 	router.GET(options.BaseURL+"/devices/:deviceId", wrapper.GetDevice)
+	router.GET(options.BaseURL+"/devices/:deviceId/ntp", wrapper.GetDeviceNtp)
 	router.GET(options.BaseURL+"/flows", wrapper.ListFlows)
 	router.GET(options.BaseURL+"/groups", wrapper.ListGroups)
 	router.GET(options.BaseURL+"/groups/:groupId", wrapper.GetGroup)
@@ -3673,6 +3756,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/tls/ca", wrapper.GetTestCa)
 	router.POST(options.BaseURL+"/tls/ca/regenerate", wrapper.RegenerateTestCa)
 	router.GET(options.BaseURL+"/dns/queries", wrapper.ListDnsQueries)
+	router.GET(options.BaseURL+"/ntp/queries", wrapper.ListNtpQueries)
 	router.GET(options.BaseURL+"/intercept/flows", wrapper.ListInterceptFlows)
 	router.DELETE(options.BaseURL+"/system/certificate", wrapper.ResetCertificate)
 	router.GET(options.BaseURL+"/system/certificate", wrapper.GetCertificate)
@@ -4436,6 +4520,45 @@ type GetDevicedefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response GetDevicedefaultApplicationProblemPlusJSONResponse) VisitGetDeviceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDeviceNtpRequestObject struct {
+	DeviceId DeviceId `json:"deviceId"`
+}
+
+type GetDeviceNtpResponseObject interface {
+	VisitGetDeviceNtpResponse(w http.ResponseWriter) error
+}
+
+type GetDeviceNtp200JSONResponse DeviceNtp
+
+func (response GetDeviceNtp200JSONResponse) VisitGetDeviceNtpResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDeviceNtpdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetDeviceNtpdefaultApplicationProblemPlusJSONResponse) VisitGetDeviceNtpResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -5724,6 +5847,45 @@ type ListLeasesdefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response ListLeasesdefaultApplicationProblemPlusJSONResponse) VisitListLeasesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListNtpQueriesRequestObject struct {
+	Params ListNtpQueriesParams
+}
+
+type ListNtpQueriesResponseObject interface {
+	VisitListNtpQueriesResponse(w http.ResponseWriter) error
+}
+
+type ListNtpQueries200JSONResponse NtpQueryPage
+
+func (response ListNtpQueries200JSONResponse) VisitListNtpQueriesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListNtpQueriesdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ListNtpQueriesdefaultApplicationProblemPlusJSONResponse) VisitListNtpQueriesResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -8243,6 +8405,9 @@ type StrictServerInterface interface {
 	// GetDevice One device with observed state and active faults
 	// (GET /devices/{deviceId})
 	GetDevice(ctx context.Context, request GetDeviceRequestObject) (GetDeviceResponseObject, error)
+	// GetDeviceNtp What one device did with the gateway's NTP server (M34)
+	// (GET /devices/{deviceId}/ntp)
+	GetDeviceNtp(ctx context.Context, request GetDeviceNtpRequestObject) (GetDeviceNtpResponseObject, error)
 	// RunDiagnostic Run one diagnostic from the gateway or a probe (synchronous, max. 60 s)
 	// (POST /diagnostics)
 	RunDiagnostic(ctx context.Context, request RunDiagnosticRequestObject) (RunDiagnosticResponseObject, error)
@@ -8333,6 +8498,9 @@ type StrictServerInterface interface {
 	// ListLeases Current DHCP leases of a local network
 	// (GET /networks/{networkId}/leases)
 	ListLeases(ctx context.Context, request ListLeasesRequestObject) (ListLeasesResponseObject, error)
+	// ListNtpQueries Query log of the NTP server, newest first
+	// (GET /ntp/queries)
+	ListNtpQueries(ctx context.Context, request ListNtpQueriesRequestObject) (ListNtpQueriesResponseObject, error)
 	// ListOverlays Active overlays
 	// (GET /overlays)
 	ListOverlays(ctx context.Context, request ListOverlaysRequestObject) (ListOverlaysResponseObject, error)
@@ -9040,6 +9208,32 @@ func (sh *strictHandler) GetDevice(ctx *gin.Context, deviceId DeviceId, params G
 		sh.options.HandlerErrorFunc(ctx, err)
 	} else if validResponse, ok := response.(GetDeviceResponseObject); ok {
 		if err := validResponse.VisitGetDeviceResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetDeviceNtp operation middleware
+func (sh *strictHandler) GetDeviceNtp(ctx *gin.Context, deviceId DeviceId) {
+	var request GetDeviceNtpRequestObject
+
+	request.DeviceId = deviceId
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetDeviceNtp(ctx, request.(GetDeviceNtpRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetDeviceNtp")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(GetDeviceNtpResponseObject); ok {
+		if err := validResponse.VisitGetDeviceNtpResponse(ctx.Writer); err != nil {
 			sh.options.ResponseErrorHandlerFunc(ctx, err)
 		}
 	} else if response != nil {
@@ -9874,6 +10068,32 @@ func (sh *strictHandler) ListLeases(ctx *gin.Context, networkId NetworkId, param
 		sh.options.HandlerErrorFunc(ctx, err)
 	} else if validResponse, ok := response.(ListLeasesResponseObject); ok {
 		if err := validResponse.VisitListLeasesResponse(ctx.Writer); err != nil {
+			sh.options.ResponseErrorHandlerFunc(ctx, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(ctx, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListNtpQueries operation middleware
+func (sh *strictHandler) ListNtpQueries(ctx *gin.Context, params ListNtpQueriesParams) {
+	var request ListNtpQueriesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ListNtpQueries(ctx, request.(ListNtpQueriesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListNtpQueries")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		sh.options.HandlerErrorFunc(ctx, err)
+	} else if validResponse, ok := response.(ListNtpQueriesResponseObject); ok {
+		if err := validResponse.VisitListNtpQueriesResponse(ctx.Writer); err != nil {
 			sh.options.ResponseErrorHandlerFunc(ctx, err)
 		}
 	} else if response != nil {

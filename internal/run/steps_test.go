@@ -662,44 +662,8 @@ steps: [{id: a, at: 0s, capture: start}, {id: b, at: 1s, capture: stop}]
 	}
 }
 
-// The specification has the NTP wait and the NTP check from stage 1 of M34 on, and the domain accepts them, but the
-// runner cannot decide either before stage 3: the wait would run until its timeout and the check would be judged as
-// a negative check of traffic, which fails on any flow and passes on silence. Neither may be accepted.
-func TestTheNtpWaitAndTheNtpCheckAreRefusedUntilTheRunnerHasThem(t *testing.T) {
-	h := newHarness(t)
-	for name, yaml := range map[string]string{
-		"wait": `
-name: n
-target: {device: esp32-42}
-steps:
-  - {id: a, at: 0s, fault: {latency: 10ms}}
-  - {id: w, at: 1s, wait: {for: ntp_query_seen, timeout: 30s}}
-`,
-		"check": `
-name: n
-target: {device: esp32-42}
-steps: [{id: a, at: 0s, fault: {latency: 10ms}}]
-checks:
-  - {ntp_queried: {}, window: {from: a, within: 5s}}
-`,
-	} {
-		sc, err := domain.DecodeScenario([]byte(yaml), domain.FormatYAML)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		_, err = h.m.Create(context.Background(), run.CreateRequest{Inline: sc, Queue: true, Owner: token})
-		u, ok := errAs[*run.UnsupportedError](err)
-		if !ok || u.Milestone != "M34" {
-			t.Errorf("%s: %v, want milestone M34", name, err)
-		}
-	}
-	if got := len(h.m.List(run.Filter{})); got != 0 {
-		t.Errorf("a refused scenario made %d runs", got)
-	}
-}
-
 // The time step and a profile with a time part are served since stage 2 of M34 (the engine carries out a time overlay),
-// so a run that has them is created; only the NTP wait and the NTP check wait for the runner of stage 3.
+// so a run that has them is created (the NTP wait and the NTP check: ntp_test.go).
 func TestATimeStepAndAProfileWithATimePartAreAcceptedWhenTheRunIsCreated(t *testing.T) {
 	h := newHarness(t)
 	for name, yaml := range map[string]string{

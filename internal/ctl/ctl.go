@@ -170,7 +170,7 @@ chaosctl failed, 126 when the command cannot be run, 127 when it is not found.`,
 	f.DurationVar(&a.conn.timeout, "request-timeout", 2*time.Minute, "how long one request to the gateway may take")
 	f.BoolVar(&a.asJSON, "json", false, "print the gateway's JSON where a command prints a result")
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return &exitError{code: ExitError, err: err} })
-	root.AddCommand(a.versionCmd(), a.profileCmd(), a.faultCmd(), a.dnsCmd(), a.tlsCmd(), a.dhcpCmd(), a.interceptCmd(), a.probeCmd(), a.overlayCmd(), a.resetCmd(), a.runCmd(), a.abortCmd(), a.waitCmd(), a.withCmd(), a.explainCmd(), a.wgCmd(), a.certificateCmd())
+	root.AddCommand(a.versionCmd(), a.profileCmd(), a.faultCmd(), a.dnsCmd(), a.timeCmd(), a.tlsCmd(), a.dhcpCmd(), a.interceptCmd(), a.probeCmd(), a.overlayCmd(), a.resetCmd(), a.runCmd(), a.abortCmd(), a.waitCmd(), a.withCmd(), a.explainCmd(), a.wgCmd(), a.certificateCmd())
 	return root
 }
 

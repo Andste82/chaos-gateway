@@ -33,15 +33,7 @@ const waitPoll = 250 * time.Millisecond
 // milestones of Unsupported.
 var (
 	SupportedStepTypes  = []string{"profile", "fault", "rule", "dns", "tls", "dhcp", "time", "wireguard", "capture", "wait", "remove", "restore"}
-	SupportedCheckTypes = []string{"reconnected", "no_connection", "traffic_seen", "traffic_not_seen", "dns_query_seen", "tls_rejected", "tls_accepted"}
-)
-
-// What the specification has and the runner does not yet, with the milestone that brings it: the preflight of a
-// run refuses a scenario that uses one (Manager.supported), and the entry goes when the type is in the lists above.
-var (
-	laterCheckTypes         = map[string]string{"ntp_queried": "M34"}
-	laterWaitConditions     = map[string]string{string(model.WaitConditionForNtpQuerySeen): "M34"}
-	supportedWaitConditions = []string{"online", "dns_query", "connected"}
+	SupportedCheckTypes = []string{"reconnected", "no_connection", "traffic_seen", "traffic_not_seen", "dns_query_seen", "ntp_queried", "tls_rejected", "tls_accepted"}
 )
 
 var (
@@ -125,6 +117,21 @@ type DNSQuery struct {
 	Time               time.Time
 }
 
+// NTPQuery is a query of a device that the gateway's NTP server logged (plan §2.18). Queries over the server's rate limit and
+// connections to its key-establishment port are not queries and are not reported.
+type NTPQuery struct {
+	// Device is the device's UUID. Time is when the query arrived (the kernel's receive time stamp).
+	Device string
+	Time   time.Time
+	// Answer is how the server answered ("normal", "silence", "kiss_of_death", ...), "" when the log does not say. OffsetMs is the
+	// served time minus the correct time where the server answered with a time; Fault the time fault overlay that shaped the
+	// answer, "" without one; Server the server the device asked (`ip:port`), "" when it is not known.
+	Answer   string
+	OffsetMs *int64
+	Fault    string
+	Server   string
+}
+
 // TLSHandshake is a handshake of a device that the gateway's TLS responder reported (plan §2.8).
 type TLSHandshake struct {
 	// Device is the device's UUID; Client its address and Dst the destination it meant (the original destination).
@@ -156,6 +163,9 @@ type Observer interface {
 	// TLSHandshakes returns the handshakes of the devices (UUIDs) with the gateway's TLS responder at or after the time,
 	// oldest first.
 	TLSHandshakes(devices []string, since time.Time) []TLSHandshake
+	// NTPQueries returns the queries that the devices (UUIDs) asked the gateway's NTP server at or after the time, whatever the
+	// server answered (a time fault, silence included), oldest first.
+	NTPQueries(devices []string, since time.Time) []NTPQuery
 	// HostNames returns the names the client was answered for the address by the gateway's DNS proxy (the name
 	// asked and the CNAME targets of the answer): what a destination that names a host matches.
 	HostNames(client, addr netip.Addr) []string

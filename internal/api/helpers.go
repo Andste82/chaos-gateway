@@ -74,21 +74,32 @@ func decodeCursor(c string) (string, error) {
 	return string(b), nil
 }
 
-// page returns one page of items sorted by key ascending: those after the cursor, at most limit.
-func page[T any](items []T, key func(T) string, cursor *string, limit *int) ([]T, *string, error) {
-	n := 100
+// pageArgs checks the limit (default 100) and decodes the cursor of a list: the size of the page and the key after which it
+// starts ("" for the first page).
+func pageArgs(cursor *string, limit *int) (n int, after string, err error) {
+	n = 100
 	if limit != nil {
 		n = *limit
 	}
 	if n < 1 || n > 500 {
-		return nil, nil, errors.New("limit must be between 1 and 500")
+		return 0, "", errors.New("limit must be between 1 and 500")
+	}
+	if cursor != nil && *cursor != "" {
+		if after, err = decodeCursor(*cursor); err != nil {
+			return 0, "", err
+		}
+	}
+	return n, after, nil
+}
+
+// page returns one page of items sorted by key ascending: those after the cursor, at most limit.
+func page[T any](items []T, key func(T) string, cursor *string, limit *int) ([]T, *string, error) {
+	n, after, err := pageArgs(cursor, limit)
+	if err != nil {
+		return nil, nil, err
 	}
 	start := 0
 	if cursor != nil && *cursor != "" {
-		after, err := decodeCursor(*cursor)
-		if err != nil {
-			return nil, nil, err
-		}
 		for start < len(items) && key(items[start]) <= after {
 			start++
 		}

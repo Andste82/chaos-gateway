@@ -65,6 +65,76 @@ func TestTheFlagsOfADNSFaultBecomeItsBody(t *testing.T) {
 	}
 }
 
+func TestTheFlagsOfATimeFaultBecomeItsBody(t *testing.T) {
+	body := func(kind string, args ...string) (map[string]any, error) {
+		var x timeFlags
+		fs := pflag.NewFlagSet("time", pflag.ContinueOnError)
+		x.add(fs)
+		if err := fs.Parse(args); err != nil {
+			t.Fatal(err)
+		}
+		return x.body(kind, fs)
+	}
+	for _, tc := range []struct {
+		kind string
+		args []string
+		want map[string]any
+	}{
+		{"offset", []string{"--offset", "+400d"}, map[string]any{"offset": "+400d"}},
+		{"offset", []string{"--offset", "-90s", "--skew-ppm", "500", "--to", "time.google.com", "--port", "123,5123"},
+			map[string]any{"offset": "-90s", "skew_ppm": 500.0, "destination": map[string]any{"hostname": "time.google.com"}, "ports": []int{123, 5123}}},
+		// a wildcard hostname (the pool) and a port without a destination (every server, on that port)
+		{"offset", []string{"--offset", "+1h", "--to", "*.pool.ntp.org"}, map[string]any{"offset": "+1h", "destination": map[string]any{"hostname": "*.pool.ntp.org"}}},
+		{"unsynchronized", []string{"--port", "5123"}, map[string]any{"answer": "unsynchronized", "ports": []int{5123}}},
+		{"absolute", []string{"--absolute", "1970-01-01T00:00:00Z"}, map[string]any{"absolute": "1970-01-01T00:00:00Z"}},
+		{"skew", []string{"--skew-ppm", "-1000000"}, map[string]any{"skew_ppm": -1000000.0}},
+		{"skew", []string{"--skew-ppm", "1000", "--offset", "+1y"}, map[string]any{"skew_ppm": 1000.0, "offset": "+1y"}},
+		{"leap", []string{"--leap", "INSERT"}, map[string]any{"leap": "insert"}},
+		{"leap", []string{"--leap", "delete", "--absolute", "2016-12-31T23:55:00Z"}, map[string]any{"leap": "delete", "absolute": "2016-12-31T23:55:00Z"}},
+		{"unsynchronized", nil, map[string]any{"answer": "unsynchronized"}},
+		{"silence", []string{"--to", "203.0.113.7"}, map[string]any{"answer": "silence", "destination": map[string]any{"cidr": "203.0.113.7/32"}}},
+		{"kiss_of_death", []string{"--kiss-code", "deny"}, map[string]any{"answer": "kiss_of_death", "kiss_code": "DENY"}},
+		{"invalid", []string{"--invalid", "origin-mismatch"}, map[string]any{"answer": "origin_mismatch"}},
+		{"invalid", []string{"--invalid", "wrong_mode"}, map[string]any{"answer": "wrong_mode"}},
+	} {
+		got, err := body(tc.kind, tc.args...)
+		if err != nil || !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s %v: %v, %v; want %v", tc.kind, tc.args, got, err, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		kind string
+		args []string
+		want string
+	}{
+		{"bogus", nil, "is no time fault"},
+		{"offset", nil, "needs --offset"},
+		{"absolute", []string{"--offset", "+1d"}, "needs --absolute"},
+		{"skew", nil, "needs --skew-ppm"},
+		{"leap", nil, "needs --leap"},
+		{"kiss_of_death", nil, "needs --kiss-code"},
+		{"invalid", nil, "needs --invalid"},
+		{"offset", []string{"--offset", "+1d", "--absolute", "1970-01-01T00:00:00Z"}, "exclude each other"},
+		{"leap", []string{"--leap", "add"}, "is insert or delete"},
+		{"kiss_of_death", []string{"--kiss-code", "STOP"}, "is one of RATE, DENY, RSTR"},
+		{"invalid", []string{"--invalid", "garbage"}, "is one of origin-mismatch, zero-transmit, wrong-mode"},
+		{"silence", []string{"--offset", "+1d"}, "does not use --offset"},
+		{"unsynchronized", []string{"--skew-ppm", "5"}, "does not use --skew-ppm"},
+		{"kiss_of_death", []string{"--kiss-code", "RATE", "--leap", "insert"}, "does not use --leap"},
+		{"offset", []string{"--offset", "+1d", "--kiss-code", "RATE"}, "does not use --kiss-code"},
+	} {
+		if _, err := body(tc.kind, tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s %v: %v, want %q", tc.kind, tc.args, err, tc.want)
+		}
+	}
+	// every kind is one the API has, and the names are the ones the command line takes
+	for _, k := range timeKinds {
+		if k != actionName(k) {
+			t.Errorf("%q is not in the normal form of an action name", k)
+		}
+	}
+}
+
 func TestTheFlagsOfATLSCaseBecomeItsBody(t *testing.T) {
 	var x tlsFlags
 	fs := pflag.NewFlagSet("tls", pflag.ContinueOnError)

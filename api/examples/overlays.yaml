@@ -62,7 +62,7 @@
   time: {answer: kiss_of_death, kiss_code: RATE}
 - # time fault: the minutes before a leap second
   target: {device: esp32-42}
-  time: {absolute: '2026-12-31T23:55:00Z', leap: insert}
+  time: {absolute: '2016-12-31T23:55:00Z', leap: insert}
 - # time fault: no answer, the query is counted (a drop rule would not count it, and would drop other UDP 123 traffic too)
   target: {device: esp32-42}
   time: {answer: silence}

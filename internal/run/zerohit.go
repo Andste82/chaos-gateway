@@ -18,10 +18,11 @@ import (
 // `slow` is not excused by the packets `slow` matched.
 
 // hitKind reports whether the overlay of a step kind has a counter of packets that matched: faults, rules and
-// profiles (whose parts are faults), DNS faults (the queries they changed) and TLS cases (the connections the
-// responder held). A WireGuard action changes the tunnel and matches no packets.
+// profiles (whose parts are faults), DNS faults (the queries they changed), TLS cases (the connections the
+// responder held) and time faults (the queries the NTP server answered with them). A WireGuard action changes the tunnel
+// and matches no packets.
 func hitKind(kind string) bool {
-	return kind == "fault" || kind == "rule" || kind == "profile" || kind == "dns" || kind == "tls"
+	return kind == "fault" || kind == "rule" || kind == "profile" || kind == "dns" || kind == "tls" || kind == "time"
 }
 
 // impairsNothing reports whether a step is meant to match nothing: a profile with no parameter in any part, like the
@@ -35,7 +36,7 @@ func impairsNothing(cfg *model.Configuration, st *model.Step) bool {
 	if !ok {
 		return false
 	}
-	return p.Parts.Mtu == nil && p.Parts.Dns == nil && p.Parts.Tls == nil &&
+	return p.Parts.Mtu == nil && p.Parts.Dns == nil && p.Parts.Tls == nil && p.Parts.Time == nil &&
 		(p.Parts.Impairment == nil || reflect.DeepEqual(*p.Parts.Impairment, model.ImpairmentParams{}))
 }
 
@@ -85,6 +86,8 @@ func (m *Manager) zeroHits(r *runState, status model.RunStatus, reason string) (
 			what = fmt.Sprintf("the DNS fault of step %s changed no answer", z.step)
 		case "tls":
 			what = fmt.Sprintf("the TLS case of step %s held no connection", z.step)
+		case "time":
+			what = fmt.Sprintf("the time fault of step %s shaped no answer of the NTP server", z.step)
 		}
 		m.addWarning(r, model.RunWarning{Code: model.ZeroHit, Step: &step, Overlay: &overlay,
 			Message: what + ", so the run proves nothing about it"})

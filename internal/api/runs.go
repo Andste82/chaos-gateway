@@ -154,6 +154,26 @@ func (o runObserver) DNSQueries(devices []string, name string, since time.Time) 
 	return out
 }
 
+// NTPQueries returns the queries the devices asked the NTP server at or after the time, whatever the server answered. The log
+// is in the order of arrival, not of the time of the query (a batch of the server arrives late), so ntpQueries sorts by the time.
+func (o runObserver) NTPQueries(devices []string, since time.Time) []run.NTPQuery {
+	var out []run.NTPQuery
+	for _, l := range o.s.ntpQueries(devices, since) {
+		q := run.NTPQuery{Device: l.device, Time: l.e.Time, OffsetMs: l.e.OffsetMs}
+		if l.e.Answer != nil {
+			q.Answer = string(*l.e.Answer)
+		}
+		if l.e.Fault != nil {
+			q.Fault = strings.ToLower(l.e.Fault.String())
+		}
+		if l.e.Server != nil {
+			q.Server = *l.e.Server
+		}
+		out = append(out, q)
+	}
+	return out
+}
+
 func (o runObserver) HostNames(client, addr netip.Addr) []string { return o.s.hostNames(client, addr) }
 
 func (o runObserver) TLSHandshakes(devices []string, since time.Time) []run.TLSHandshake {
@@ -200,7 +220,7 @@ func (o runObserver) Counters(ctx context.Context, ids []uuid.UUID) map[uuid.UUI
 			continue
 		}
 		c := oc.overlayView(ov).Counters
-		if c == nil && (ov.Kind == model.OverlayKindFault || ov.Kind == model.OverlayKindRule || ov.Kind == model.OverlayKindProfile || ov.Kind == model.OverlayKindDns || ov.Kind == model.OverlayKindTls) {
+		if c == nil && (ov.Kind == model.OverlayKindFault || ov.Kind == model.OverlayKindRule || ov.Kind == model.OverlayKindProfile || ov.Kind == model.OverlayKindDns || ov.Kind == model.OverlayKindTls || ov.Kind == model.OverlayKindTime) {
 			// the counters were read and the overlay has none: it is not in the packet path (a rule that
 			// is disabled, a fault another one overrides), so it matched nothing
 			c = &model.Counter{}

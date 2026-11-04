@@ -62,7 +62,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   with a reason, or deferred to M38 (the preflight clauses of §3.3/§3.4 and the expiry warning of the installed certificate), see the verdict table. The five
   items the phase raised, P7-M27-01, -02, P7-M28-01, P7-M29-01 and -02, were decided by the maintainer on 2026-10-31 and are closed. **Phase 7 is closed on 2026-11-02 with the release of V1 (`v1.0.0`, `image.yml` run 41543627145).** No item of the phase is open. Two CI items remain as maintenance after V1, not as scope of Phase 7: P7-CI-01 (three timing tests of the weekly emulated jobs, not caused by Phase 7) and P7-CI-02 (a probe namespace seen by a test of another package; watch the level 1 runs); P7-M27-05 (what the engine does when the active revision fails because the executor is not there) was decided by the maintainer on 2026-11-02 and is closed.
 - **M34** (NTP server and time faults, delivered in four stages, D37, branch `m34-ntp`): the questions the stages raise and that no later stage of M34 settles are under
-  [M34 open items](#m34-open-items) at the end of the file. Stage 1 (specification and domain) raised P34-01 to P34-03 and stage 2 (server and wiring) P34-04 to P34-06, all open.
+  [M34 open items](#m34-open-items) at the end of the file. Stage 1 (specification and domain) raised P34-01 to P34-03, stage 2 (server and wiring) P34-04 to P34-06 and stage 3 (scenarios, API reads and `chaosctl`) P34-07 and P34-08, all open.
 
 ## Phase 1 audit result
 
@@ -3575,3 +3575,29 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 - Acceptance: for (a) the text of §2.18 names the breadth of the deletion; for (b) and (c) a test shows that the flows of an unaffected client survive the apply and (c) that the first apply and a changed DNS set delete the affected flows.
 - Needs maintainer: yes
 - Effort: S for (a), M for (b) and (c)
+
+### P34-07 Is a public NTP query log wanted
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. Stage 1 and the plan name only `GET /devices/{id}/ntp` as the public read of NTP. Stage 3 added a public route `GET /ntp/queries` (operationId `listNtpQueries`, schema `NtpQueryPage`, filters `device` and `since`, readable with a `read` token) and added it to the API list in plan §2.5. `chaosctl wait ntp` is built on that route. The route exposes the whole in-memory log (up to 20000 entries) to every read token.
+- Evidence: `api/openapi.yaml` (`/ntp/queries`), `internal/api/ntpreads.go`, `internal/api/ntpreads_test.go` (`TestTheNTPQueryLogIsListedNewestFirstAndFilteredByDeviceAndTime`), `internal/ctl/wait.go`, `docs/plan.md` §2.5.
+- Task: decide whether the public NTP query log stays.
+- Options: (a) keep the route (what stage 3 does): the wait and a tester can read every query with its time, the device and the answer; (b) make the wait poll `GET /devices/{id}/ntp` (`last_query.time`, `recent`) and make the route internal or remove it, so a read token sees only the ring of 50 entries per device.
+- Recommendation: (a), as the DNS query log is public in the same way and the wait needs queries of a device that is not yet known by id.
+- Acceptance: for (a) the plan names the route as decided; for (b) the route is gone from the spec, the wait uses the device read, and a test shows that the wait still sees a query.
+- Needs maintainer: yes
+- Effort: S for (a), M for (b)
+
+### P34-08 Choices of stage 3 that the plan and the decisions do not fix
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. Stage 3 kept the safest reading in five places. (a) There is no precondition `uses_gateway_ntp` for a scenario. (b) The preset `time-kiss-of-death` uses the kiss code `DENY`. (c) The preset for the leap second is a date in the past, 2016-12-31 23:55:00 UTC (stage 3 changed the stage 1 example in `api/examples/overlays.yaml` from 2026-12-31 to match); the plan says only "a few minutes before midnight UTC at the end of a month". (d) The ring of recent queries per device is fixed at 50 entries. (e) A query answered with `silence` or a kiss-of-death counts as a query for the wait `ntp_query_seen` and for the check `ntp_queried`.
+- Evidence: `internal/domain/builtin.go` (the time presets), `internal/domain/builtin_time_test.go`, `internal/api/ntpreads.go` (the ring), `internal/api/runs.go` (the observer), `internal/run/ntp_test.go`, `api/examples/overlays.yaml`.
+- Task: confirm or change each of the five choices.
+- Options: (a) add a precondition that the device uses the gateway NTP server, or leave it out; (b) `DENY`, `RSTR` or `RATE`; (c) keep the date in the past or use a configurable or relative date; (d) keep 50 or make the size a setting; (e) count every query, or only the queries that were answered with a time.
+- Recommendation: keep all five as they are: no precondition (the zero-hit warning already says that no query came), `DENY` (the code clients react to most), a fixed past date (a test client can set its clock to it), 50 entries, and every query counts (the question the check answers is whether the device asked).
+- Acceptance: each changed choice has a test that fails on the old behaviour; each kept choice is named in plan §2.18.
+- Needs maintainer: yes
+- Effort: S

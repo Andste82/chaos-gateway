@@ -317,7 +317,8 @@ func TestValidationErrorsMessage(t *testing.T) {
 // ---- built-in profiles -------------------------------------------------------------------
 
 func TestBuiltinProfiles(t *testing.T) {
-	want := []string{"normal", "lte", "bad-lte", "satellite", "congested-wifi", "offline", "intermittent", "dns-broken", "tls-broken"}
+	want := []string{"normal", "lte", "bad-lte", "satellite", "congested-wifi", "offline", "intermittent", "dns-broken", "tls-broken",
+		"time-plus-1y", "time-minus-1d", "time-1970", "time-2038", "time-ntp-era-1", "time-leap-second", "time-unsynchronized", "time-kiss-of-death"}
 	got := BuiltinProfiles()
 	if len(got) != len(want) {
 		t.Fatalf("%d built-in profiles", len(got))

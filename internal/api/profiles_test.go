@@ -35,12 +35,13 @@ func profileItems(t *testing.T, g *gw) map[string]map[string]any {
 func TestTheProfileCatalogueListsTheBuiltInProfilesAndAllOfThemAreAvailable(t *testing.T) {
 	g := ready(t)
 	items := profileItems(t, g)
-	for _, name := range []string{"normal", "lte", "bad-lte", "satellite", "congested-wifi", "offline", "intermittent", "dns-broken", "tls-broken"} {
+	for _, name := range []string{"normal", "lte", "bad-lte", "satellite", "congested-wifi", "offline", "intermittent", "dns-broken", "tls-broken",
+		"time-plus-1y", "time-minus-1d", "time-1970", "time-2038", "time-ntp-era-1", "time-leap-second", "time-unsynchronized", "time-kiss-of-death"} {
 		it, ok := items[name]
 		if !ok {
 			t.Fatalf("%s is not listed: %v", name, items)
 		}
-		// "DNS broken" is usable since M20 and "TLS broken" since M21: none is unavailable any more
+		// "DNS broken" is usable since M20, "TLS broken" since M21 and the presets of the time family since M34: none is unavailable any more
 		if it["builtin"] != true || it["available"] != true {
 			t.Errorf("%s: %v", name, it)
 		}
@@ -48,7 +49,7 @@ func TestTheProfileCatalogueListsTheBuiltInProfilesAndAllOfThemAreAvailable(t *t
 			t.Errorf("%s: unavailable_reason %q", name, reason)
 		}
 	}
-	if len(items) != 9 {
+	if len(items) != 17 {
 		t.Errorf("%d profiles on a fresh gateway", len(items))
 	}
 	// by name and by UUID, ignoring case
@@ -149,7 +150,7 @@ func TestACustomProfileIsCreatedChangedAndDeletedWithRevisions(t *testing.T) {
 	if _, ok := profileItems(t, g)["lte-small-mtu"]; ok {
 		t.Error("the deleted profile is still listed")
 	}
-	if len(profileItems(t, g)) != 9 {
+	if len(profileItems(t, g)) != 17 {
 		t.Errorf("the built-in profiles changed: %d", len(profileItems(t, g)))
 	}
 }

@@ -189,7 +189,7 @@ curl -sS -H "Authorization: Bearer $CHAOSGW_TOKEN" -H "Content-Type: application
 ```
 
 `state` is `effective` when the change is in the kernel and matching traffic meets it. The built-in profiles are `normal`, `lte`,
-`bad-lte`, `satellite`, `congested-wifi`, `offline`, `intermittent`, `dns-broken` and `tls-broken` (`GET /profiles`; custom ones
+`bad-lte`, `satellite`, `congested-wifi`, `offline`, `intermittent`, `dns-broken`, `tls-broken` and the time presets `time-plus-1y`, `time-minus-1d`, `time-1970`, `time-2038`, `time-ntp-era-1`, `time-leap-second`, `time-unsynchronized` and `time-kiss-of-death` (`GET /profiles`; custom ones
 come with the [configuration](#changing-the-configuration)). A fault names its parameters itself. Flat parameters apply to both
 directions; `upload` and `download` give each direction its own complete set:
 
@@ -528,7 +528,7 @@ from: {probe: probe-iot}
 ## Clients
 
 - **`chaosctl`** is a single Go binary for CI jobs: `chaosctl fault set`, `overlay create`, `run -f scenario.yaml --wait --junit
-  report.xml`, `wait device`, `with … -- command` (runs a command under a fault and always cleans up), `explain`, `reset`. It reads
+  report.xml`, `wait device`, `wait ntp`, `time set`, `with … -- command` (runs a command under a fault and always cleans up), `explain`, `reset`. It reads
   `CHAOSGW_URL` and `CHAOSGW_TOKEN` (or `--token-file`) and trusts a self-signed gateway through `CHAOSGW_CA_CERT`,
   `CHAOSGW_FINGERPRINT` or `CHAOSGW_INSECURE`. Standard output is data and standard error is talk, so `id=$(chaosctl fault set …)`
   works. Exit codes: `0` it holds or the run passed, `1` a check failed, `2` the run ended as error or aborted or the command failed,

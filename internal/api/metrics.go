@@ -144,11 +144,13 @@ func (s *Server) collectCounters(ctx context.Context, m *metrics.Set, snap *engi
 		case model.OverlayKindFault:
 			counter("chaosgw_fault", faultHelp, oc.counterOf("overlay", id), l)
 		case model.OverlayKindProfile:
-			counter("chaosgw_fault", faultHelp, oc.withTLS(oc.withDNS(oc.counterOf("overlay", id), id), id), l)
+			counter("chaosgw_fault", faultHelp, oc.withNTP(oc.withTLS(oc.withDNS(oc.counterOf("overlay", id), id), id), id), l)
 		case model.OverlayKindDns:
 			counter("chaosgw_fault", faultHelp, oc.withDNS(nil, id), l)
 		case model.OverlayKindTls:
 			counter("chaosgw_fault", faultHelp, oc.withTLS(nil, id), l)
+		case model.OverlayKindTime:
+			counter("chaosgw_fault", faultHelp, oc.withNTP(nil, id), l)
 		case model.OverlayKindWireguard:
 			for _, a := range snap.WGActions {
 				if a.Counter != "" && strings.EqualFold(a.Overlay, id) {

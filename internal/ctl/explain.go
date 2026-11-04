@@ -25,8 +25,10 @@ the overlays as they are now; it sends no packet. Use it to find out why a conne
 test runs, or to check what a profile or fault does to a destination before running the test.
 
 --dst is an IPv4 address or a hostname. Without --protocol and --port the tuple has none, and only the rules and
-faults that do not select by protocol or port are considered.`,
+faults that do not select by protocol or port are considered. A time fault applies to NTP: ask with --protocol udp --port 123
+to see which one the gateway's NTP server serves the device for that server.`,
 		Example: `  chaosctl explain --device esp32-42 --dst 203.0.113.10 --protocol tcp --port 8883
+  chaosctl explain --device esp32-42 --dst time.example.org --protocol udp --port 123
   chaosctl explain --src 10.10.0.31 --dst mqtt.example.com --json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

@@ -298,7 +298,7 @@ func TestAnOverlayThatDoesNotFitTheClassLimitIsRefusedWithCapacityExceeded(t *te
 func TestCapabilitiesNameWhatOverlaysThisBuildTakes(t *testing.T) {
 	g := ready(t)
 	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
-	if fmt.Sprint(caps["overlay_kinds"]) != "[fault profile rule dns tls dhcp wireguard]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu dns tls dhcp tunnel]" {
+	if fmt.Sprint(caps["overlay_kinds"]) != "[fault profile rule dns tls dhcp time wireguard]" || fmt.Sprint(caps["fault_families"]) != "[impairment mtu dns tls dhcp time tunnel]" {
 		t.Errorf("%v", caps)
 	}
 	if f := fmt.Sprint(caps["features"]); !strings.Contains(f, "overlays") || !strings.Contains(f, "profiles") {

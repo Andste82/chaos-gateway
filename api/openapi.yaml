@@ -5563,7 +5563,7 @@ components:
           description: TCP state from conntrack (e.g. `ESTABLISHED`), or `ASSURED`/`UNREPLIED`.
         service:
           type: string
-          enum: [dns_proxy, tls_responder, tls_proxy]
+          enum: [dns_proxy, tls_responder, tls_proxy, ntp_server]
           description: Set when the flow is redirected into the service namespace.
         started_at: {type: string, format: date-time}
         upload:
@@ -5657,10 +5657,9 @@ components:
         available:
           type: boolean
           description: |
-            False while a part of the profile is not in this build. Every part is available since M22 (the `dns` family
-            since M20, the certificate and handshake cases of the `tls` family, `tls-broken` among them, since M21, and the
-            case `intercept` since M22) except the `time` part (M34): a profile with a `time` part is false here, with the
-            milestone M34 in `unavailable_reason`, until the NTP server is in the build; the field stays for a part a later
+            False while a part of the profile is not in this build. Every part is available (the `dns` family since M20, the
+            certificate and handshake cases of the `tls` family, `tls-broken` among them, since M21, the case `intercept`
+            since M22 and the `time` part, which the NTP server answers, since M34); the field stays for a part a later
             milestone adds. A profile with a part that is not in the build can be defined and shown, but activating it
             is refused with `unsupported_feature`. So is applying a revision that gives a profile
             such a part while an overlay activates it (the profile and the milestone are named; remove
@@ -5807,7 +5806,7 @@ components:
                 items: {$ref: '#/components/schemas/FaultRef'}
         service:
           type: string
-          enum: [none, dns_proxy, tls_responder, tls_proxy]
+          enum: [none, dns_proxy, tls_responder, tls_proxy, ntp_server]
           description: Whether the connection is redirected into the service namespace.
         kernel:
           type: object
@@ -6374,7 +6373,8 @@ components:
         `answer`, at most one per device and fault every 10 s); `ntp_query_seen` that a device asked the server for the
         time (`data`: `device`; the wait condition of that name reads the server's own record of the queries and does not
         depend on this event, so the event may be limited without a wait missing a query); `nts_seen` that a device made an
-        NTS key-establishment connection (TCP 4460), which the server cannot answer (once per device).
+        NTS key-establishment connection (TCP 4460) or sent a query with NTS extension fields to the server, which cannot answer
+        either (once per device).
       enum:
         - applied
         - apply_failed
@@ -6772,7 +6772,7 @@ components:
           type: string
           enum: [query, nts_ke]
           default: query
-          description: '`nts_ke` - a connection to the server''s NTS key-establishment port (TCP 4460) that the server cannot answer (plan §2.18); the fields below are absent.'
+          description: '`nts_ke` - a connection to the server''s NTS key-establishment port (TCP 4460), or a query with NTS extension fields on a UDP port, that the server cannot answer (plan §2.18); `port` is the port it arrived on, and the fields below are absent.'
         version:
           type: integer
           minimum: 0

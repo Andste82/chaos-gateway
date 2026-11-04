@@ -1,6 +1,6 @@
 // Command composegen makes deploy/compose.yaml, the one file an administrator runs (plan §3.8, M28), from the compose files
 // of the containers in deploy/: compose.executor.yaml, compose.api.yaml, compose.kea.yaml, compose.dns.yaml (the holder of the
-// service namespace and the DNS proxy), compose.tls.yaml, compose.bird.yaml, compose.tlsproxy.yaml and compose.teardown.yaml.
+// service namespace and the DNS proxy), compose.tls.yaml, compose.ntp.yaml, compose.bird.yaml, compose.tlsproxy.yaml and compose.teardown.yaml.
 // The files stay what the tests of the lower levels start (the executor alone, the executor with BIRD, the proxy of the
 // interception alone), so there is one definition of every container; compose.yaml is their union, with three changes that
 // only make sense for the whole:
@@ -32,6 +32,7 @@ var files = []string{
 	"compose.kea.yaml",
 	"compose.dns.yaml",
 	"compose.tls.yaml",
+	"compose.ntp.yaml",
 	"compose.bird.yaml",
 	"compose.tlsproxy.yaml",
 	"compose.teardown.yaml",
@@ -45,7 +46,7 @@ const header = `# Chaos Gateway: the containers of one gateway (plan §3.8). Mad
 #   docker compose --profile teardown run --rm teardown [--purge]    remove what a killed gateway left in the kernel (and the data)
 #
 # Start order: exec first (healthy: its socket answers), then api, svcns (the executor attaches the veth pair to its namespace) and
-# kea, then the services that join the service namespace (dns, tls, tls-proxy) once the API is healthy, and bird. The persistent
+# kea, then the services that join the service namespace (dns, tls, ntp, tls-proxy) once the API is healthy, and bird. The persistent
 # data is in /var/lib/chaosgw on the host (plan §3.6); the sockets between the containers are in named volumes.
 name: chaosgw
 `

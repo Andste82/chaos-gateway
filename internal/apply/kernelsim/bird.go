@@ -66,7 +66,25 @@ func (k *Kernel) SetNeighbors(n []linux.Neighbor) {
 func (k *Kernel) SetConntrack(text string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.conntrack = text
+	k.conntrack, k.conntrackRows, k.conntrackDirty = text, nil, false
+}
+
+// conntrackRow is a line of the scripted table with what it parses to.
+type conntrackRow struct {
+	line string
+	cs   []linux.Conntrack
+}
+
+// conntrackText is the scripted table as text; the caller holds k.mu.
+func (k *Kernel) conntrackText() string {
+	if k.conntrackDirty {
+		lines := make([]string, len(k.conntrackRows))
+		for i, r := range k.conntrackRows {
+			lines[i] = r.line
+		}
+		k.conntrack, k.conntrackDirty = strings.Join(lines, "\n"), false
+	}
+	return k.conntrack
 }
 
 // HasConntrackWatch reports whether a conntrack watch (M6a-04) is currently open: tests use it to
@@ -137,62 +155,82 @@ func (k *Kernel) Stream(ctx context.Context, c executor.Command) (<-chan string,
 func (k *Kernel) conntrackCmd(args []string) (executor.Result, error) {
 	if len(args) == 0 || args[0] != "-D" {
 		k.conntrackReads++
-		return okr(k.conntrack)
+		return okr(k.conntrackText())
 	}
-	want := map[string]string{}
+	// a slice, not a map: the match runs once per row and a map is slow to walk
+	var want []conntrackFlag
 	for i := 1; i+1 < len(args); i += 2 {
-		want[args[i]] = args[i+1]
+		want = append(want, newConntrackFlag(args[i], args[i+1]))
 	}
-	var keep []string
+	if k.conntrackRows == nil {
+		for _, line := range strings.Split(k.conntrack, "\n") {
+			k.conntrackRows = append(k.conntrackRows, conntrackRow{line: line, cs: linux.ParseConntrack(line)})
+		}
+	}
+	// The rows are compacted in place and only when one matches: a batch of thousands of deletions
+	// (each names one flow) would otherwise allocate a copy of the whole table for every one of them.
 	deleted := 0
-	for _, line := range strings.Split(k.conntrack, "\n") {
-		cs := linux.ParseConntrack(line)
-		if len(cs) != 1 || !conntrackMatches(cs[0], want) {
-			keep = append(keep, line)
+	keep := k.conntrackRows[:0]
+	for _, r := range k.conntrackRows {
+		if len(r.cs) != 1 || !conntrackMatches(r.cs[0], want) {
+			keep = append(keep, r)
 			continue
 		}
 		deleted++
 	}
-	k.conntrack = strings.Join(keep, "\n")
+	if deleted > 0 {
+		clear(k.conntrackRows[len(keep):])
+		k.conntrackRows, k.conntrackDirty = keep, true
+	}
 	if deleted == 0 {
 		return executor.Result{Exit: 1, Stderr: "conntrack v1.4.8 (conntrack-tools): 0 flow entries have been deleted.\n"}, nil
 	}
 	return executor.Result{Stderr: fmt.Sprintf("conntrack v1.4.8 (conntrack-tools): %d flow entries have been deleted.\n", deleted)}, nil
 }
 
-func conntrackMatches(c linux.Conntrack, want map[string]string) bool {
-	port := func(v int) string { return strconv.Itoa(v) }
-	num := func(p *int) string {
-		if p == nil {
-			return ""
-		}
-		return strconv.Itoa(*p)
+// conntrackFlag is one `--flag value` of a deletion; num is the value as a number (-1 when it is none), so that a
+// port or an ICMP field is compared without making a string of it for each of the thousands of rows.
+type conntrackFlag struct {
+	name, value string
+	num         int
+}
+
+func newConntrackFlag(name, value string) conntrackFlag {
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		n = -1
 	}
-	for flag, v := range want {
-		var have string
-		switch flag {
+	return conntrackFlag{name, value, n}
+}
+
+func conntrackMatches(c linux.Conntrack, want []conntrackFlag) bool {
+	// an absent ICMP field never matches a number
+	sameNum := func(p *int, w conntrackFlag) bool { return p != nil && *p == w.num }
+	for _, w := range want {
+		var ok bool
+		switch w.name {
 		case "-p":
-			have = c.Proto
+			ok = c.Proto == w.value
 		case "--orig-src":
-			have = c.Original.Src
+			ok = c.Original.Src == w.value
 		case "--orig-dst":
-			have = c.Original.Dst
+			ok = c.Original.Dst == w.value
 		case "--orig-port-src":
-			have = port(c.Original.SPort)
+			ok = c.Original.SPort == w.num
 		case "--orig-port-dst":
-			have = port(c.Original.DPort)
+			ok = c.Original.DPort == w.num
 		case "--icmp-type":
-			have = num(c.Original.ICMPType)
+			ok = sameNum(c.Original.ICMPType, w)
 		case "--icmp-code":
-			have = num(c.Original.ICMPCode)
+			ok = sameNum(c.Original.ICMPCode, w)
 		case "--icmp-id":
-			have = num(c.Original.ICMPID)
+			ok = sameNum(c.Original.ICMPID, w)
 		case "-f": // the family: the simulator holds IPv4 only
 			continue
 		default:
 			return false
 		}
-		if have != v {
+		if !ok {
 			return false
 		}
 	}
@@ -211,5 +249,5 @@ func (k *Kernel) ConntrackReads() int {
 func (k *Kernel) Conntrack() string {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	return k.conntrack
+	return k.conntrackText()
 }

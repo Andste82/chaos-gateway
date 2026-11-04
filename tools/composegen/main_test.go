@@ -129,6 +129,7 @@ func TestOnlyTheExecutorIsPrivilegedAndTheCapabilitiesAreThoseOfThePlan(t *testi
 	wantCaps := map[string][]string{
 		"api": nil, "svcns": nil, "tls": nil, "tls-proxy": nil,
 		"dns":  {"NET_BIND_SERVICE"},
+		"ntp":  {"NET_BIND_SERVICE"},
 		"kea":  {"CHOWN", "DAC_OVERRIDE", "FOWNER", "NET_BIND_SERVICE", "NET_RAW"},
 		"bird": {"NET_ADMIN", "NET_BIND_SERVICE", "NET_RAW"},
 	}
@@ -202,7 +203,7 @@ func TestOnlyTheExecutorIsPrivilegedAndTheCapabilitiesAreThoseOfThePlan(t *testi
 	if f.Services["svcns"].NetworkMode != "none" {
 		t.Errorf("the holder has network %q, want none", f.Services["svcns"].NetworkMode)
 	}
-	for _, n := range []string{"dns", "tls", "tls-proxy"} {
+	for _, n := range []string{"dns", "tls", "ntp", "tls-proxy"} {
 		if f.Services[n].NetworkMode != "service:svcns" {
 			t.Errorf("%s: network_mode %q, want service:svcns", n, f.Services[n].NetworkMode)
 		}
@@ -271,7 +272,7 @@ func TestTheStartOrderFollowsPlan38AndEveryServiceHasAHealthCheck(t *testing.T) 
 			t.Errorf("%s depends on itself", name)
 		}
 	}
-	for _, n := range []string{"dns", "tls", "tls-proxy"} {
+	for _, n := range []string{"dns", "tls", "ntp", "tls-proxy"} {
 		d := f.Services[n].DependsOn
 		if d["svcns"].Condition == "" || !d["svcns"].Restart || d["api"].Condition == "" {
 			t.Errorf("%s joins the holder's namespace and uses the API: depends_on %+v", n, d)
@@ -345,7 +346,7 @@ func TestPersistentDataIsInBindMountsAtThePathsOfThePlan(t *testing.T) {
 			t.Errorf("the API does not write /var/lib/chaosgw/%s", d)
 		}
 	}
-	for _, s := range []string{"dns", "tls", "tls-proxy", "kea"} {
+	for _, s := range []string{"dns", "tls", "ntp", "tls-proxy", "kea"} {
 		if rw(s, "/var/lib/chaosgw/service") || rw(s, "/var/lib/chaosgw/tlsca") {
 			t.Errorf("%s writes the service token or the CAs", s)
 		}
@@ -369,7 +370,7 @@ func TestEveryContainerRunsTheSameImageWhichTheEnvironmentSelects(t *testing.T) 
 
 // The port of the UI and the API is the one the setup configured, and .env names it (CHAOSGW_UI_PORT, env.example): the health check of
 // the API asks that port, not the default of the flag, or an installation with another port has an unhealthy API container and the
-// containers that wait for it (dns, tls, tls-proxy, and `docker compose up --wait` of update.sh) never start.
+// containers that wait for it (dns, tls, ntp, tls-proxy, and `docker compose up --wait` of update.sh) never start.
 func TestThePortOfTheAPIFollowsTheEnvironmentInTheCommandAndTheHealthCheck(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(deployDir, "compose.yaml"))
 	if err != nil {

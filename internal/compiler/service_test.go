@@ -102,15 +102,27 @@ func TestTheServiceNamespaceIsRoutedAndFailsClosed(t *testing.T) {
 	if pre.Base == nil || pre.Base.Hook != "prerouting" || pre.Base.Type != "nat" {
 		t.Fatalf("%+v", pre.Base)
 	}
-	want := len(tg.Bridges)*2 + len(tg.WireGuard)*2
+	// four per interface: DNS over UDP and TCP, and the NTP server's UDP 123 and NTS key establishment (TCP 4460)
+	want := len(tg.Bridges)*4 + len(tg.WireGuard)*4
 	if len(pre.Rules) != want || want == 0 {
 		t.Errorf("%d redirect rules for %d bridges and %d WireGuard networks", len(pre.Rules), len(tg.Bridges), len(tg.WireGuard))
 	}
+	ports := map[string]int{}
 	for _, r := range pre.Rules {
 		b, _ := json.Marshal(r.Expr)
-		if !strings.Contains(string(b), `"dnat":{"addr":"169.254.100.2","family":"ip","port":53}`) {
+		var port string
+		for _, p := range []string{"53", "123", "4460"} {
+			if strings.Contains(string(b), `"dnat":{"addr":"169.254.100.2","family":"ip","port":`+p+`}`) {
+				port = p
+			}
+		}
+		if port == "" {
 			t.Errorf("not a redirect into the namespace: %s", b)
 		}
+		ports[port]++
+	}
+	if n := len(tg.Bridges) + len(tg.WireGuard); ports["53"] != 2*n || ports["123"] != n || ports["4460"] != n {
+		t.Errorf("redirects by port %v for %d interfaces", ports, n)
 	}
 	for _, b := range tg.Bridges {
 		if !strings.Contains(text, b.Address.Addr().String()) {

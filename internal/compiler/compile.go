@@ -68,6 +68,9 @@ type Input struct {
 	// PMTUTables is the allocation of mirror table indices of the previous compile (Target.PMTUTables):
 	// a size that is still in force keeps its table and the mark of its traffic.
 	PMTUTables map[int]int
+	// NTPPorts is the allocation of the redirect ports of the time faults' destination selectors of the previous compile
+	// (Target.NTPPorts): a selector that is still in use keeps its port. Nil allocates from scratch.
+	NTPPorts map[string]int
 	// RetiringIDs are the fault ids whose tc classes are still in the kernel waiting for their
 	// deletion (make-before-break, plan §3.2): a fault that is new does not take one of them.
 	RetiringIDs []int
@@ -157,6 +160,12 @@ type Bridge struct {
 	// `dns.block_dot` of the network).
 	RedirectDNS bool `json:"redirect_dns,omitempty"`
 	BlockDoT    bool `json:"block_dot,omitempty"`
+	// NTP reports that the network's time service is on and can be reached: queries to the gateway address (UDP 123) are
+	// answered by the gateway's NTP server and Kea hands the address out as NTP server. It needs the service namespace.
+	// RedirectNTP reports that NTP to other servers than the gateway is redirected to the server (plan §2.18:
+	// `ntp.redirect_hardcoded`).
+	NTP         bool `json:"ntp,omitempty"`
+	RedirectNTP bool `json:"redirect_ntp,omitempty"`
 	// Routes are the network's downstream routes (plan §2.3): prefixes reached through a router in
 	// the network, the LAN counterpart of a WireGuard peer's Routes.
 	Routes []string `json:"routes,omitempty"`
@@ -270,7 +279,17 @@ type Target struct {
 	// TLSCases are the TLS cases the responder serves, in the order of their rank for each source (tls.go); tlsRules
 	// are the rules that select their connections for the responder and tlsSets the sets they need.
 	TLSCases []TLSCase `json:"tls_cases,omitempty"`
-	tlsRules []Rule
+	// NTPFaults are the time faults the NTP server answers with: for each group of sources with the same ranked faults and
+	// each port the queries of the group can arrive on, the fault that decides (ntp.go). NTPRedirectPorts are the ports of
+	// the destination selectors, which the server listens on besides 123; ntpFaultNAT are the NAT rules that lead the
+	// queries of the scopes with a time fault to them.
+	NTPFaults        []NTPFault `json:"ntp_faults,omitempty"`
+	NTPRedirectPorts []int      `json:"ntp_redirect_ports,omitempty"`
+	// NTPPorts is the port of every destination selector in use by its key (domain.TimeSelectorKey); it is not part of the
+	// content (Hash): feed it back as Input.NTPPorts.
+	NTPPorts    map[string]int `json:"-"`
+	ntpFaultNAT []Rule
+	tlsRules    []Rule
 	// tlsDrops are the rules of block_quic of the interception cases (tlsBlockQUIC)
 	tlsDrops    []Rule
 	tlsSets     []SetDef
@@ -385,6 +404,14 @@ func Compile(in Input) *Target {
 			continue
 		}
 		b := Bridge{Name: bridgeName(id, n.Name, used), NetworkID: id, NetworkName: n.Name, Address: addr, NAT: n.Lan.Nat == nil || *n.Lan.Nat}
+		b.NTP = in.ServiceNS != ""
+		if d := n.Lan.Ntp; d != nil {
+			b.NTP = b.NTP && (d.Enabled == nil || *d.Enabled)
+			b.RedirectNTP = d.RedirectHardcoded != nil && *d.RedirectHardcoded && in.ServiceNS != ""
+			if in.ServiceNS == "" && ((d.Enabled != nil && *d.Enabled) || (d.RedirectHardcoded != nil && *d.RedirectHardcoded)) {
+				t.warn(CodeUnsupported, n.Name, "network %q uses the gateway's NTP server, which needs the service namespace: there is none, so there is no time service and nothing is redirected", n.Name)
+			}
+		}
 		if d := n.Lan.Dns; d != nil {
 			b.RedirectDNS = d.RedirectHardcoded != nil && *d.RedirectHardcoded
 			b.BlockDoT = d.BlockDot != nil && *d.BlockDot

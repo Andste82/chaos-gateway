@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/Andste82/chaos-gateway/internal/executor"
+	"github.com/Andste82/chaos-gateway/internal/ntpserver"
 	"github.com/Andste82/chaos-gateway/internal/preflight"
 	"github.com/Andste82/chaos-gateway/internal/secrets"
 )
@@ -74,8 +75,7 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	}
 	syscall.Umask(0o077)
 
-	opts := []executor.Option{executor.WithLogger(log), executor.WithStateFile(*state), executor.WithHostRoot(os.DirFS(*hostRoot)),
-		executor.WithPreflight(preflightDirs(allow, *state, *secretsDir, *capturesDir))}
+	opts := baseExecOptions(log, *state, *hostRoot, allow, *secretsDir, *capturesDir)
 	if *birdDir != "" {
 		opts = append(opts, executor.WithBirdDir(*birdDir))
 	}
@@ -134,6 +134,24 @@ func stopExec(ex *executor.Executor, serviceNS string, log *slog.Logger, stderr 
 		log.Info("executor stopped")
 	}
 	return code
+}
+
+// baseExecOptions are the options of the executor that do not depend on a directory being given: its state, the host's file system
+// and clock, and the preflight. A function of its own so that a test can build the executor as the process does, and notice an
+// option that is dropped (the check host.clock exists only with WithHostClock).
+func baseExecOptions(log *slog.Logger, state, hostRoot string, allow uidList, secretsDir, capturesDir string) []executor.Option {
+	return []executor.Option{executor.WithLogger(log), executor.WithStateFile(state), executor.WithHostRoot(os.DirFS(hostRoot)),
+		executor.WithPreflight(preflightDirs(allow, state, secretsDir, capturesDir)), executor.WithHostClock(hostClock)}
+}
+
+// hostClock reads the state of the host clock for the check host.clock: the same reading the NTP server decides its
+// stratum by, so the check and the server cannot disagree.
+func hostClock() (preflight.ClockState, error) {
+	st, err := ntpserver.ReadHostSync()
+	if err != nil {
+		return preflight.ClockState{}, err
+	}
+	return preflight.ClockState{Synchronized: st.Synchronized, MaxError: st.MaxError}, nil
 }
 
 // preflightDirs are the directories of the persistence layout (plan §3.6) the executor's container mounts, for the preflight: the

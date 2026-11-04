@@ -665,6 +665,9 @@ func (o *owner) result(ctx context.Context, r applyResult) {
 		o.snap.DNSSets = r.target.DNSSets
 		o.snap.DNSFaults = r.target.DNSFaults
 		o.snap.TLSCases = r.target.TLSCases
+		o.snap.NTPFaults = r.target.NTPFaults
+		o.snap.NTPRedirectPorts = r.target.NTPRedirectPorts
+		o.snap.NTPPorts = r.target.NTPPorts
 		o.snap.ServiceError = ""
 		o.snap.CutWindowError = ""
 		if r.cutStuck != nil {

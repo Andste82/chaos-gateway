@@ -42,17 +42,17 @@ type UnavailablePart struct {
 }
 
 // unavailableFamilies are the families of a profile that arrive with later milestones: the dns family was lifted by
-// M20, the tls family by M21 (P2-M11-01) and its case `intercept` by M22. The time family is described and
-// validated since stage 1 of M34 but not served before stage 2, so a profile with a time part is stored and shown
-// and its activation is refused as a whole; stage 2 empties the map again.
-var unavailableFamilies = map[string]string{FamilyTime: "M34"}
+// M20, the tls family by M21 (P2-M11-01) and its case `intercept` by M22, the time family by M34 (the NTP server). The
+// map is empty once the server of every family exists; a family that is described and validated before it is served
+// goes in here again, and a profile with such a part is stored and shown but its activation is refused as a whole.
+var unavailableFamilies = map[string]string{}
 
 // unavailableMu guards unavailableFamilies, which only SetUnavailableFamilies changes.
 var unavailableMu sync.RWMutex
 
 // SetUnavailableFamilies replaces the families of a profile this build does not implement (family -> the milestone that
 // brings it) and returns the function that restores them. The map is empty in the product once the server of every
-// family exists (it holds the family time until stage 2 of M34); the tests of the rules that refuse a profile with a part like that (P2-M11-05: the activation, a revision
+// family exists; the tests of the rules that refuse a profile with a part like that (P2-M11-05: the activation, a revision
 // that gives an activated profile such a part, the rollback that brings one back) name a family with it. Call it before the
 // engine starts, and restore it after the engine has stopped.
 func SetUnavailableFamilies(m map[string]string) (restore func()) {

@@ -139,6 +139,7 @@ func TestTheContainersMountOnlyTheNamedVolumesTheReviewAllows(t *testing.T) {
 		"svcns":     {"chaosgw-svcns -> /run/chaosgw-svcns rw"},
 		"dns":       nil,
 		"tls":       nil,
+		"ntp":       nil,
 		"tls-proxy": nil,
 		"teardown":  {"chaosgw-bird -> /run/chaosgw-bird rw", "chaosgw-run -> /run/chaosgw rw"},
 	}
@@ -203,6 +204,7 @@ func TestTheContainersMountFromTheHostOnlyWhatTheReviewAllows(t *testing.T) {
 		"kea":       {data + "kea -> /var/lib/kea rw", data + "service -> " + data + "service ro"},
 		"dns":       {data + "service -> " + data + "service ro"},
 		"tls":       {data + "service -> " + data + "service ro", data + "tlsca -> " + data + "tlsca ro"},
+		"ntp":       {data + "service -> " + data + "service ro"},
 		"tls-proxy": {data + "service -> " + data + "service ro", data + "tlsca -> " + data + "tlsca ro"},
 		"svcns":     nil,
 		"bird":      nil,
@@ -256,6 +258,7 @@ func TestEveryContainerHasExactlyTheCapabilitiesTheReviewGrants(t *testing.T) {
 		"svcns":     {network: "none"},
 		"dns":       {capAdd: []string{"NET_BIND_SERVICE"}, network: "service:svcns"},
 		"tls":       {network: "service:svcns"},
+		"ntp":       {capAdd: []string{"NET_BIND_SERVICE"}, network: "service:svcns"},
 		"tls-proxy": {network: "service:svcns"},
 	}
 	services := loadComposeYAML(t)

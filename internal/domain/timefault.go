@@ -20,6 +20,9 @@ import (
 // NTPPort is the UDP port a time fault applies to when it names none.
 const NTPPort = 123
 
+// NTSKEPort is the TCP port of NTS key establishment (RFC 8915), which the gateway's NTP server accepts and closes.
+const NTSKEPort = 4460
+
 // MaxTimeSkewPPM is the largest skew a time fault may have in either direction: 1,000,000 ppm is a clock that
 // stands still (or, the other way, runs at twice the rate), which is as far as a drifting clock can still be
 // told from a broken one.

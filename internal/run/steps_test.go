@@ -698,10 +698,9 @@ checks:
 	}
 }
 
-// The time step and a profile with a time part are described and validated from stage 1 of M34 on, but the engine does
-// not serve either before stage 2: the refusal has to come when the run is created, not when the step runs. Stage 2
-// lifts the family and this test goes with it.
-func TestATimeStepAndAProfileWithATimePartAreRefusedWhenTheRunIsCreated(t *testing.T) {
+// The time step and a profile with a time part are served since stage 2 of M34 (the engine carries out a time overlay),
+// so a run that has them is created; only the NTP wait and the NTP check wait for the runner of stage 3.
+func TestATimeStepAndAProfileWithATimePartAreAcceptedWhenTheRunIsCreated(t *testing.T) {
 	h := newHarness(t)
 	for name, yaml := range map[string]string{
 		"time step": `
@@ -719,14 +718,9 @@ steps: [{id: p, at: 1s, profile: clock-in-1970}]
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		_, err = h.m.Create(context.Background(), run.CreateRequest{Inline: sc, Queue: true, Owner: token})
-		u, ok := errAs[*run.UnsupportedError](err)
-		if !ok || u.Milestone != "M34" {
-			t.Errorf("%s: %v, want milestone M34", name, err)
+		if _, err = h.m.Create(context.Background(), run.CreateRequest{Inline: sc, Queue: true, Owner: token}); err != nil {
+			t.Errorf("%s: %v", name, err)
 		}
-	}
-	if got := len(h.m.List(run.Filter{})); got != 0 {
-		t.Errorf("a refused scenario made %d runs", got)
 	}
 }
 

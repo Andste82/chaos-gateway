@@ -18,10 +18,10 @@ export CHAOSGW_VERSION="${CHAOSGW_VERSION:-latest}"
 export CHAOSGW_IMAGE="${CHAOSGW_IMAGE:-chaos-gateway}"
 compose="docker compose -f $here/compose.yaml"
 api=https://127.0.0.1:8443/api/v1
-# the containers that stay up, in the order of the plan's start order; dns and tls report healthy only once the executor has attached
+# the containers that stay up, in the order of the plan's start order; dns, tls and ntp report healthy only once the executor has attached
 # the service namespace, which needs a configuration
 healthy="exec api svcns kea bird"
-running="dns tls"
+running="dns tls ntp"
 
 fail() {
 	echo "smoke test failed: $*" >&2
@@ -99,7 +99,7 @@ want_caps() { # service
 	case "$1" in
 	kea) echo "CHOWN DAC_OVERRIDE FOWNER NET_BIND_SERVICE NET_RAW" ;;
 	bird) echo "NET_ADMIN NET_BIND_SERVICE NET_RAW" ;;
-	dns) echo "NET_BIND_SERVICE" ;;
+	dns | ntp) echo "NET_BIND_SERVICE" ;;
 	*) echo "" ;;
 	esac
 }
@@ -139,7 +139,7 @@ done
 echo "ok   the setup token is in the log of the API"
 status=$(curl -ksS -m 20 "$api/setup") || fail "GET /setup does not answer"
 echo "$status" | grep -q '"completed" *: *false' || fail "GET /setup: $status"
-for check in host.tools host.netns host.proc_sys; do
+for check in host.tools host.netns host.proc_sys host.clock; do
 	echo "$status" | grep -q "\"$check\"" || fail "the preflight of the setup status has no check $check: $status"
 done
 # the executor must not report a failed check on a host that was prepared

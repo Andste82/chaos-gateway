@@ -323,6 +323,7 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 	}
 	t.compileDNS(w, sources, idx)
 	t.compileTLS(w, sources, identity, idx)
+	t.compileNTP(in, w, sources, idx)
 
 	// ---- pass 1: the winner of every entry of every source's table, and the keys they need ----
 	tables := make([]domain.Table, len(sources))

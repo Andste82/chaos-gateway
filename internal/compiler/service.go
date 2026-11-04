@@ -128,7 +128,7 @@ func (t *Target) serviceForwardGuard() []Rule {
 	return []Rule{newRule(eq(payload("ip", "daddr"), prefixValue(t.Service.HostCIDR.Masked())), match(meta("oifname"), "!=", t.Service.HostIf), counter("forward_drop"), verdict("drop"))}
 }
 
-// serviceForward accepts the queries that were redirected to the DNS proxy and what the services send out of the namespace:
+// serviceForward accepts the queries that were redirected to the DNS proxy and the NTP server (ntp.go) and what the services send out of the namespace:
 // towards the uplink, and towards the test networks and the WireGuard tunnels of the test role (ifsTest), where the servers
 // are that a connection passed on by the TLS responder or the interception proxy has to reach (plan M21, P5-M21-02). The rule
 // stands after the access rules and the matrix: they cannot judge the connection (it comes in on svc0, from the namespace's
@@ -146,6 +146,7 @@ func (t *Target) serviceForward(ifsCG, ifsTest string, uplink string) []Rule {
 	for _, proto := range []string{"udp", "tcp"} {
 		out = append(out, newRule(iifSet(ifsCG), oifname(t.Service.HostIf), eq(payload("ip", "daddr"), peer), eq(payload(proto, "dport"), ServiceDNSPort), verdict("accept")))
 	}
+	out = append(out, t.ntpForward(ifsCG)...)
 	if uplink != "" {
 		out = append(out, newRule(iifname(t.Service.HostIf), oifname(uplink), verdict("accept")))
 	}
@@ -156,7 +157,7 @@ func (t *Target) serviceForward(ifsCG, ifsTest string, uplink string) []Rule {
 // prerouting is the NAT chain of the prerouting hook: the service redirect, then the counting rules and
 // the DNAT of the port forwards (forward.go). Nil when there is neither.
 func (t *Target) prerouting(tp *topo) *Chain {
-	rules := append(append(t.serviceRedirect(tp), t.forwardCounts()...), t.forwardDNAT()...)
+	rules := append(append(append(t.serviceRedirect(tp), t.ntpRedirect()...), t.forwardCounts()...), t.forwardDNAT()...)
 	if len(rules) == 0 {
 		return nil
 	}

@@ -13,8 +13,8 @@
 #      uninstall.sh, host-setup.sh), and for each --test-interface the rule that keeps systemd-networkd off it and the check of it.
 #      It stops here (exit 1) when a test interface has a netplan entry or a NetworkManager connection: delete it as the host setup
 #      says, then run install.sh again,
-#   4. starts the containers (`docker compose up -d`) and waits for the health checks of exec, api, svcns, kea and bird (dns and tls
-#      cannot be healthy before the first configuration),
+#   4. starts the containers (`docker compose up -d`) and waits for the health checks of exec, api, svcns, kea and bird (dns, tls
+#      and ntp cannot be healthy before the first configuration),
 #   5. says where the setup wizard is and how to read its one-time token.
 #
 # The test interfaces are the ports of the test networks. They belong to the gateway alone: they must not be the uplink or the

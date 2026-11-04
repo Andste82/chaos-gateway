@@ -485,7 +485,12 @@ func (e *Engine) Flows(ctx context.Context) ([]Flow, error) {
 			f.Network = wireGuardNetworkOf(snap.WireGuardInterfaces, src)
 		}
 		if r, err := netip.ParseAddr(c.Reply.Src); err == nil && r == compiler.ServicePeerCIDR.Addr() {
+			// the port the reply comes from is the service's: the DNS proxy's, or one of the NTP server's (the NTP port, the
+			// ports of the destination selectors, and NTS key establishment which it refuses)
 			f.Service = "dns_proxy"
+			if isNTPServicePort(c.Proto, c.Reply.SPort) {
+				f.Service = "ntp_server"
+			}
 		}
 		// a connection that a TLS case selected for the responder carries the conntrack mark of the selection (compiler/tls.go):
 		// its addresses are unchanged, so the mark is what tells
@@ -604,4 +609,16 @@ func (e *Engine) resyncProbes(ctx context.Context) {
 	}
 	e.probeResyncAt.Store(now)
 	_ = e.send(ctx, cmdResync{})
+}
+
+// isNTPServicePort reports whether a connection redirected into the service namespace ends on the NTP server: a UDP port
+// it listens on or the TCP port of NTS key establishment.
+func isNTPServicePort(proto string, port int) bool {
+	switch proto {
+	case "udp":
+		return port == compiler.ServiceNTPPort || (port >= compiler.NTPRedirectPortBase && port < compiler.NTPRedirectPortBase+compiler.MaxNTPDestinations)
+	case "tcp":
+		return port == compiler.NTSKEPort
+	}
+	return false
 }

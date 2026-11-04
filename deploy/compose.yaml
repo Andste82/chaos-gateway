@@ -6,7 +6,7 @@
 #   docker compose --profile teardown run --rm teardown [--purge]    remove what a killed gateway left in the kernel (and the data)
 #
 # Start order: exec first (healthy: its socket answers), then api, svcns (the executor attaches the veth pair to its namespace) and
-# kea, then the services that join the service namespace (dns, tls, tls-proxy) once the API is healthy, and bird. The persistent
+# kea, then the services that join the service namespace (dns, tls, ntp, tls-proxy) once the API is healthy, and bird. The persistent
 # data is in /var/lib/chaosgw on the host (plan §3.6); the sockets between the containers are in named volumes.
 name: chaosgw
 services:
@@ -409,6 +409,59 @@ services:
     stop_grace_period: 10s
     healthcheck:
       test: ["CMD", "chaosgw", "tls", "--health", "--listen", ":9443"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  # The NTP server (plan §2.18, §3.3, §3.8): the time of the gateway's NTP server and the time faults.
+  #
+  # It joins the service namespace that `svcns` holds (compose.dns.yaml) and listens there on UDP port 123 and on the further ports
+  # the configuration names (12301 and up, one for every destination selector of a time fault; D36): the gateway's nftables redirect
+  # the queries to a test network's gateway address, and those of a device under a time fault, to the peer of the namespace, and the
+  # server learns which server the device asked from the port the query arrived on, so it needs no conntrack and no network
+  # capability. It also refuses the TCP connections of NTS key establishment on port 4460 and reports them. It fetches its
+  # configuration from the API at 169.254.100.1 and posts its query log. It keeps no state: restarting it costs nothing; Compose
+  # restarts it with the holder (`depends_on ... restart: true`), which re-joins the new namespace.
+  #
+  # Port 123 is below 1024, which is the one capability it keeps; it never changes the clock of the host (it only reads it) and has
+  # no right to: it is not given SYS_TIME.
+  ntp:
+    image: ${CHAOSGW_IMAGE:-chaos-gateway}:${CHAOSGW_VERSION:-latest}
+    command: ["ntp", "--listen", ":123", "--api", "https://169.254.100.1:${CHAOSGW_UI_PORT:-8443}", "--service-token-file", "/var/lib/chaosgw/service/token", "--api-cert-file", "/var/lib/chaosgw/service/api.pem"]
+    user: "65532:65532"
+    network_mode: "service:svcns"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=4m,mode=0700
+    volumes:
+      # the token the server authenticates with and the API's certificate: nothing else of the secrets
+      - type: bind
+        source: /var/lib/chaosgw/service
+        target: /var/lib/chaosgw/service
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      svcns:
+        condition: service_healthy
+        # a recreated holder has a new namespace: the server has to join it again
+        restart: true
+      # the server fetches its configuration from the API (169.254.100.1)
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 10s
+    healthcheck:
+      test: ["CMD", "chaosgw", "ntp", "--health", "--listen", ":123"]
       interval: 10s
       timeout: 5s
       retries: 3

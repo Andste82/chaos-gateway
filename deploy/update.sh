@@ -16,7 +16,7 @@
 #      ends active runs as `aborted`, so it does not start while one runs: when the time is up it stops (exit 3) unless --force
 #      says to go on,
 #   4. restarts all containers together (`docker compose up -d`, then waits for the health checks of exec, api, svcns, kea and bird,
-#      and of dns and tls once the gateway is set up: those two cannot be healthy before the first configuration). The executor stops the old way, as on every stop (plan
+#      and of dns, tls and ntp once the gateway is set up: those three cannot be healthy before the first configuration). The executor stops the old way, as on every stop (plan
 #      §3.8, D35): it removes everything it made in the kernel, so the devices of the test networks lose the gateway and their
 #      DHCP until the new executor has rebuilt the networks from the confirmed revision, a few seconds to a minute. The
 #      executor protocol version (plan §3.1) rejects a set of containers of two versions, which is why they all go at once,
@@ -350,14 +350,14 @@ if ! docker compose up -d --remove-orphans; then
 	docker compose ps || true
 	die 5 "the containers did not start: $back"
 fi
-# The containers that have to be healthy: dns and tls report healthy only once the executor has attached the service namespace,
+# The containers that have to be healthy: dns, tls and ntp report healthy only once the executor has attached the service namespace,
 # which takes a configuration, so a gateway that is not set up yet is waited for without them.
 if ! docker compose up -d --wait --wait-timeout "$HEALTH_WAIT" exec api svcns kea bird; then
 	docker compose ps || true
 	die 5 "the containers did not become healthy within ${HEALTH_WAIT}s: $back"
 fi
 if [ "$(api /setup)" = 200 ] && grep -Eq '"completed" *: *false' "$TMP"; then
-	say "the gateway is not set up yet: the DNS proxy and the TLS responder come up with its first configuration"
+	say "the gateway is not set up yet: the DNS proxy, the TLS responder and the NTP server come up with its first configuration"
 elif ! docker compose up -d --wait --wait-timeout "$HEALTH_WAIT"; then
 	docker compose ps || true
 	die 5 "the containers did not become healthy within ${HEALTH_WAIT}s: $back"

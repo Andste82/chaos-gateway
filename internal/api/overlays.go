@@ -71,6 +71,9 @@ type overlayContext struct {
 	// tlsHits are the handshakes of each TLS overlay (by overlay id) and tlsEpoch the epoch of those counters
 	tlsHits  map[string]int64
 	tlsEpoch int64
+	// ntpHits are the queries each time fault shaped (by overlay id) and ntpEpoch the epoch of those counters
+	ntpHits  map[string]int64
+	ntpEpoch int64
 }
 
 // readOverlayContext takes the snapshot and, when asked, reads the named counters once for all
@@ -87,6 +90,7 @@ func (s *Server) readOverlayContext(ctx context.Context, withCounters bool) over
 	// every read prunes the counters of overlays that went (once per snapshot), with or without a DNS fault or TLS case in force
 	oc.dnsHits, oc.dnsEpoch = s.dnsHitsSnapshot(oc.snap)
 	oc.tlsHits, oc.tlsEpoch = s.tlsHitsSnapshot(oc.snap)
+	oc.ntpHits, oc.ntpEpoch = s.ntpHitsSnapshot(oc.snap)
 	if withCounters && (len(oc.snap.Faults) > 0 || len(oc.snap.PMTU) > 0 || oc.snap.Access != nil || len(oc.snap.WGActions) > 0 || len(oc.snap.Forwards) > 0) {
 		cs, err := s.cfg.Engine.ReadCounters(ctx)
 		if err != nil {
@@ -229,6 +233,29 @@ func (oc overlayContext) withTLS(c *model.Counter, id string) *model.Counter {
 	return &out
 }
 
+// withNTP adds the queries a time fault of the overlay shaped to its counter (a time overlay's, or the time part of an
+// activated profile's): the counter of a time fault is the number of queries it decided, in packets (no bytes). An overlay
+// that is in no list of the NTP server has none.
+func (oc overlayContext) withNTP(c *model.Counter, id string) *model.Counter {
+	in := false
+	for _, f := range oc.snap.NTPFaults {
+		if strings.EqualFold(f.Overlay, id) {
+			in = true
+			break
+		}
+	}
+	if !in {
+		return c
+	}
+	out := model.Counter{}
+	if c != nil {
+		out = *c
+	}
+	out.Packets += oc.ntpHits[strings.ToLower(id)]
+	out.Epoch = mixEpochs(out.Epoch, oc.ntpEpoch)
+	return &out
+}
+
 // queuesOf lists the netem queues the faults of one source feed: one per interface of the tree and
 // direction the fault impairs, with the counters the kernel holds for it and the epoch of the leaf. A
 // queue the kernel does not hold (read failed, or not applied yet) is left out. Nil without any.
@@ -332,13 +359,13 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 		// the parts of the profile are faults of the overlay's id: their counters and queues add up
 		st := oc.profileEffect(ov)
 		ov.State = &st
-		ov.Counters = oc.withTLS(oc.withDNS(oc.counterOf("overlay", ov.Id.String()), ov.Id.String()), ov.Id.String())
+		ov.Counters = oc.withNTP(oc.withTLS(oc.withDNS(oc.counterOf("overlay", ov.Id.String()), ov.Id.String()), ov.Id.String()), ov.Id.String())
 		if q := oc.queuesOf("overlay", ov.Id.String()); len(q) > 0 {
 			ov.Queues = &q
 		}
 		if overridden(st) {
 			// every family a part of the profile can compete in: a family without a part has no candidate of the overlay
-			fams := map[string]bool{domain.FamilyImpairment: true, domain.FamilyMTU: true, domain.FamilyDNS: true, domain.FamilyTLS: true}
+			fams := map[string]bool{domain.FamilyImpairment: true, domain.FamilyMTU: true, domain.FamilyDNS: true, domain.FamilyTLS: true, domain.FamilyTime: true}
 			ov.OverriddenBy = refsOrNil(oc.overriddenBy(domain.LayerOverlay, ov.Id.String(), ov.Target, nil, nil, nil, fams))
 		}
 	}
@@ -366,6 +393,25 @@ func (oc overlayContext) overlayView(ov model.Overlay) model.Overlay {
 				ports = []int{ranges[0].From}
 			}
 			ov.OverriddenBy = refsOrNil(oc.overriddenBy(domain.LayerOverlay, ov.Id.String(), ov.Target, ov.Tls.Destination, &tcp, &ports, map[string]bool{domain.FamilyTLS: true}, "", sampleName(deref(ov.Tls.Sni))))
+		}
+	}
+	if ov.Kind == model.OverlayKindTime {
+		// a time fault competes with the other time faults (and the time parts of profiles) of the devices in its scope; it is
+		// `effective` while some source has it in the NTP server's list (compiler.compileNTP), `overridden` while a more
+		// specific or newer one decides for all of them
+		st := oc.effectOf("overlay", ov.Id.String(), domain.FamilyTime)
+		ov.State = &st
+		ov.Counters = oc.withNTP(nil, ov.Id.String())
+		if overridden(st) && ov.Time != nil {
+			// the query to look at is the one the fault selects: UDP, a port of it (the NTP port without) and the server it names
+			udp := model.Protocol("udp")
+			ports := []int{domain.NTPPort}
+			if p := deref(ov.Time.Ports); len(p) > 0 {
+				ports = p
+			} else if r := deref(ov.Time.PortRanges); len(r) > 0 {
+				ports = []int{r[0].From}
+			}
+			ov.OverriddenBy = refsOrNil(oc.overriddenBy(domain.LayerOverlay, ov.Id.String(), ov.Target, ov.Time.Destination, &udp, &ports, map[string]bool{domain.FamilyTime: true}))
 		}
 	}
 	if ov.Kind == model.OverlayKindDhcp {

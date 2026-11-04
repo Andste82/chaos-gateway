@@ -80,12 +80,12 @@ func (e *CompileError) Error() string {
 
 // SupportedOverlayKinds and SupportedFaultFamilies are what this build implements (GET
 // /capabilities): faults of the impairment, mtu and tunnel families, DNS faults (the kind dns, M20), TLS cases
-// (the kind tls, M21, with the case intercept of M22), DHCP actions (the kind dhcp, M23), profile activations, access
-// rules and WireGuard actions. A profile is activated as a whole: one with a part this build cannot resolve is refused
+// (the kind tls, M21, with the case intercept of M22), DHCP actions (the kind dhcp, M23), time faults (the kind time,
+// M34), profile activations, access rules and WireGuard actions. A profile is activated as a whole: one with a part this build cannot resolve is refused
 // (checkProfileAvailable); every part of a profile is available since M22.
 var (
-	SupportedOverlayKinds  = []model.OverlayKind{model.OverlayKindFault, model.OverlayKindProfile, model.OverlayKindRule, model.OverlayKindDns, model.OverlayKindTls, model.OverlayKindDhcp, model.OverlayKindWireguard}
-	SupportedFaultFamilies = []model.FaultFamily{model.FaultFamilyImpairment, model.FaultFamilyMtu, model.FaultFamilyDns, model.FaultFamilyTls, model.FaultFamilyDhcp, model.FaultFamilyTunnel}
+	SupportedOverlayKinds  = []model.OverlayKind{model.OverlayKindFault, model.OverlayKindProfile, model.OverlayKindRule, model.OverlayKindDns, model.OverlayKindTls, model.OverlayKindDhcp, model.OverlayKindTime, model.OverlayKindWireguard}
+	SupportedFaultFamilies = []model.FaultFamily{model.FaultFamilyImpairment, model.FaultFamilyMtu, model.FaultFamilyDns, model.FaultFamilyTls, model.FaultFamilyDhcp, model.FaultFamilyTime, model.FaultFamilyTunnel}
 )
 
 // CheckOverlaySupported returns an *UnsupportedOverlayError for an overlay request that needs a
@@ -119,7 +119,7 @@ func CheckOverlaySupported(req *model.OverlayRequest) error {
 	case "dhcp":
 		return nil // M23
 	case "time":
-		return &UnsupportedOverlayError{What: "a time fault", Milestone: "M34"}
+		return nil // M34
 	}
 	return nil
 }

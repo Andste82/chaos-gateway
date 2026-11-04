@@ -3,6 +3,7 @@ package executor_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -401,6 +402,100 @@ func TestDNSContainersHardeningProfile(t *testing.T) {
 	if len(dns.Volumes) != 1 || len(holder.Volumes) != 1 {
 		t.Errorf("volumes: the proxy %d, the holder %d", len(dns.Volumes), len(holder.Volumes))
 	}
+}
+
+// The NTP server joins the namespace of the holder like the DNS proxy and keeps the one capability that UDP port 123 needs; it
+// mounts only the service token and the API's certificate, read-only. It is given neither NET_ADMIN (it reads no conntrack, D36:
+// it learns the asked server from the port a query arrived on) nor SYS_TIME (it reads the host clock and never sets it). The
+// flags of its command are those of `chaosgw ntp`, and its health check asks the port it listens on.
+func TestNTPContainerHardeningProfile(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/compose.ntp.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Services map[string]service `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Services) != 1 {
+		t.Fatalf("services %v", doc.Services)
+	}
+	ntp := doc.Services["ntp"]
+	if ntp.Privileged || !ntp.ReadOnly || !contains(ntp.CapDrop, "ALL") || !contains(ntp.SecurityOpt, "no-new-privileges:true") || ntp.User != "65532:65532" {
+		t.Errorf("%+v", ntp)
+	}
+	if ntp.NetworkMode != "service:svcns" || len(ntp.CapAdd) != 1 || ntp.CapAdd[0] != "NET_BIND_SERVICE" {
+		t.Errorf("the server joins the namespace of the holder and binds port 123: %+v", ntp)
+	}
+	if len(ntp.Command) < 1 || ntp.Command[0] != "ntp" {
+		t.Fatalf("command %v", ntp.Command)
+	}
+	// the flags the compose file passes have to exist in `chaosgw ntp`: an unknown flag makes the container exit with code 2
+	known := ntpFlags(t)
+	for _, a := range append(append([]string{}, ntp.Command[1:]...), ntp.Healthcheck.Test...) {
+		if strings.HasPrefix(a, "--") && !known[strings.TrimPrefix(a, "--")] {
+			t.Errorf("flag %s is not a flag of `chaosgw ntp`", a)
+		}
+	}
+	// the server and its health check ask the same port, and it is the one the compiler redirects the gateway address to
+	listens := 0
+	for _, args := range [][]string{ntp.Command, ntp.Healthcheck.Test} {
+		for i, a := range args {
+			if a == "--listen" && i+1 < len(args) {
+				listens++
+				if args[i+1] != ":123" {
+					t.Errorf("--listen %s: the compiler redirects UDP 123 into the namespace", args[i+1])
+				}
+			}
+		}
+	}
+	if listens != 2 {
+		t.Errorf("the command and the health check name --listen %d times, want 2", listens)
+	}
+	if !contains(ntp.Healthcheck.Test, "--health") {
+		t.Errorf("health check %v", ntp.Healthcheck.Test)
+	}
+	mounted := 0
+	for _, v := range ntp.Volumes {
+		var m struct {
+			Source   string `yaml:"source"`
+			Target   string `yaml:"target"`
+			ReadOnly bool   `yaml:"read_only"`
+		}
+		if v.Kind != yaml.MappingNode {
+			t.Fatalf("a short volume: %v", v.Value)
+		}
+		if err := v.Decode(&m); err != nil {
+			t.Fatal(err)
+		}
+		if m.Source != "/var/lib/chaosgw/service" || m.Target != "/var/lib/chaosgw/service" || !m.ReadOnly {
+			t.Errorf("the server only reads the service directory: %+v", m)
+		}
+		mounted++
+	}
+	if mounted != 1 {
+		t.Errorf("volumes %d, want the service directory alone", mounted)
+	}
+}
+
+// ntpFlags are the flags `chaosgw ntp` declares, read from its source: a flag of the compose file that the command does not know
+// is found here without starting the command.
+func ntpFlags(t *testing.T) map[string]bool {
+	t.Helper()
+	src, err := os.ReadFile("../../cmd/chaosgw/ntp.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	flags := map[string]bool{}
+	for _, m := range regexp.MustCompile(`fs\.(?:String|Bool|Float64|Int|Duration)\("([a-z-]+)"`).FindAllStringSubmatch(string(src), -1) {
+		flags[m[1]] = true
+	}
+	if !flags["listen"] || !flags["health"] || !flags["api"] {
+		t.Fatalf("the flags of cmd/chaosgw/ntp.go were not found: %v", flags)
+	}
+	return flags
 }
 
 // The TLS responder joins the namespace of the holder like the DNS proxy, drops every capability (its port is above

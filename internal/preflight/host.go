@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // HostCheck is one line of the executor's preflight (plan §3.4): what the privileged process sees of the host it runs on. The
@@ -54,6 +55,16 @@ type HostProbe struct {
 	HostFS fs.FS
 	// DataDirs are the directories to check.
 	DataDirs []DataDir
+	// Clock reads the state of the host clock (adjtimex); nil leaves the clock unchecked, as the checks of a test that
+	// has no kernel to ask.
+	Clock func() (ClockState, error)
+}
+
+// ClockState is what the kernel says about the host clock: whether a time source disciplines it and how large its
+// largest possible error is.
+type ClockState struct {
+	Synchronized bool
+	MaxError     time.Duration
 }
 
 // HostTool is a tool the executor runs, with the arguments that make it print its version.
@@ -117,6 +128,9 @@ func HostChecks(ctx context.Context, p HostProbe) []HostCheck {
 	}
 
 	out = append(out, procSysCheck(p), namespaceCheck(ctx, p))
+	if p.Clock != nil {
+		out = append(out, clockCheck(p.Clock))
+	}
 	out = append(out, firewallChecks(ctx, p)...)
 	if p.HasTool("ip") {
 		out = append(out, dockerPoolCheck(ctx, p))
@@ -126,6 +140,23 @@ func HostChecks(ctx context.Context, p HostProbe) []HostCheck {
 }
 
 func atoi(s string) int { n, _ := strconv.Atoi(s); return n }
+
+// clockCheck says whether the host clock is synchronized. The NTP server of the gateway serves this clock (plan §2.18): while
+// it is not synchronized, the server answers with stratum 16 and leap indicator 3 so that a correct client ignores it, and a
+// test of a device's time against the server shows nothing. The host keeps its clock right with a time service of its own
+// (chrony, systemd-timesyncd), outside the gateway.
+func clockCheck(read func() (ClockState, error)) HostCheck {
+	const id = "host.clock"
+	const fix = "start a time service on the host (chrony or systemd-timesyncd) and wait until it is synchronized: `timedatectl status` says \"System clock synchronized: yes\""
+	st, err := read()
+	switch {
+	case err != nil:
+		return HostCheck{ID: id, Status: "warn", Message: "the state of the host clock cannot be read (adjtimex): " + err.Error() + "; the NTP server takes it for not synchronized", Fix: fix}
+	case !st.Synchronized:
+		return HostCheck{ID: id, Status: "warn", Message: "the host clock is not synchronized (the kernel reports an unsynchronized clock or a maximum error above 1s): the NTP server answers with stratum 16 and leap indicator 3, so a correct client ignores it", Fix: fix}
+	}
+	return HostCheck{ID: id, Status: "ok", Message: "the host clock is synchronized (maximum error " + st.MaxError.Round(time.Microsecond).String() + ")"}
+}
 
 // toolChecks says which tools are missing and which versions the rest are, and whether iptables is the nftables-backed one: the
 // chain DOCKER-USER the executor keeps its accept rule in is Docker's, and Docker on Ubuntu uses the nf_tables backend.

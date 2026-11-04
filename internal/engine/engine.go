@@ -128,6 +128,14 @@ type Snapshot struct {
 	// TLSCases are the TLS cases of the last applied target in the order the TLS responder tries them, for each
 	// source (plan §2.8): the responder's configuration.
 	TLSCases []compiler.TLSCase
+	// NTPFaults are the time faults of the last applied target, for each group of sources and each port the NTP server
+	// receives queries on (plan §2.18): the server's configuration. NTPRedirectPorts are the ports of the destination
+	// selectors it listens on besides 123.
+	NTPFaults        []compiler.NTPFault
+	NTPRedirectPorts []int
+	// NTPPorts is the redirect port of every destination selector in use of the last applied target: a compile that is given
+	// it leaves a selector on its port when another comes or goes (compiler.Input.NTPPorts).
+	NTPPorts map[string]int
 	// DHCPError is why the DHCP server does not run the applied configuration, empty when it does.
 	DHCPError string
 	// ServiceHealth is WatchService's last reading of the service namespace, nil before the first

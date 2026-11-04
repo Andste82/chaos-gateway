@@ -1,0 +1,20 @@
+# server's faults
+overlay:00000000-0000-4000-8000-000000000003:time  port 123  time leap insert  scope "network IoT"  sources 10.10.0.0/24
+overlay:00000000-0000-4000-8000-000000000001:time  port 123  time offset -1d  scope "network lab-hub"  sources 10.50.0.0/24,10.99.0.0/24
+overlay:00000000-0000-4000-8000-000000000002:time  port 12301  time absolute 1970-01-01T00:00:00Z  scope "network site-b"  sources 10.60.0.0/24,10.255.0.0/31
+# listen [123 12301]
+# prerouting (without DNS)
+meta iifname br-iot ip saddr 10.10.0.0/24 ip daddr != 10.10.0.0/24 udp dport 123 dnat ip to 169.254.100.2:123
+meta iifname wg-lab-hub ip saddr { 10.50.0.0/24, 10.99.0.0/24 } ip daddr != { 10.50.0.0/24, 10.99.0.0/24 } udp dport 123 dnat ip to 169.254.100.2:123
+meta iifname wg-site-b ip saddr { 10.60.0.0/24, 10.255.0.0/31 } ip daddr 203.0.113.9/32 udp dport 123 dnat ip to 169.254.100.2:12301
+meta iifname br-iot ip daddr 10.10.0.1 udp dport 123 dnat ip to 169.254.100.2:123
+meta iifname br-iot ip daddr 10.10.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460
+meta iifname wg-admin ip daddr 10.98.0.1 udp dport 123 dnat ip to 169.254.100.2:123
+meta iifname wg-admin ip daddr 10.98.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460
+meta iifname wg-lab-hub ip daddr 10.99.0.1 udp dport 123 dnat ip to 169.254.100.2:123
+meta iifname wg-lab-hub ip daddr 10.99.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460
+meta iifname wg-site-b ip daddr 10.255.0.0 udp dport 123 dnat ip to 169.254.100.2:123
+meta iifname wg-site-b ip daddr 10.255.0.0 tcp dport 4460 dnat ip to 169.254.100.2:4460
+# forward (the accepts towards the namespace)
+meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 udp dport { 123, 12301 } accept
+meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 tcp dport 4460 accept

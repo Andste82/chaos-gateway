@@ -205,7 +205,7 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 				flapT.stop()
 			} else {
 				last = &appliedState{d: d, target: target}
-				prev.faultIDs, prev.pmtu, prev.deviceNums = target.FaultIDs, target.PMTUTables, target.DeviceNums
+				prev.faultIDs, prev.pmtu, prev.deviceNums, prev.ntpPorts = target.FaultIDs, target.PMTUTables, target.DeviceNums, target.NTPPorts
 				if !incremental {
 					// the flapping faults of the target start (or go on) from here
 					e.flap.sync(target, e.cfg.Clock.Monotonic())
@@ -230,6 +230,13 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 				cutStuck = nil // the full apply flushed the cut chains
 				dhcpErr = e.syncDHCP(ctx, target, after)
 				cut = e.cutExisting(ctx, verified, target)
+				// the flows of the clients keep the redirect they were first sent to; a change of the redirects of time faults
+				// would not reach a device that keeps its socket (ntpflows.go)
+				if n, nerr := e.dropNTPFlows(ctx, verified, target); nerr != nil {
+					e.cfg.Log.Warn("deleting the tracked NTP flows failed: the redirects are in force, a device that keeps its socket may be served by the old ones for up to two minutes", "generation", d.Generation, "error", nerr)
+				} else if n > 0 {
+					e.cfg.Log.Info("the redirects of the NTP server changed: the tracked NTP flows were deleted", "generation", d.Generation, "flows", n)
+				}
 				if cut != nil && cut.WindowOpen {
 					cutStuck = cut.Err
 				}
@@ -285,11 +292,13 @@ type allocation struct {
 	pmtu       map[int]int
 	deviceNums map[string]int
 	deviceHigh int
+	// ntpPorts are the redirect ports of the destination selectors of the time faults (compiler.Input.NTPPorts)
+	ntpPorts map[string]int
 }
 
 // allocationOf is the allocations of the last applied target as the snapshot has them.
 func allocationOf(s *Snapshot) allocation {
-	return allocation{faultIDs: s.FaultIDs, pmtu: s.PMTUTables, deviceNums: s.DeviceNums, deviceHigh: s.DeviceNumHigh}
+	return allocation{faultIDs: s.FaultIDs, pmtu: s.PMTUTables, deviceNums: s.DeviceNums, deviceHigh: s.DeviceNumHigh, ntpPorts: s.NTPPorts}
 }
 
 // input builds the compiler's input. The public keys of the WireGuard interfaces come from the
@@ -299,7 +308,7 @@ func allocationOf(s *Snapshot) allocation {
 // allocations of the previous apply.
 func (e *Engine) input(cfg *model.Configuration, host compiler.Host, gen compiler.Generation, id *domain.Identity, overlays []model.Overlay, prev allocation, retiring []int) compiler.Input {
 	in := compiler.Input{Config: cfg, Host: host, Generation: gen, Identity: id, ServiceNS: e.cfg.ServiceNS, DefaultUIPort: e.cfg.DefaultUIPort,
-		Overlays: overlays, FaultIDs: prev.faultIDs, PMTUTables: prev.pmtu, DeviceNums: prev.deviceNums, DeviceNumHigh: prev.deviceHigh,
+		Overlays: overlays, FaultIDs: prev.faultIDs, PMTUTables: prev.pmtu, DeviceNums: prev.deviceNums, DeviceNumHigh: prev.deviceHigh, NTPPorts: prev.ntpPorts,
 		RetiringIDs: retiring, ClassLimit: e.classLimitOf(cfg), RuleLimit: e.cfg.RuleLimit, FlapPhase: e.flap.phase}
 	if e.cfg.ServiceHolderPID != nil {
 		in.ServiceHolderPID = e.cfg.ServiceHolderPID()

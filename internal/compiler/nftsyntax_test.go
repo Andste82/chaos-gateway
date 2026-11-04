@@ -87,5 +87,9 @@ func transactionScenarios(t *testing.T) map[string]*Target {
 	out["tls"] = scenarioTLS(t)
 	// the interception cases (M22): the UDP 443 drop of block_quic next to the selection of the connections
 	out["intercept"] = scenarioIntercept(t)
+	// the time family (M34): the DNAT of UDP 123 and TCP 4460 to the NTP server, the redirect ports of the destination
+	// selectors, a hostname selector's lookup in the NAT chain, redirect_hardcoded and the accept towards the namespace
+	out["ntp"] = scenarioNTP(t)
+	out["ntp-wireguard"] = scenarioNTPWireGuard(t)
 	return out
 }

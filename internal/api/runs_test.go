@@ -378,7 +378,7 @@ func TestARunIsRefusedForWhatTheBuildDoesNotHaveAndForWhatDoesNotFit(t *testing.
 	}
 	caps := g.do("GET", "/capabilities", nil, nil, nil).json(t)
 	steps := strings.Join(toStrings(caps["step_types"].([]any)), ",")
-	if steps != "profile,fault,rule,dns,tls,dhcp,wireguard,capture,wait,remove,restore" ||
+	if steps != "profile,fault,rule,dns,tls,dhcp,time,wireguard,capture,wait,remove,restore" ||
 		strings.Join(toStrings(caps["check_types"].([]any)), ",") != "reconnected,no_connection,traffic_seen,traffic_not_seen,dns_query_seen,tls_rejected,tls_accepted" {
 		t.Errorf("capabilities %v", caps)
 	}

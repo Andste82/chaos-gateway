@@ -23,6 +23,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/model"
+	"github.com/Andste82/chaos-gateway/internal/ntpserver"
 	"github.com/Andste82/chaos-gateway/internal/run"
 	"github.com/Andste82/chaos-gateway/internal/secrets"
 	"github.com/Andste82/chaos-gateway/internal/store"
@@ -89,6 +90,9 @@ type Config struct {
 	// Certificates holds the certificates of the HTTPS listeners (M29); nil for a deployment that has none (the operations of
 	// /system/certificate answer `unavailable`).
 	Certificates *Certificates
+	// HostClock says whether the host clock is synchronized, for the health of the NTP server (M34); nil asks the kernel
+	// (adjtimex). Tests, whose hosts are not synchronized, set it.
+	HostClock ntpserver.SyncState
 	// Diagnostics sets up the diagnostics of M24; the zero value is the production setup (tests name their own servers).
 	Diagnostics DiagnosticsConfig
 }
@@ -105,6 +109,7 @@ type Server struct {
 	streams atomic.Int64
 	dns     dnsState
 	tls     tlsState
+	ntp     ntpState
 	// intercept is what the interception proxy reported (M22)
 	intercept interceptState
 	// health caches the unauthenticated health check's executor probe (M5-13): an unauthenticated

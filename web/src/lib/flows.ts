@@ -29,6 +29,8 @@ export function serviceLabel(f: Pick<Flow, 'protocol' | 'dport' | 'service'>): s
   if (f.service === 'dns_proxy') return 'DNS';
   if (f.service === 'tls_responder') return 'TLS test';
   if (f.service === 'tls_proxy') return 'HTTP proxy';
+  // the redirect port of a time fault (12301 upward) is no well-known port
+  if (f.service === 'ntp_server') return 'NTP';
   const named = f.dport ? ports[`${f.protocol}/${f.dport}`] : undefined;
   return named ?? f.protocol.toUpperCase();
 }
@@ -223,7 +225,8 @@ export interface PathState {
 /**
  * The families whose faults act on the connection the path draws. A DNS fault changes the answer of a name query and a DHCP fault
  * the lease: neither touches the packets of a connection to an address (`GET /explain` resolves them for every destination, a
- * DHCP overlay or a DNS fault without names matches all of them), so they are listed apart and never turn the line orange.
+ * DHCP overlay or a DNS fault without names matches all of them), so they are listed apart and never turn the line orange. A time fault
+ * (M34) changes what the NTP server answers, not the packets of a connection: it is listed apart as well.
  */
 const onThePath = new Set(['impairment', 'mtu', 'tls', 'tunnel']);
 

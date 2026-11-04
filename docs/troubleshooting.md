@@ -20,6 +20,7 @@ configuration at all, go to the [recovery instructions](recovery.md).
 | Why did a change fail? | the response of the apply (`apply_failed`, `verify_failed`, `validation_failed` with pointers), the event `apply_failed`, `docker compose logs api` |
 | What happens to this traffic? | `GET /api/v1/explain` / `chaosctl explain` / the **Explain** buttons of the web app |
 | Is my fault hit by any packet? | the counters of the overlay (`GET /overlays/{id}`), and the `zero_hit` warning of a run |
+| Did the device ask the NTP server, and what did it get? | the *Time* panel of the device page, `GET /api/v1/devices/{id}/ntp`, `GET /api/v1/ntp/queries?device=`, `chaosctl wait ntp <device>` |
 | What happened? | the event stream (`GET /events`), the audit log (`GET /audit`: who changed what, via UI or API) |
 
 ```sh run
@@ -128,6 +129,24 @@ device talking to that destination and port during the step? Use `zero_hit: erro
 
 **A ping in the diagnostics answers `cannot open an ICMP socket`.** The host's `net.ipv4.ping_group_range`
 ([install.md](install.md#diagnostics-the-ping-needs-a-sysctl-of-the-host)).
+
+**A time fault has no effect, or the device never asks the gateway's NTP server.** The *Time* panel of the device page (or
+`GET /devices/{id}/ntp`) says what the server saw: no `last_query` means no query arrived. Work through it:
+
+1. A device is served a fault only when it **polls**: SNTP clients ask every few minutes to hours, and the served time jumps back when
+   the fault ends, again at the next poll. Wait for it with `chaosctl wait ntp <device>` or the wait `ntp_query_seen` of a scenario.
+2. The device must reach the server through the gateway. Kea hands out the gateway as NTP server (option 42) unless the network names
+   others or its time service is off (Networks, *Time (NTP)*); a hardcoded server is redirected by the network setting *Redirect NTP to other
+   servers* or by the time fault itself. `chaosctl explain --device <name> --dst <server> --protocol udp --port 123` lists the fault as the
+   winner of the family `time` for that traffic. A fault for one server (`--to`) does not touch queries to another.
+3. A device that uses **NTS** (authenticated NTP, key establishment on TCP 4460) gets no time from the gateway: the *Time* panel and the
+   counter `nts_ke` of the device say that connections arrived. Block TCP 4460 with an access rule if the device should fall back to plain NTP.
+   A device that sets its clock from an HTTP `Date` header, a cellular network, GPS or its own RTC is not affected by a time fault.
+4. The counter `dropped` counts queries over the rate limit (16 a second per device), which are not answered: a client that polls faster
+   than that is polling too fast.
+5. The detail of the health component `ntp` and the preflight check `host.clock` say when the host clock is not synchronized: the server
+   then answers stratum 16, which a correct client ignores, also with an `offset`, `skew` or `leap` fault; an `absolute` time, a kiss-of-death,
+   `silence` and the invalid answers are served as they are.
 
 **A capture is refused or stops.** The volume has less than 10 % free space, or the quota of the captures is used up
 (`GET /captures/storage`: `quota_bytes`, `used_bytes`, `free_percent`, `disk_low`), or eight captures already run. Delete old captures; the

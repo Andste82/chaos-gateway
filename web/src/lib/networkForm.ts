@@ -56,6 +56,9 @@ export interface NetworkForm {
   customOptions: string;
   redirectDns: boolean;
   blockDot: boolean;
+  /** The gateway's NTP server serves the network's devices (`ntp.enabled`, on by default) and redirects NTP to other servers to itself (`ntp.redirect_hardcoded`, off by default; a time fault redirects its scope either way). */
+  timeService: boolean;
+  redirectNtp: boolean;
   /** One static entry per line: "name address, address". */
   staticEntries: string;
   /** A local network: one downstream route per line, "10.40.0.0/24 via 10.30.0.254"; a link: its static routes, "10.60.0.0/24, …". */
@@ -117,6 +120,8 @@ export function emptyNetworkForm(kind: NetworkKind, address = '', listenPort = '
     customOptions: '',
     redirectDns: false,
     blockDot: false,
+    timeService: true,
+    redirectNtp: false,
     staticEntries: '',
     routes: '',
     role: 'test',
@@ -207,6 +212,8 @@ export function formFromNetwork(n: Network): NetworkForm {
     f.customOptions = (o?.custom ?? []).map((c) => `${c.code} ${c.value}`).join('\n');
     f.redirectDns = !!lan.dns?.redirect_hardcoded;
     f.blockDot = !!lan.dns?.block_dot;
+    f.timeService = lan.ntp?.enabled !== false;
+    f.redirectNtp = !!lan.ntp?.redirect_hardcoded;
     f.staticEntries = (lan.dns?.static_entries ?? []).map((e) => `${e.name} ${e.addresses.join(', ')}`).join('\n');
     f.routes = (lan.routes ?? []).map((r) => `${r.destination} via ${r.via}`).join('\n');
     return f;
@@ -487,6 +494,11 @@ export function networkFromForm(f: NetworkForm, before?: Network, hosts: HostInt
     put(dns, 'block_dot', f.blockDot ? true : n.dns?.block_dot === false ? false : undefined);
     put(dns, 'static_entries', nonEmpty(parseStatic(f.staticEntries).entries));
     put(n, 'dns', compact(dns));
+    // the time service is on unless it says otherwise: only an off switch is written (an explicit `true` stays as it was)
+    const ntp = { ...(n.ntp ?? {}) };
+    put(ntp, 'enabled', f.timeService ? (n.ntp?.enabled === true ? true : undefined) : false);
+    put(ntp, 'redirect_hardcoded', f.redirectNtp ? true : n.ntp?.redirect_hardcoded === false ? false : undefined);
+    put(n, 'ntp', compact(ntp));
     put(n, 'routes', nonEmpty(parseRoutes(f.routes).routes));
     return n;
   }

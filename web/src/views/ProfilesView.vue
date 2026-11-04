@@ -24,7 +24,7 @@ import ScopeSelect from '../components/ui/ScopeSelect.vue';
 import { firstError, useActiveConfig, useCanProbe, useGatewayState, useGroups, useNames, useProbes, useProfiles } from '../composables/gateway';
 import { measurableProfiles } from '../lib/probes';
 import { useNow } from '../composables/useNow';
-import { durations, scopeOf, targetOf } from '../lib/faultForm';
+import { durations, scopeOf, targetOf, timeTargetMessage, timeTargetOk } from '../lib/faultForm';
 import { describeScope } from '../lib/faults';
 import { formatRemaining } from '../lib/format';
 import { remoteCidrError, remoteScopeOptions } from '../lib/scopes';
@@ -74,6 +74,11 @@ const scopes = computed(() => {
 const scopeError = computed(() => remoteCidrError(scope.value));
 const groupList = computed(() => (groups.data.value ?? []).map((g) => ({ id: g.id, name: g.config.name })));
 const scopeName = computed(() => describeScope(scopeOf(scope.value), names.value));
+
+/** A profile with a time part competes like a time fault: it is activated on a device, a group or a network (the gateway refuses the activation otherwise). */
+function timeScopeProblem(p: ProfileView): string | undefined {
+  return p.config.parts.time && !timeTargetOk(scope.value) ? timeTargetMessage : undefined;
+}
 
 /** The activations of a profile on the chosen scope (one per owner). */
 function here(p: ProfileView): ProfileActivation[] {
@@ -257,6 +262,7 @@ const retry = () => Promise.all([profiles.refetch(), active.refetch()]);
         <span v-else class="text-text-3">Not active</span>
       </div>
       <p v-if="!c.p.available" class="m-0 text-[13px] text-text-2">{{ c.p.unavailable_reason ?? 'Not available in this build.' }}</p>
+      <p v-if="timeScopeProblem(c.p) && !here(c.p).length" class="m-0 text-[13px] text-text-2" data-testid="profile-time-scope">{{ timeScopeProblem(c.p) }}</p>
       <p v-if="pending(c)" class="m-0 text-[13px] text-text-2" data-testid="profile-pending">
         {{ c.deleted ? deletedText(c) : 'Not applied yet: it can be activated after the changes are applied.' }}
       </p>
@@ -266,7 +272,7 @@ const retry = () => Promise.all([profiles.refetch(), active.refetch()]);
           type="button"
           class="btn btn-sm"
           :class="{ 'btn-primary': !here(c.p).length }"
-          :disabled="here(c.p).length ? busy === c.p.id || blocked : busy === c.p.id || blocked || !c.p.available || !!scopeError || pending(c)"
+          :disabled="here(c.p).length ? busy === c.p.id || blocked : busy === c.p.id || blocked || !c.p.available || !!scopeError || !!timeScopeProblem(c.p) || pending(c)"
           :aria-label="`${here(c.p).length ? 'Deactivate' : 'Activate'} ${c.title} on ${scopeName}`"
           @click="here(c.p).length ? deactivate(c.p) : activate(c.p)"
         >

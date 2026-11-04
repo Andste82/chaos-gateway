@@ -1,9 +1,19 @@
-# M34 — NTP server and time faults: implementation map
+# M34 — NTP server and time faults: how it was built
 
-The working document for the four stages of M34 (`docs/plan.md` §2.18, the milestone M34, decisions D36 and D37). It says where each part goes
-in the code, by the pattern that is already there; it is not a description of what was built (that goes into `docs/development.md` as the
-stages land). Paths are of the repository root. The pattern for the server is the DNS proxy (`internal/dnsproxy`), for the fault family the
-application-layer families (DNS faults, TLS cases, DHCP actions).
+The map that the four stages of M34 (`docs/plan.md` §2.18, the milestone M34, decisions D36 and D37) were built from. It says where each part
+went in the code, by the pattern that was already there, and it stays as the record of that; what the parts do and how they are tested is in
+`docs/development.md` ("NTP server and time faults (M34)") and the guides. Paths are of the repository root. The pattern for the server is the DNS
+proxy (`internal/dnsproxy`), for the fault family the application-layer families (DNS faults, TLS cases, DHCP actions).
+
+Where the built milestone differs from the map:
+
+- **Two reads in the public API** that stage 1 did not plan: `GET /ntp/queries` and `GET /devices/{deviceId}/ntp` (`internal/api/ntpreads.go`, stage 3), which the *Time*
+  panel and `chaosctl wait ntp` use.
+- **The presets** are eight built-in profiles with a `time` part (`time-plus-1y` and so on, `internal/domain/builtin.go`), as well as the presets of the form
+  (`web/src/lib/timeForm.ts`); both name the same faults.
+- **The profile editor** of the web app does not create or edit a `time` part (it keeps one that comes from a built-in profile or the API), as it does not for `dns` and `tls` (the question whether it should is P34-09 in `docs/open-items.md`).
+- **The release notes** of the next release are written with that release; `docs/release-notes/v1.0.0.md` says that the NTP server is not in it, which is true.
+- **The `Supported*` lists** (`SupportedOverlayKinds`, `SupportedFaultFamilies`, `SupportedStepTypes`, `SupportedCheckTypes`) now include `time` and `ntp_queried` (stage 2 and 3), and the `422 unsupported_feature` stub and its tests of stage 1 are gone; the text of stage 1 below says what the stub did at the time.
 
 ## Stage 1: specification and domain (no behaviour)
 
@@ -92,5 +102,5 @@ application-layer families (DNS faults, TLS cases, DHCP actions).
   `web/e2e/mock.ts` and the specs; vitest for every `lib/` file.
 - Documents: `docs/user-guide.md`, `docs/api-guide.md` (the examples are validated against the spec: every block needs its label),
   `docs/cookbook.md` (a recipe), `docs/troubleshooting.md`, `docs/development.md` (the section of the milestone, the acceptance map), `docs/plan.md`
-  status, the README (the limits no longer say "no NTP server"), the release notes of the next release.
-- Then the audit of the milestone.
+  status, the README (the limits no longer say "no NTP server"), the release notes of the next release (see above).
+- Then the audit of the milestone (D37), which is not part of the stages.

@@ -19,6 +19,7 @@ self-signed certificate ([HTTPS certificate](install.md#https-certificate)).
 - [Reading the state](#reading-the-state)
 - [Overlays: faults, profiles and rules that a test switches on](#overlays-faults-profiles-and-rules-that-a-test-switches-on)
 - [DNS faults, TLS cases and DHCP actions](#dns-faults-tls-cases-and-dhcp-actions)
+- [Time faults and the NTP server](#time-faults-and-the-ntp-server)
 - [Scenarios and runs](#scenarios-and-runs)
 - [Events](#events)
 - [Changing the configuration](#changing-the-configuration)
@@ -173,7 +174,7 @@ curl -sS -H "Authorization: Bearer $CHAOSGW_TOKEN" \
 ## Overlays: faults, profiles and rules that a test switches on
 
 An overlay is a change that lives at run time and is never part of a revision: a fault, a profile activation, an access rule, a DNS
-fault, a TLS case, a DHCP action or a WireGuard action. It has an owner (your token), usually an expiry (`ttl`) and optionally a
+fault, a TLS case, a DHCP action, a time fault or a WireGuard action. It has an owner (your token), usually an expiry (`ttl`) and optionally a
 lease. **Overlays always win over the configuration** (precedence is resolved per fault family, then by how specific the target is: a
 device before a group before a network before everything; the newer entry wins at the same level; plan §2.4).
 
@@ -279,6 +280,7 @@ The other overlay kinds have their own body, in the same call:
 | `dns` | `names`, `action` (`nxdomain`, `servfail`, `timeout`, `delay`, `wrong_answer`, `truncate`, `short_ttl`) | the gateway's DNS proxy answers the device's queries for these names wrongly |
 | `tls` | `case` (`untrusted_ca`, `self_signed`, `expired`, `not_yet_valid`, `hostname_mismatch`, `handshake_reset`, `handshake_close`, `handshake_stall`, `intercept`), `ports`, `sni`, `cut_existing` | the connection is redirected to the gateway's TLS responder, which shows the device the broken certificate or handshake |
 | `dhcp` | `action` (`short_lease`, `delete_lease`, `force_new_ip`, `set_options`, `silence`) | the gateway's DHCP server behaves differently towards a device or a network |
+| `time` | `offset`, `absolute`, `skew_ppm`, `leap`, `answer` (`normal`, `unsynchronized`, `kiss_of_death`, `silence`, `origin_mismatch`, `zero_transmit`, `wrong_mode`), `kiss_code`, and the server asked (`destination`, `ports`) | the gateway's NTP server answers the device's queries with a wrong time or in a wrong way ([below](#time-faults-and-the-ntp-server)) |
 | `wireguard` | `client` or `link`, `action` (`disable`, `key_mismatch`, `block_endpoint`) | a tunnel peer goes away or breaks |
 
 ```sh run
@@ -298,6 +300,82 @@ post '{"target": {"device": "esp32-42"}, "dhcp": {"action": "short_lease", "leas
 Three of the certificate cases (`expired`, `not_yet_valid`, `hostname_mismatch`) are signed by the gateway's test CA, so only a device
 that trusts it (`trusts_test_ca: true`, with the CA from `GET /tls/ca` installed in a development firmware) can tell them from an
 unknown issuer. The cookbook has [a test with each](cookbook.md#a-device-that-must-reject-a-bad-certificate).
+
+## Time faults and the NTP server
+
+The gateway runs its own NTP server (plan §2.18) in the service namespace; it serves the host's clock and answers the queries of the
+test networks instead of the real server, so a `time` overlay can make it answer wrongly. The target is a device, a group or a network
+(never `global`). The body is the schema `TimeFault`: at least one of `offset` (signed, `+400d`, `-90s`, `-1y2d`; a year is 365 days),
+`absolute` (an instant, RFC 3339 with a zone), `skew_ppm` and `leap` (`insert` or `delete`), or an `answer` other than `normal`, which is the
+whole fault (`kiss_of_death` also needs `kiss_code`: `RATE`, `DENY` or `RSTR`). `offset` and `absolute` exclude each other, and a fault that
+has both, or that changes nothing, is refused with `422 invalid_time_fault` and a pointer to the field. `destination` (an address, a prefix or a host name) and
+`ports` (default 123) narrow the fault to the server the device asked; the ports 53, 67 and 68 are refused. A time fault redirects the
+UDP 123 traffic of its target to the server, so it reaches a device with a hardcoded server too; it competes only with other time faults.
+
+```json schema=OverlayRequest
+{"target": {"device": "esp32-42"}, "time": {"absolute": "2038-01-19T03:09:07Z", "skew_ppm": 500, "destination": {"hostname": "time.google.com"}}, "ttl": "10m"}
+```
+
+The eight presets of the plan are the built-in profiles `time-plus-1y`, `time-minus-1d`, `time-1970`, `time-2038`, `time-ntp-era-1`,
+`time-leap-second`, `time-unsynchronized` and `time-kiss-of-death` (a `time` part each), activated like any profile:
+
+```sh run
+auth="Authorization: Bearer $CHAOSGW_TOKEN"
+post() { curl -sS -H "$auth" -H "Content-Type: application/json" -d "$1" "$CHAOSGW_URL/api/v1/overlays" | jq -c '{kind, state}'; }
+post '{"target": {"device": "esp32-42"}, "time": {"offset": "+400d"}, "ttl": "2m"}'
+post '{"target": {"network": "IoT"}, "profile": "time-2038", "ttl": "2m"}'
+curl -sS -o /dev/null -w '%{http_code}\n' -H "$auth" -H "Content-Type: application/json" \
+  -d '{"target": {"device": "esp32-42"}, "time": {"offset": "+1d", "absolute": "2038-01-19T03:09:07Z"}, "ttl": "2m"}' "$CHAOSGW_URL/api/v1/overlays"
+```
+
+```text output
+{"kind":"time","state":"effective"}
+{"kind":"profile","state":"effective"}
+422
+```
+
+What the server did is read in two places (scope `read`; both are memory only and empty after a restart of the gateway).
+`GET /devices/{deviceId}/ntp` is the state of one device: the counters `queries`, `silenced`, `dropped` (over the rate limit of 16 queries a
+second) and `nts_ke` (connections to the key-establishment port of NTS, which the server cannot answer), the answers per fault, the
+`last_query` (the time, the answer, the time served and its `offset_ms` from the correct time, the overlay that shaped it and the `server`
+the device asked as `ip:port`, or `an external server (redirected)` where nothing says which) and `recent`, the device's newest 50
+queries. `GET /ntp/queries` is the log of the server, newest first, filtered by `device`, `since` and the cursor. A query counts when
+the server received it, whatever it answered (`silence` and a kiss-of-death are queries). The list also holds the connections to the NTS
+key-establishment port (`kind: nts_ke`) and, at most once a second per device, a query that the rate limit dropped (`answer: dropped`);
+they do not count in `queries`, in the wait or in the check.
+
+```sh run
+auth="Authorization: Bearer $CHAOSGW_TOKEN"
+curl -sS -H "$auth" "$CHAOSGW_URL/api/v1/devices/esp32-42/ntp" | jq -c '{queries, silenced, dropped, nts_ke, last_query}'
+curl -sS -H "$auth" "$CHAOSGW_URL/api/v1/ntp/queries?device=esp32-42" | jq -c '.items | length'
+```
+
+```text output
+{"queries":0,"silenced":0,"dropped":0,"nts_ke":0,"last_query":null}
+0
+```
+
+The simulated gateway of the examples has no device that asks, so the counters are zero. A script that wants to act on the next query
+of a device does not poll these itself: `chaosctl wait ntp <device>` or the wait condition `ntp_query_seen` of a scenario does
+([cookbook](cookbook.md#a-device-whose-clock-is-wrong)). The events `ntp_answered` (a time fault shaped an answer; at most one per device
+and fault every ten seconds), `ntp_query_seen` (at most one per device every ten seconds) and `nts_seen` (once per device) are on the stream of `GET /events`, and
+`GET /system/health` has the component `ntp`.
+
+In a scenario a time fault is the step `time` (the body of the overlay without the target), and the run has the wait `ntp_query_seen`
+(`{"wait": {"for": "ntp_query_seen", "timeout": "10m"}}`, which ends at the next query of a device of the target) and the check
+`ntp_queried` (`{"ntp_queried": {}, "window": {...}}`, which passes at the first query inside its window):
+
+```yaml schema=Scenario
+name: stale-clock
+target: {device: esp32-42}
+steps:
+  - {id: ntp-up, at: 0s, wait: {for: ntp_query_seen, timeout: 10m}}
+  - {id: ahead,  at: 5s, time: {offset: +400d}}
+  - {id: polled, at: 10s, wait: {for: ntp_query_seen, timeout: 10m}}
+  - {id: back,   at: 20s, remove: ahead}
+checks:
+  - {ntp_queried: {}, window: {from: ahead, until: back}}
+```
 
 ## Scenarios and runs
 
@@ -366,7 +444,7 @@ The [cookbook](cookbook.md) has runs with checks. A scenario stored in the confi
 ## Events
 
 `GET /events` is a Server-Sent Events stream: configuration changes, overlays created, expired and removed, run steps, devices going
-online and offline, DHCP events, DNS queries answered with a fault, TLS handshakes. Each event has an id; a client that reconnects with
+online and offline, DHCP events, DNS queries answered with a fault, NTP answers shaped by a time fault, TLS handshakes. Each event has an id; a client that reconnects with
 `Last-Event-ID` gets what it missed from a buffer of at least ten minutes. `?types=` and the filters in the spec narrow the stream.
 
 ```sh run

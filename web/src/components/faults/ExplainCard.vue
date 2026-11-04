@@ -93,7 +93,7 @@ const layers: Record<string, string> = {
   port_forward: 'the port forward (no rule decided)',
 };
 
-const families: Record<string, string> = { impairment: 'Impairment', mtu: 'MTU', dns: 'DNS', tls: 'TLS', dhcp: 'DHCP', tunnel: 'Tunnel' };
+const families: Record<string, string> = { impairment: 'Impairment', mtu: 'MTU', dns: 'DNS', tls: 'TLS', time: 'Time (NTP)', dhcp: 'DHCP', tunnel: 'Tunnel' };
 
 /**
  * The family's heading: a tunnel family names its tunnel as every other place does ("Tunnel of rA",

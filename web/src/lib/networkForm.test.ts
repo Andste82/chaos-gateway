@@ -83,6 +83,43 @@ describe('the network form (P3-M14-01)', () => {
     });
   });
 
+  it('the time service is on unless it is switched off; only the off switch and the redirect are written (M34)', () => {
+    const plain = emptyNetworkForm('lan', '10.30.0.1/24');
+    expect(plain.timeService).toBe(true);
+    expect(plain.redirectNtp).toBe(false);
+    const f = { ...plain, name: 'cams', ports: ['eth5'] };
+    // the defaults stay out
+    expect((networkFromForm(f) as LanNetwork).ntp).toBeUndefined();
+    const off = networkFromForm({ ...f, timeService: false }) as LanNetwork;
+    expect(off.ntp).toEqual({ enabled: false });
+    const redirect = networkFromForm({ ...f, redirectNtp: true }) as LanNetwork;
+    expect(redirect.ntp).toEqual({ redirect_hardcoded: true });
+    expect(acceptedBySpec('e1000000-0000-4000-8000-000000000001', redirect)).toBeUndefined();
+    expect(acceptedBySpec('e1000000-0000-4000-8000-000000000001', off)).toBeUndefined();
+    // a network with the settings opens with them, and comes back as it was
+    const lan: LanNetwork = { type: 'lan', name: 'IoT', address: '10.10.0.1/24', interfaces: [{ name: 'eth3' }], dhcp: {}, ntp: { enabled: false, redirect_hardcoded: true } };
+    const g = formFromNetwork(lan);
+    expect(g.timeService).toBe(false);
+    expect(g.redirectNtp).toBe(true);
+    expect(networkFromForm(g, lan)).toEqual(lan);
+    // switching them back removes the block, but an explicit setting of the same value stays as it was written
+    expect((networkFromForm({ ...g, timeService: true, redirectNtp: false }, lan) as LanNetwork).ntp).toBeUndefined();
+    const written: LanNetwork = { ...lan, ntp: { enabled: true, redirect_hardcoded: false } };
+    expect(networkFromForm(formFromNetwork(written), written)).toEqual(written);
+  });
+
+  it('names the NTP settings in the preview of a change, and nothing for an unchanged network', () => {
+    const lan: LanNetwork = { type: 'lan', name: 'IoT', address: '10.10.0.1/24', interfaces: [{ name: 'eth3' }], dhcp: {} };
+    const change = (ntp: LanNetwork['ntp']) => networkChanges(lan, { ...lan, ntp });
+    expect(change({ redirect_hardcoded: true })).toEqual([{ field: 'NTP', from: '—', to: 'redirect' }]);
+    expect(change({ enabled: false })).toEqual([{ field: 'NTP', from: '—', to: 'off' }]);
+    expect(change({ enabled: false, redirect_hardcoded: true })).toEqual([{ field: 'NTP', from: '—', to: 'off, redirect' }]);
+    // the defaults written out show no NTP row: only the general line stands for the edit
+    expect(change({ enabled: true, redirect_hardcoded: false })).toEqual([{ field: 'settings', from: 'as before', to: 'changed' }]);
+    // and back
+    expect(networkChanges({ ...lan, ntp: { enabled: false } }, lan)).toEqual([{ field: 'NTP', from: 'off', to: '—' }]);
+  });
+
   it('says under each field what is wrong', () => {
     const f = {
       ...emptyNetworkForm('lan', '10.10.0.9/24'),

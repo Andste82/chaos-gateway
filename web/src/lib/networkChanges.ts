@@ -42,6 +42,13 @@ function dnsText(n: LanNetwork): string {
   return parts.join(', ');
 }
 
+function ntpText(n: LanNetwork): string {
+  const parts = [];
+  if (n.ntp?.enabled === false) parts.push('off');
+  if (n.ntp?.redirect_hardcoded) parts.push('redirect');
+  return parts.join(', ');
+}
+
 /** The key of a link's peer in words: "generated", "generated, generation 2", "provided AbCd…". */
 function peerKeyText(n: WireGuardNetwork): string {
   const k = n.peer?.key;
@@ -67,6 +74,7 @@ export function networkChanges(before: Network | undefined, after: Network | nul
     add('DHCP', dhcpText(a), dhcpText(b));
     if (!jsonEqual(a.dhcp?.options, b.dhcp?.options)) out.push({ field: 'DHCP options', from: 'as before', to: 'changed' });
     add('DNS', dnsText(a), dnsText(b));
+    add('NTP', ntpText(a), ntpText(b));
     add('routes', (a.routes ?? []).map((r) => `${r.destination} via ${r.via}`).join(', '), (b.routes ?? []).map((r) => `${r.destination} via ${r.via}`).join(', '));
   } else if (before.type === 'wireguard' && after.type === 'wireguard') {
     const a = before as WireGuardNetwork;

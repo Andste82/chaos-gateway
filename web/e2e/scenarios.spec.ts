@@ -106,7 +106,7 @@ test('edit a step, add a step and a check, delete a step: one change of the draf
   // add a wait step: the editor offers what this build runs
   await page.getByTestId('add-step').click();
   const a = dialog(page, 'Add step');
-  await expect(a.getByLabel('Type', { exact: true }).locator('option')).toHaveText(['Profile', 'Fault', 'DNS fault', 'TLS case', 'DHCP action', 'Access rule', 'WireGuard action', 'Capture', 'Wait', 'Remove', 'Restore']);
+  await expect(a.getByLabel('Type', { exact: true }).locator('option')).toHaveText(['Profile', 'Fault', 'DNS fault', 'TLS case', 'Time fault', 'DHCP action', 'Access rule', 'WireGuard action', 'Capture', 'Wait', 'Remove', 'Restore']);
   await a.getByLabel('Type', { exact: true }).selectOption('wait');
   await a.getByLabel('Id', { exact: true }).fill('online');
   await a.getByLabel('At', { exact: true }).fill('50s');
@@ -683,7 +683,7 @@ test('a DNS step is edited with the DNS fields (M23b); a type the gateway does n
   const d = dialog(page, 'Edit step');
   await expect(d).not.toContainText('This step is edited in the YAML view.');
   await expect(d.getByLabel('Type', { exact: true })).toBeEnabled();
-  await expect(d.getByLabel('Type', { exact: true }).locator('option')).toHaveText(['Profile', 'Fault', 'DNS fault', 'TLS case', 'Access rule', 'WireGuard action', 'Capture', 'Wait', 'Remove', 'Restore']);
+  await expect(d.getByLabel('Type', { exact: true }).locator('option')).toHaveText(['Profile', 'Fault', 'DNS fault', 'TLS case', 'Time fault', 'Access rule', 'WireGuard action', 'Capture', 'Wait', 'Remove', 'Restore']);
   await expect(d.getByLabel('Host names')).toHaveValue('broker.example.com');
   await d.getByLabel('At', { exact: true }).fill('2s');
   await d.getByRole('button', { name: 'Save to the changes' }).click();
@@ -692,7 +692,7 @@ test('a DNS step is edited with the DNS fields (M23b); a type the gateway does n
   expect(sent.steps![0]).toEqual({ id: 'dns', at: '2s', dns: { action: 'nxdomain', names: ['broker.example.com'] } });
   await page.getByRole('button', { name: 'Back to editing' }).click();
   await page.getByTestId('add-check').click();
-  await expect(dialog(page, 'Add check').getByLabel('Check', { exact: true }).locator('option')).toHaveText(['Reconnected', 'No connection', 'Traffic seen', 'Traffic not seen', 'DNS query seen', 'TLS rejected', 'TLS accepted']);
+  await expect(dialog(page, 'Add check').getByLabel('Check', { exact: true }).locator('option')).toHaveText(['Reconnected', 'No connection', 'Traffic seen', 'Traffic not seen', 'DNS query seen', 'TLS rejected', 'TLS accepted', 'NTP queried']);
 });
 
 // M21: the two TLS checks are in the editor once the gateway lists them; they take the connection the device meant (a selector

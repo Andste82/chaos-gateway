@@ -2,8 +2,8 @@
 // The step editor of the timeline (plan §2.10, §2.17 "Scenarios"): a step's id, its time on the timeline, whether
 // it narrows the scenario's target (a device of the target group, never wider), and the fields of its type — a
 // profile, a fault with the fault dialog's fields, a DNS fault, a TLS case and a DHCP action (M23b: the fields of
-// the fault dialog and of the DHCP dialog), an access rule, a WireGuard action, a capture start or
-// stop, a wait for the device to be online, a connection or a DNS query (it stops the timeline until the
+// the fault dialog and of the DHCP dialog), a time fault (M34: the fields of the fault dialog), an access rule, a WireGuard action, a capture start or
+// stop, a wait for the device to be online, a connection, a DNS query or an NTP query (it stops the timeline until the
 // condition holds; the later steps move by the waiting time), the removal of the overlay of an earlier step,
 // or the restore of all. "Add to the changes" puts the scenario with the step into the draft. A type the
 // gateway does not run is not offered; such a step is edited in the YAML view.
@@ -35,6 +35,7 @@ import { useDraftStore, type EditOrigin } from '../../stores/draft';
 import { useNames } from '../../composables/gateway';
 import DhcpFields from '../dhcp/DhcpFields.vue';
 import DnsFields from '../faults/DnsFields.vue';
+import TimeFields from '../faults/TimeFields.vue';
 import TlsFields from '../faults/TlsFields.vue';
 import TrafficFields from '../faults/TrafficFields.vue';
 import ModalDialog from '../ui/ModalDialog.vue';
@@ -145,10 +146,10 @@ function touched(f: string): boolean {
   const was0 = JSON.parse(openedForm || '{}') as Record<string, unknown>;
   const differs = (k: string) => JSON.stringify((form.value as unknown as Record<string, unknown>)[k]) !== JSON.stringify(was0[k]);
   // the target of a DHCP action is the step's narrowing, but what is wrong with it is shown once the action or the type is chosen
-  if (f === 'narrow') return differs('narrow') || (form.value.type === 'dhcp' && (differs('type') || differs('dhcp')));
+  if (f === 'narrow') return differs('narrow') || ((form.value.type === 'dhcp' || form.value.type === 'time') && (differs('type') || differs('dhcp') || differs('time')));
   if (f === 'id' || f === 'at') return differs(f);
   if (f === 'profile') return differs('profile');
-  return differs('fault') || differs('dns') || differs('tls') || differs('dhcp') || differs('traffic') || differs('action') || differs('cutExisting') || differs('who') || differs('timeout') || differs('name') || differs('remove') || differs('capture') || differs('type');
+  return differs('fault') || differs('dns') || differs('tls') || differs('dhcp') || differs('time') || differs('traffic') || differs('action') || differs('cutExisting') || differs('who') || differs('timeout') || differs('name') || differs('remove') || differs('capture') || differs('type');
 }
 const shownClientErrors = computed(() =>
   tried.value ? clientErrors.value : (Object.fromEntries(Object.entries(clientErrors.value).filter(([f]) => touched(f))) as typeof clientErrors.value),
@@ -173,6 +174,11 @@ const trustedDevice = computed(() => {
   const d = actsOn.value.device ? devices.data.value?.find((x) => x.id === actsOn.value.device) : undefined;
   return d?.config ? { trust: d.config.trusts_test_ca === true, name: d.name } : undefined;
 });
+/**
+ * The wait for an NTP query is offered where the gateway has the NTP server (its capabilities list the step type `time`), or when the
+ * step being edited has it. The capabilities have no list of wait conditions, so the step type stands for it: a build has both or neither.
+ */
+const ntpWait = computed(() => form.value.waitFor === 'ntp_query_seen' || !capabilities.data.value?.step_types || capabilities.data.value.step_types.includes('time'));
 const narrowName = computed(() => (form.value.narrow ? describeScope(scopeOf(form.value.narrow), targets.names.value) : ''));
 
 const profileOptions = computed(() => {
@@ -208,6 +214,7 @@ const typeHints: Record<string, string> = {
   dns: 'A DNS fault of the gateway\'s DNS proxy on the target; it replaces the DNS fault of an earlier step for the same names.',
   tls: 'A TLS case on the target: a certificate the device must reject, a handshake that fails, or the interception proxy with HTTP rules; it replaces the case of an earlier step with the same selection.',
   dhcp: 'A DHCP action for a device or a network; it replaces the action of an earlier step with the same action on the same target.',
+  time: 'A time fault of the gateway\'s NTP server on a device, a group or a network: it replaces the time fault of an earlier step for the same server. The device sees it when it polls next: wait for its NTP query after this step.',
   rule: 'An access rule that acts on the target until a later step removes it or the run ends.',
   wireguard: 'Takes a WireGuard client or link down, breaks its key or blocks its endpoint; the client or link must lie inside the target.',
   capture: 'Starts or stops a capture of the target, attached to the run.',
@@ -298,6 +305,8 @@ const typeHints: Record<string, string> = {
           :interception="canIntercept !== false"
         />
 
+        <TimeFields v-else-if="form.type === 'time'" v-model="form.time" :errors="errors" />
+
         <DhcpFields v-else-if="form.type === 'dhcp'" v-model="form.dhcp" :errors="errors" :scope="dhcpScope" />
 
         <template v-else-if="form.type === 'rule'">
@@ -377,6 +386,7 @@ const typeHints: Record<string, string> = {
                 <option value="online">The target is online</option>
                 <option value="connected">A new connection is established</option>
                 <option value="dns_query">A DNS query for a name is seen</option>
+                <option v-if="ntpWait" value="ntp_query_seen">The next NTP query of the target</option>
               </select>
             </div>
             <div>

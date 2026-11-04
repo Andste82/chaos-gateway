@@ -3,7 +3,8 @@
 // opens when a named step has been applied (or at the start of the run) and closes after a time or when
 // another step has been applied. Reconnected, no connection, traffic seen, traffic not seen (with the
 // destinations that are allowed), a DNS query seen, and the two TLS checks (M21: the device rejected or accepted the certificate of a
-// TLS case; the gateway lists them in its capabilities).
+// TLS case; the gateway lists them in its capabilities) and the NTP query (M34: a device of the target asked the NTP server
+// for the time, whatever it answered; listed in the capabilities as well).
 // "Add to the changes" puts the scenario with the check into the draft.
 import { computed, ref, useId, watch } from 'vue';
 import type { Scenario } from '../../api/generated/model';
@@ -51,7 +52,7 @@ const editing = computed(() => (props.index !== undefined ? props.scenario.confi
 /** The check types this build evaluates (`GET /capabilities`); the one being edited stays selectable. */
 const types = computed<CheckType[]>(() => {
   const known = capabilities.data.value?.check_types;
-  return checkTypes.filter((t) => (!known || known.includes(t)) && (t !== 'tls_rejected' && t !== 'tls_accepted' ? true : !!known?.includes(t)));
+  return checkTypes.filter((t) => (!known || known.includes(t)) && (t !== 'tls_rejected' && t !== 'tls_accepted' && t !== 'ntp_queried' ? true : !!known?.includes(t)));
 });
 
 watch(open, (o) => {

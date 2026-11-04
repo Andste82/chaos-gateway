@@ -165,7 +165,7 @@ docker compose ps
 ```
 
 `compose.yaml` holds all the containers (made from the files of `deploy/` by `tools/composegen`): the executor (the only privileged one),
-the API, Kea, BIRD, the holder of the service namespace and the DNS proxy and TLS responder that join it, and, under the profile
+the API, Kea, BIRD, the holder of the service namespace and the DNS proxy, the TLS responder and the NTP server (UDP 123 on the gateway address, container `ntp`) that join it, and, under the profile
 `interception`, the interception proxy. They start in the order of plan §3.8: the executor first (the others wait for its health check),
 then the API, the holder and Kea, then the services that join the service namespace once the API is healthy. Every container restarts
 after a reboot (`restart: unless-stopped`, Docker starts at boot). The name of the project is `chaosgw`, whatever the directory is called.
@@ -231,10 +231,10 @@ docker compose logs api | grep 'Setup token'
 ```
 
 Two things are normal until the setup has been applied, because the link between the gateway and the DNS proxy is
-made by the first apply: the `dns` container logs once that it cannot fetch its configuration, and
-`GET /api/v1/system/health` reports `degraded` (the DNS proxy has not polled yet; the container's health check
-still passes, only `unhealthy` fails it). After the setup both are gone; if not, look at the logs of the `api` and
-`dns` containers.
+made by the first apply: the `dns` and `ntp` containers log once that they cannot fetch their configuration, and
+`GET /api/v1/system/health` reports `degraded` (the DNS proxy and the NTP server have not polled yet; the container's health check
+still passes, only `unhealthy` fails it). After the setup both are gone; if not, look at the logs of the `api`,
+`dns` and `ntp` containers.
 
 Open `https://<address of the host>:8443` in a browser. The certificate is the gateway's own until you install one
 ([HTTPS certificate](#https-certificate)), so the browser warns once (and once more after an upgrade that issues it again, below). The setup wizard asks for the token, the uplink, the management

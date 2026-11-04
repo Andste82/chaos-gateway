@@ -84,6 +84,7 @@ const familyTitles: Record<string, string> = {
   profile: 'Profiles',
   dns: 'DNS',
   tls: 'TLS',
+  time: 'Time (NTP)',
   dhcp: 'DHCP',
   wireguard: 'WireGuard actions',
 };
@@ -214,10 +215,10 @@ async function edit(r: Row) {
   dialogOpen.value = true;
 }
 /**
- * Every fault the dialog makes is edited in it (impairment, MTU, tunnel, DNS, TLS; P3-M13-04, M23b) and a DHCP action in the DHCP
+ * Every fault the dialog makes is edited in it (impairment, MTU, tunnel, DNS, TLS, time; P3-M13-04, M23b, M34) and a DHCP action in the DHCP
  * dialog; a profile activation and a WireGuard action are not.
  */
-const editable = (r: Row) => ['fault', 'dns', 'tls', 'dhcp'].includes(r.overlay?.kind ?? '') || !!r.config;
+const editable = (r: Row) => ['fault', 'dns', 'tls', 'time', 'dhcp'].includes(r.overlay?.kind ?? '') || !!r.config;
 
 const apiPanel = useApiPanelStore();
 const removing = ref<string>();

@@ -7307,8 +7307,9 @@ Level 2: the existing deployment tests follow the image's new default user (`--u
 ## NTP server and time faults (M34)
 
 Plan §2.18, decisions D36 and D37, and M34. The gateway runs its own NTP server (`chaosgw ntp`, `internal/ntpserver`) in the service namespace, and the fault family `time`
-shapes its answers per device, group or network. This section holds the level 1 tests of the milestone, which stage 2 (server and wiring) brings; the unit tests of the
-server, the compiler and the engine are named where they are (`internal/ntpserver`, `internal/compiler/ntp_test.go`, `internal/api/ntpservice_test.go`).
+shapes its answers per device, group or network. This section holds the level 1 tests of the milestone (stage 2), what stages 3 and 4 added (the reads, `chaosctl time`, the web app) and the
+decisions that are not obvious from the code; the unit tests of the server, the compiler and the engine are named where they are (`internal/ntpserver`,
+`internal/compiler/ntp_test.go`, `internal/api/ntpservice_test.go`). The record of where each part went in the code, by stage, is `docs/m34-implementation.md`.
 
 ### The level 1 tests
 
@@ -7368,6 +7369,38 @@ plan) and `e2e_ntpclients_test.go` (the clients), and in `internal/engine/integr
   with the answer on standard output, 1 when the time runs out (the message names the hardcoded server and NTS as the likely cause), 2 when the gateway cannot be asked, as `wait device`.
   `chaosctl explain` needs no change: it prints the family `time` like the others (try `--protocol udp --port 123`).
 
+### The web app (stage 4)
+
+Level 0, all run here (`make test-web`, `make test-e2e`). The user documents of the milestone are the section "Time faults and the NTP server" of `docs/user-guide.md`, the section of the same name in
+`docs/api-guide.md`, the recipe "A device whose clock is wrong" in `docs/cookbook.md` and the symptom "A time fault has no effect" in `docs/troubleshooting.md`; their `sh run` blocks
+run in `make test-docs` against the simulated gateway (`chaosctl time set`, `chaosctl wait ntp` that runs out because no device asks there, the overlays, the two reads, and a time fault with both `offset` and `absolute`,
+refused with 422), and their `schema=` blocks are validated against the spec.
+
+- **One form for the dialog and the step.** `lib/timeForm.ts` (`timeBody`, `timeToForm`, `timeErrors`, `timeEffect`, the eight presets) and `components/faults/TimeFields.vue` serve the kind *Time (NTP)* of
+  the add-fault dialog and the step type `time`, as `lib/dnsForm.ts` and its fields serve DNS. The checks of the form follow the validation of the gateway (an offset in the grammar of
+  365-day years and within the range of the gateway to the nanosecond (about 292 years), an `absolute` that is a real RFC 3339 day with a time zone and not before 1900, `offset` and `absolute` exclusive, a kiss code for a kiss-of-death, no destination of the kind network or
+  uplink, no port 53, 67 or 68), so the common mistake stands under its field before the request is sent, and the refusal `invalid_time_fault` of the gateway stands under the field its pointer names
+  (`timeFieldOf`). The presets are the same eight faults as the built-in profiles `time-*` and the API examples (`timePresets`).
+- **Overlay only, and not everywhere.** The kind is offered only when `GET /capabilities` lists `time` among the overlay kinds, not under *Save as: Configuration* (persistent time faults are M39) and not with the
+  target *Everything* or a remote network (`timeTargetOk`): the dialog moves a new time fault to the first target it can have. The scenario step has the same rule as a problem of the scenario
+  (`scenarioRules.ts`), and the check `ntp_queried` is offered only when the capabilities list it.
+- **A profile with a time part** is shown with its chip, activated on a device, group or network, and blocked with a note on *Everything* or a remote network. The profile editor does not create or edit
+  a `time` part, as it does not for `dns` and `tls` (the part is kept as it is): a profile gets one from the built-in presets or from the API. Whether it should is an open question (P34-09 in `docs/open-items.md`).
+- **The network form** has the group *Time (NTP)*: the time service (`ntp.enabled`, on by default) and *Redirect NTP to other servers* (`ntp.redirect_hardcoded`). Both are written into the change only when they
+  differ from the defaults, so an old configuration is not rewritten by an edit, and `redirect_hardcoded` is independent of the switch of the time service, so that an existing combination is kept.
+- **The *Time* panel** (`components/flows/DeviceTime.vue`, the text in `lib/ntp.ts`) reads `GET /devices/{id}/ntp` every 5 s; queries come without an event of the page. It shows the last query, the server asked
+  (`serverText`: what the API says, `ip:port` or `an external server (redirected)`, and "not known" where it says nothing), the time served and `offset_ms` as a signed span, the fault that shaped it as chips, the active time faults of the
+  device (`activeTimeFaults`: the overlays of the kind `time` and the activations of a profile with a time part, such as the built-in `time-*` profiles, that act on it, its own and those of its group and network, newest first; a fault that is overridden or disabled changes nothing and is not listed), the counters, a note for NTS (`ntsNote`) and the five newest queries.
+- **The event** `ntp_answered` is an orange event of the overview that leads to the device; `ntp_query_seen` and `nts_seen` keep the default tone; the text of an event is the gateway's.
+- **Tests.** Vitest: `lib/timeForm.test.ts` (the form, the presets, the checks to the nanosecond and the calendar day, the body, the round trip, the pointers), `lib/ntp.test.ts` (the answer text, the offset, the server asked, NTS, the active faults with the profiles and the overridden ones), `lib/flows.test.ts` (a time winner of the explain is listed apart from the path, not on it),
+  `lib/profiles.test.ts` (the chips of a profile with a time part), and the time cases added to `lib/faultForm.test.ts`, `lib/faults.test.ts` (the chips), `lib/stepForm.test.ts`, `lib/checkForm.test.ts`,
+  `lib/scenarios.test.ts`, `lib/scenarioRules.test.ts`, `lib/scenarioYaml.test.ts`, `lib/profileForm.test.ts`, `lib/networkForm.test.ts` (with the NTP row of the change list) and `lib/format.test.ts`. Playwright against the mocked API
+  (`e2e/time-faults.spec.ts`): a time fault made in the dialog of a device with a preset, its checks under the fields, then edited where it is listed; one for a network from the Faults screen (no
+  *Everything*, no remote network, listed in its family, removed); no kind under *Configuration*; no kind on a gateway that does not list it; the refusal of the gateway under its field; a fault that changes nothing
+  is refused before it is sent and a zero offset is a fault; the *Time* panel (a query with the faults that act on the device, its network's and a time profile's among them and an overridden one left out; no query and NTS; a failed read with its retry); the event of the overview; the family *Time (NTP)* in the explain card; a time profile; the network form; the step,
+  the wait and the check in a scenario, and an edited step. `e2e/mock.ts` has the capabilities, the route `/devices/{id}/ntp` and the overlay key of the kind `time`; `e2e/app-layer-forms.spec.ts` and
+  `e2e/scenarios.spec.ts` list the new kind, step type and check type where they pinned the old lists. The screenshots generator and the README pictures are unchanged.
+
 ### Acceptance map (plan M34 "Tests" and "Acceptance")
 
 | Plan M34 | Test |
@@ -7395,6 +7428,18 @@ plan) and `e2e_ntpclients_test.go` (the clients), and in `internal/engine/integr
 | Acceptance: 5,000 queries/s and less than 1 ms added | `TestTheServerAnswersFiveThousandQueriesPerSecondThroughTheRedirectAndAddsLessThanAMillisecondOnTheRealKernel` (level 1, asserted under `Accurate()`, recorded in the measurement record), `TestTheServerAnswers5000QueriesPerSecondOnTheLoopback` and `TestBuildingAnAnswerTakesLessThanAMillisecond` (level 0 floors) |
 | level 0: encoding and parsing of NTP packets (fuzzed) | `FuzzPacket` (`make fuzz`, the seventh target), `TestAPacketIsParsedAndWrittenFieldByField`, `TestADatagramShorterThanTheHeaderIsNoPacket` |
 | level 0: the era boundary and the 2038 overflow | `TestTheTimestampWrapsAtTheEndOfEra0`, `TestTheTimestampSurvivesTheSigned32BitOverflowOf2038`, `TestTheAnswersAcrossTheEraBoundaryAndTheOverflowOf2038`; read by a decoder of its own: `TestThePythonSNTPClientReadsTheAnswersOfTheServerAsTheTestbedTestsExpect` |
+| level 0: offset, absolute and skew arithmetic on the fake clock | `TestEveryAnswerKind`, `TestAnOffsetBeyondTheEraOfTheProtocol`, `TestTheFaultStartsAndEndsWithAJumpOfTheConfiguration`, `TestAnAbsoluteFaultDoesNotRunBackwardsWhenTheHostClockIsSteppedBack` (`internal/ntpserver/server_test.go`), `TestParseTimeOffset`, `TestTheOffsetsOfThePlanParse` (`internal/domain/timefault_test.go`) |
+| level 0: precedence of time faults (device beats network; overlay beats configuration with M39) | `TestTimeFaultsOfADeviceBeatThoseOfItsGroupAndOfItsNetwork`, `TestOfTwoTimeFaultsOfTheSameScopeTheNewerWins`, `TestATimeFaultForOneServerBeatsAFaultOfTheSameScopeForEveryServer`, `TestATimeFaultCompetesOnlyWithTimeFaults` (`internal/domain/timefault_test.go`), `TestOverlappingScopesFollowThePrecedenceOfTheFamily` (`internal/compiler/ntp_test.go`); the overlay beating a configured time fault is M39 |
+| level 0: the compiler output of the DNAT and the redirect | `TestATimeFaultIsAnEntryOfTheServerForTheClientsOfItsScope`, `TestAScopeWithATimeFaultIsRedirectedWhetherOrNotItsNetworkRedirects`, `TestRedirectHardcodedRedirectsEveryServerOfTheNetworksThatAsk`, `TestEachDistinctDestinationSelectorGetsAPortOfItsOwn`, `TestKeaHandsOutTheGatewayAddressAsNTPServerWhereTheServiceIsOn` (`internal/compiler/ntp_test.go`) |
+| Scope: the container of the server, its hardening and its registration with the API | `TestNTPContainerHardeningProfile` (`internal/executor/hardening_test.go`, reads `deploy/compose.ntp.yaml`), `TestTheNTPServiceEndpointsAreForTheServiceTokenOnly`, `TestTheNTPConfigurationHoldsTheNetworksTheFaultsAndThePorts`, `TestTheNTPComponentOfTheHealthReportFollowsThePollsOfTheServer` (`internal/api/ntpservice_test.go`) |
+| level 2: the container deployment starts the container `ntp` with the capabilities of its profile, it answers a query to the gateway address with a mode 4 reply and the host's time, the key-establishment port is closed, and it follows a new holder of the service namespace | `TestContainerDeploymentOnCleanUbuntuHosts` (`internal/appliance/deployment_test.go`; only written and compiled in the development container) |
+| Scope: the scenario step *time*, the wait and the check at the runner and over the API | `TestATimeStepWritesATimeOverlayOwnedByTheRunAndIsReplacedByTheSameKey`, `TestAWaitForAnNtpQueryNeedsAQueryOfTheTargetAfterTheWaitBegan`, `TestAnNtpQueryIsSeenOnlyInsideTheWindowFromADeviceOfTheTarget`, `TestATimeFaultThatShapedNoAnswerIsAZeroHitWarning` (`internal/run/ntp_test.go`), `TestATimeScenarioWaitsForTheQueryAndChecksItOverTheAPI` (`internal/api/runs_time_test.go`) |
+| Scope: the reads `GET /devices/{id}/ntp` and `GET /ntp/queries`, the built-in time profiles and `chaosctl time` | `TestTheStateOfADeviceShowsItsQueriesTheAnswersPerFaultAndTheLastQuery`, `TestTheNTPQueryLogIsListedNewestFirstAndFilteredByDeviceAndTime` (`internal/api/ntpreads_test.go`), `TestTheTimePresetsAreBuiltInProfilesWithATimePartOnly` (`internal/domain/builtin_time_test.go`), `TestTheFlagsOfATimeFaultBecomeItsBody` (`internal/ctl/appfamilies_test.go`), `TestWaitNtpStartsAtTheGatewaysClockAndNotAtTheNewestEntry` (`internal/ctl/waitntp_test.go`) |
+| Scope: the kind *Time (NTP)* with the presets in the add-fault dialog | `e2e/time-faults.spec.ts` (the dialog of a device, the Faults screen, the refusals), `lib/timeForm.test.ts`, `lib/faultForm.test.ts` |
+| Scope: the time service and the redirect in the network form | `e2e/time-faults.spec.ts` (the network), `lib/networkForm.test.ts` |
+| Scope: the *Time* panel of the device detail (last query, server asked, served offset, active time fault) | `e2e/time-faults.spec.ts` (the panel: three tests, and the event of the overview), `lib/ntp.test.ts` |
+| Scope: the scenario step *time*, the wait *NTP query seen*, the check *NTP queried* and the profile part in the UI | `e2e/time-faults.spec.ts` (the scenario, the profile), `lib/stepForm.test.ts`, `lib/checkForm.test.ts`, `lib/scenarios.test.ts`, `lib/scenarioRules.test.ts`, `lib/scenarioYaml.test.ts`, `lib/profileForm.test.ts`, `lib/profiles.test.ts` |
+| Documents: the examples of the user guide, the API guide and the cookbook run against the simulated gateway | `make test-docs` (`TestTheDocumentationExamplesRunAgainstTheGateway`); the labels, links, health components and preflight checks: `TestEveryPreflightCheckIsExplainedInTheTroubleshooting`, `TestEveryHealthComponentIsNamedInTheTroubleshooting` (`internal/docscheck`) |
 
 ## Generated code
 

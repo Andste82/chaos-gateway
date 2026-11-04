@@ -1,7 +1,7 @@
 // The step editor of the timeline (plan §2.10, §2.17 "Scenarios"; M19): the form of one step — its id, its
 // time on the timeline, whether it narrows the scenario's target, and the fields of its type (a profile, a
 // fault with the fault dialog's fields, a DNS fault, a TLS case, a DHCP action (M23b: the fields of the fault dialog
-// and of the DHCP dialog), an access rule, a WireGuard action, a capture start or stop, a wait,
+// and of the DHCP dialog), a time fault (M34), an access rule, a WireGuard action, a capture start or stop, a wait,
 // the removal of an earlier step's overlay, or the restore) — the checks under the fields, the step it becomes
 // and the field a problem the gateway reported names. A step of a type this build cannot edit (none is left; a
 // type a later build adds) is kept as it is and edited in the YAML view.
@@ -17,7 +17,8 @@ import { durationMs } from './format';
 import { resetError } from './rules';
 import { remoteCidrError } from './scopes';
 import { stepType, type StepType } from './scenarios';
-import { createsOverlay, dhcpTargetProblem, messages, reservedStepId, scopeWithin, startsCapture, tunnelOutsideTarget, type Topology } from './scenarioRules';
+import { createsOverlay, dhcpTargetProblem, messages, reservedStepId, scopeWithin, profileTimeTargetProblem, startsCapture, timeTargetProblem, tunnelOutsideTarget, type Topology } from './scenarioRules';
+import { emptyTime, timeBody, timeErrors, timeFieldOf, timeToForm, type TimeField, type TimeForm } from './timeForm';
 import { emptyTls, tlsBody, tlsErrors, tlsFieldOf, tlsToForm, type TlsField, type TlsForm } from './tlsForm';
 import { emptyTraffic, trafficErrors, trafficFieldOf, trafficFromMatch, trafficMatch, type TrafficForm } from './trafficForm';
 import { createOverlayBodyFaultOneDestinationHostnameOneRegExp as hostnameRegExp } from '../api/generated/zod/overlays/overlays';
@@ -35,10 +36,11 @@ export interface StepForm {
   /** The profile (its id, or the name of a built-in one). */
   profile: string;
   fault: FaultForm;
-  /** The fields of a `dns` step, a `tls` step and a `dhcp` step. */
+  /** The fields of a `dns` step, a `tls` step, a `dhcp` step and a `time` step. */
   dns: DnsForm;
   tls: TlsForm;
   dhcp: DhcpForm;
+  time: TimeForm;
   action: AccessAction;
   rejectWith: RejectType | '';
   cutExisting: boolean;
@@ -68,6 +70,7 @@ export type StepField =
   | DnsField
   | TlsField
   | DhcpField
+  | TimeField
   | 'action'
   | 'rejectWith'
   | 'cutExisting'
@@ -95,6 +98,7 @@ export function emptyStepForm(type: StepType, id: string, at = '0s'): StepForm {
     dns: emptyDns(),
     tls: emptyTls(),
     dhcp: emptyDhcp(),
+    time: emptyTime(),
     action: 'drop',
     rejectWith: '',
     cutExisting: false,
@@ -110,7 +114,7 @@ export function emptyStepForm(type: StepType, id: string, at = '0s'): StepForm {
 }
 
 /** The step types the editor makes; a type it does not (none of the types of this build) is kept as it is and edited as YAML. */
-export const editableTypes: ReadonlySet<StepType> = new Set(['profile', 'fault', 'rule', 'dns', 'tls', 'dhcp', 'wireguard', 'capture', 'wait', 'remove', 'restore']);
+export const editableTypes: ReadonlySet<StepType> = new Set(['profile', 'fault', 'rule', 'dns', 'tls', 'dhcp', 'time', 'wireguard', 'capture', 'wait', 'remove', 'restore']);
 
 /** The form of a step. */
 export function stepToForm(s: Step): StepForm {
@@ -123,6 +127,7 @@ export function stepToForm(s: Step): StepForm {
   if (s.dns) f.dns = dnsToForm(s.dns);
   if (s.tls) f.tls = tlsToForm(s.tls);
   if (s.dhcp) f.dhcp = dhcpToForm(s.dhcp);
+  if (s.time) f.time = timeToForm(s.time);
   if (s.rule) {
     f.action = s.rule.action;
     f.rejectWith = s.rule.reject_with ?? '';
@@ -171,6 +176,9 @@ export function formToStep(f: StepForm): Step {
       break;
     case 'dhcp':
       step.dhcp = dhcpBody(f.dhcp);
+      break;
+    case 'time':
+      step.time = timeBody(f.time);
       break;
     case 'rule':
       step.rule = {
@@ -241,6 +249,11 @@ export function stepFormErrors(f: StepForm, ctx: StepContext): Partial<Record<St
   switch (f.type) {
     case 'profile':
       if (!f.profile) e.profile = 'Choose a profile.';
+      else {
+        // a profile with a time part acts like a time fault: a device, a group or a network (`profileTimeTarget`)
+        const problem = acts ? profileTimeTargetProblem(f.profile, acts, ctx.topology) : undefined;
+        if (problem) e.profile = problem;
+      }
       break;
     case 'fault':
       Object.assign(e, faultFormErrors(f.fault, 'config'));
@@ -255,6 +268,13 @@ export function stepFormErrors(f: StepForm, ctx: StepContext): Partial<Record<St
     case 'tls':
       Object.assign(e, tlsErrors(f.tls));
       break;
+    case 'time': {
+      Object.assign(e, timeErrors(f.time));
+      // a step acts on a device, a group or a network: the scenario's target is one of them, so only a narrowing can be wrong
+      const problem = acts ? timeTargetProblem(acts) : undefined;
+      if (problem) e.narrow = problem;
+      break;
+    }
     case 'dhcp': {
       Object.assign(e, dhcpErrors(f.dhcp));
       // a step acts on a device or a network (a force of a new IP on a device); where it acts is the step's narrowing or the scenario's target
@@ -317,6 +337,8 @@ export function stepFieldOf(rest: string, each = false): StepField | undefined {
       return tlsFieldOf(`/${segments.slice(1).join('/')}`);
     case 'dhcp':
       return segments.length === 1 ? 'narrow' : dhcpFieldOf(`/${segments.slice(1).join('/')}`);
+    case 'time':
+      return timeFieldOf(`/${segments.slice(1).join('/')}`);
     case 'rule': {
       const last = segments[1];
       if (last === 'action') return 'action';

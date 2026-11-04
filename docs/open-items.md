@@ -62,7 +62,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   with a reason, or deferred to M38 (the preflight clauses of §3.3/§3.4 and the expiry warning of the installed certificate), see the verdict table. The five
   items the phase raised, P7-M27-01, -02, P7-M28-01, P7-M29-01 and -02, were decided by the maintainer on 2026-10-31 and are closed. **Phase 7 is closed on 2026-11-02 with the release of V1 (`v1.0.0`, `image.yml` run 41543627145).** No item of the phase is open. Two CI items remain as maintenance after V1, not as scope of Phase 7: P7-CI-01 (three timing tests of the weekly emulated jobs, not caused by Phase 7) and P7-CI-02 (a probe namespace seen by a test of another package; watch the level 1 runs); P7-M27-05 (what the engine does when the active revision fails because the executor is not there) was decided by the maintainer on 2026-11-02 and is closed.
 - **M34** (NTP server and time faults, delivered in four stages, D37, branch `m34-ntp`): the questions the stages raise and that no later stage of M34 settles are under
-  [M34 open items](#m34-open-items) at the end of the file. Stage 1 (specification and domain) raised P34-01 to P34-03, stage 2 (server and wiring) P34-04 to P34-06 and stage 3 (scenarios, API reads and `chaosctl`) P34-07 and P34-08, all open.
+  [M34 open items](#m34-open-items) at the end of the file. Stage 1 (specification and domain) raised P34-01 to P34-03, stage 2 (server and wiring) P34-04 to P34-06 and stage 3 (scenarios, API reads and `chaosctl`) P34-07 and P34-08, and stage 4 (web app and documents) P34-09, all open.
 
 ## Phase 1 audit result
 
@@ -3601,3 +3601,16 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 - Acceptance: each changed choice has a test that fails on the old behaviour; each kept choice is named in plan §2.18.
 - Needs maintainer: yes
 - Effort: S
+
+### P34-09 Should the profile editor create and edit the parts `time`, `dns` and `tls`
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. The profile editor of the web app (`web/src/components/profiles/ProfileDialog.vue`, `web/src/lib/profileForm.ts`) edits the parts `impairment` and `mtu`. It keeps a `dns`, `tls` or `time` part that comes from a built-in profile or the API when a profile is saved, shows it as a chip and activates it, but it has no fields to create or change one. Stage 4 followed the safest reading: the same limit that `dns` and `tls` have had since M23b, so the `time` part is made with the API, `chaosctl` or the eight built-in `time-*` profiles.
+- Evidence: `web/src/lib/profileForm.ts` (`keptParts`), `web/src/components/profiles/ProfileDialog.vue`, `web/src/lib/profileForm.test.ts`, `web/src/lib/timeForm.ts` (the fields exist for the Add fault dialog and the step dialog and could be reused), `docs/development.md` ("The web app (stage 4)").
+- Task: decide whether the profile editor gets fields for the parts `time`, `dns` and `tls`, and for which of them.
+- Options: (a) leave it to the API and the built-in profiles for all three (what stage 4 does); (b) add the `time` part only, with the fields and checks of `timeForm.ts`; (c) add all three.
+- Recommendation: (a): the built-in `time-*` profiles cover the presets, a custom time profile is rare, and a form for it is better made together with the forms for `dns` and `tls` than alone. For (a) the user guide names the limit (section "Time faults and the NTP server").
+- Acceptance: for (a) nothing more; for (b) and (c) a vitest file and a Playwright test show that the part is created, edited and removed in the editor, and that a part the editor does not know is still kept.
+- Needs maintainer: yes
+- Effort: S for (a), M for (b), L for (c)

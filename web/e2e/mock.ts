@@ -18,6 +18,7 @@ import type {
   CaptureRequest,
   CaptureStorage,
   Configuration,
+  DeviceNtp,
   DhcpLease,
   DnsQueryLogEntry,
   DomainChange,
@@ -567,11 +568,11 @@ export class MockGateway {
   /** What the gateway can do (GET /capabilities). */
   capabilities: Capabilities = {
     version: 'test',
-    features: ['runs', 'checks', 'captures', 'tls.intercept', 'diagnostics'],
-    overlay_kinds: ['fault', 'profile', 'rule', 'dns', 'tls', 'dhcp', 'wireguard'],
-    fault_families: ['impairment', 'mtu', 'dns', 'tls', 'dhcp', 'tunnel'],
-    step_types: ['profile', 'fault', 'rule', 'dns', 'tls', 'dhcp', 'wireguard', 'capture', 'wait', 'remove', 'restore'],
-    check_types: ['reconnected', 'no_connection', 'traffic_seen', 'traffic_not_seen', 'dns_query_seen', 'tls_rejected', 'tls_accepted'],
+    features: ['runs', 'checks', 'captures', 'tls.intercept', 'diagnostics', 'time.faults', 'ntp.server'],
+    overlay_kinds: ['fault', 'profile', 'rule', 'dns', 'tls', 'dhcp', 'time', 'wireguard'],
+    fault_families: ['impairment', 'mtu', 'dns', 'tls', 'dhcp', 'time', 'tunnel'],
+    step_types: ['profile', 'fault', 'rule', 'dns', 'tls', 'dhcp', 'time', 'wireguard', 'capture', 'wait', 'remove', 'restore'],
+    check_types: ['reconnected', 'no_connection', 'traffic_seen', 'traffic_not_seen', 'dns_query_seen', 'ntp_queried', 'tls_rejected', 'tls_accepted'],
     diagnostic_types: ['ping', 'tcp', 'udp', 'dns', 'http', 'tls', 'path'],
   };
   private nextRun = 1;
@@ -633,6 +634,8 @@ export class MockGateway {
   explainWith?: (query: Record<string, string>) => Explanation | undefined;
   /** The connections GET /flows lists (the filters device and network select from them). */
   flows: Flow[] = [];
+  /** What the NTP server did with a device's queries (GET /devices/{id}/ntp), by device id; a device without an entry has seen none (M34). */
+  ntp: Record<string, Partial<DeviceNtp>> = {};
   /** The query log of the DNS proxy, oldest first (GET /dns/queries lists it newest first; the filters device, name and since select). */
   dnsQueries: DnsQueryLogEntry[] = [];
   /** DHCP leases by network id (GET /networks/{id}/leases). */
@@ -862,6 +865,13 @@ export class MockGateway {
       return json(200, { interval_seconds: 5, period_seconds: 600, interface: st.interface, counters, samples });
     }
     if (path === '/devices') return json(200, this.page(this.devices, url));
+    const ntp = /^\/devices\/([^/]+)\/ntp$/.exec(path);
+    if (ntp) {
+      const d = this.devices.find((x) => x.id === ntp[1] || x.name === decodeURIComponent(ntp[1]!));
+      if (!d) return problem(404, 'not_found', 'no such device');
+      const none: DeviceNtp = { device: d.id, queries: 0, silenced: 0, dropped: 0, nts_ke: 0, answers: [], recent: [] };
+      return json(200, { ...none, ...this.ntp[d.id] });
+    }
     const dev = /^\/devices\/([^/]+)$/.exec(path);
     if (dev) {
       const d = this.devices.find((x) => x.id === dev[1] || x.name === decodeURIComponent(dev[1]!));
@@ -1755,7 +1765,7 @@ export class MockGateway {
 
   /** POST /overlays: a new overlay, or the one with the same key replaced (it keeps its id). */
   putOverlay(req: OverlayRequest): { overlay: Overlay; created: boolean } {
-    const kind = req.profile ? 'profile' : req.rule ? 'rule' : req.dns ? 'dns' : req.tls ? 'tls' : req.dhcp ? 'dhcp' : 'fault';
+    const kind = req.profile ? 'profile' : req.rule ? 'rule' : req.dns ? 'dns' : req.tls ? 'tls' : req.dhcp ? 'dhcp' : req.time ? 'time' : 'fault';
     // a fault's key has its family and its traffic, or its tunnel (a tunnel fault has no target); a DNS fault's the set of its
     // names, a TLS case's its selection and server names, a DHCP action's the action (plan §2.15)
     const sel = (o: OverlayRequest) =>
@@ -1767,7 +1777,15 @@ export class MockGateway {
             ? JSON.stringify([o.tls?.protocol, o.tls?.ports, o.tls?.port_ranges, o.tls?.destination, o.tls?.sni])
             : kind === 'dhcp'
               ? JSON.stringify(o.dhcp?.action)
-              : JSON.stringify([o.fault?.family ?? 'impairment', o.fault?.tunnel, o.fault?.protocol, o.fault?.ports, o.fault?.destination, o.rule?.protocol, o.rule?.ports]);
+              : kind === 'time'
+                ? // the match as the gateway applies it: the protocol is UDP and, without ports, the port is 123 (domain.timeMatch)
+                  JSON.stringify([
+                    'udp',
+                    o.time?.ports?.length || o.time?.port_ranges?.length ? (o.time?.ports?.length ? o.time.ports : undefined) : [123],
+                    o.time?.port_ranges?.length ? o.time.port_ranges : undefined,
+                    o.time?.destination,
+                  ])
+                : JSON.stringify([o.fault?.family ?? 'impairment', o.fault?.tunnel, o.fault?.protocol, o.fault?.ports, o.fault?.destination, o.rule?.protocol, o.rule?.ports]);
     const key = (o: OverlayRequest) => JSON.stringify([o.target ?? {}, sel(o)]);
     const old = this.overlays.find((o) => o.kind === kind && o.owner.id === 'admin' && key(o) === key(req));
     const unit: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000 };

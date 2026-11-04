@@ -1,7 +1,7 @@
 // The words and chips for faults, overlays and their targets (plan §2.17: fault chips are mono,
 // orange, and say what happens to the traffic: "↑↓ 200 ms ±50", "5 % loss", "↓ 64 kbit/s").
-import type { DhcpAction, DnsFault, FaultBody, ImpairmentParams, NetemParams, Overlay, Owner, Scope, TlsCase, TrafficMatch, TunnelRef } from '../api/generated/model';
-import { durationMs, formatDuration } from './format';
+import type { DhcpAction, DnsFault, FaultBody, ImpairmentParams, NetemParams, Overlay, Owner, Scope, TimeFault, TlsCase, TrafficMatch, TunnelRef } from '../api/generated/model';
+import { durationMs, formatDuration, instantText } from './format';
 import { profileTitle } from './profileNames';
 
 function pct(p: string | undefined): string {
@@ -138,6 +138,28 @@ export function tlsChips(t: TlsCase, names: Names = {}): string[] {
   return [parts.length ? `${what} · ${parts.join(' · ')}` : what];
 }
 
+/**
+ * The chips of a time fault: "Time +400d", "Time 1970-01-01 00:00:00 UTC · skew 500 ppm", "Time leap insert", "Time unsynchronized",
+ * "Time kiss-of-death RATE", "Time silence · time.google.com". The server the device asked and the ports come last.
+ */
+export function timeChips(t: TimeFault): string[] {
+  const answer = t.answer ?? 'normal';
+  let what: string;
+  if (answer === 'kiss_of_death') what = `Time kiss-of-death${t.kiss_code ? ` ${t.kiss_code}` : ''}`;
+  else if (answer !== 'normal') what = `Time ${answer.replace(/_/g, ' ')}`;
+  else {
+    const parts: string[] = [];
+    if (t.offset !== undefined) parts.push(/^[+-]/.test(t.offset) ? t.offset : `+${t.offset}`);
+    if (t.absolute !== undefined) parts.push(instantText(t.absolute));
+    if (t.skew_ppm !== undefined) parts.push(`skew ${t.skew_ppm} ppm`);
+    if (t.leap) parts.push(`leap ${t.leap}`);
+    what = `Time ${parts.join(' · ')}`.trim();
+  }
+  const ports = [...(t.ports ?? []).map(String), ...(t.port_ranges ?? []).map((r) => `${r.from}-${r.to}`)];
+  const where = [t.destination?.hostname, t.destination?.cidr, ports.length ? `UDP ${ports.join(', ')}` : ''].filter(Boolean);
+  return [where.length ? `${what} · ${where.join(' · ')}` : what];
+}
+
 /** The chips of a DHCP action: "DHCP short lease 7s", "DHCP new IP 10.10.0.200", "DHCP options · router, DNS", "DHCP silence". */
 export function dhcpChips(d: DhcpAction): string[] {
   switch (d.action) {
@@ -178,6 +200,8 @@ export function overlayChips(o: Overlay, profileName?: (ref: string) => string |
       return o.tls ? tlsChips(o.tls, names) : ['TLS case'];
     case 'dhcp':
       return o.dhcp ? dhcpChips(o.dhcp) : ['DHCP action'];
+    case 'time':
+      return o.time ? timeChips(o.time) : ['Time fault'];
     case 'wireguard':
       return [`WireGuard ${o.wireguard?.action ?? ''}`.trim()];
     default:

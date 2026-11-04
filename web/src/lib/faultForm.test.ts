@@ -18,12 +18,14 @@ import {
   parseRate,
   presets,
   previewSentence,
+  timeTargetOk,
   scopeOf,
   targetOf,
   type FaultForm,
 } from './faultForm';
 import type { Overlay } from '../api/generated/model';
 import { CIDR_CHOICE } from './scopes';
+import { emptyTime } from './timeForm';
 
 const form = (over: Partial<FaultForm>): FaultForm => ({ ...emptyForm('device:d1'), ...over });
 
@@ -355,7 +357,7 @@ describe('the DNS and TLS kinds of the dialog', () => {
     const tls = form({ family: 'tls', tls: { ...emptyForm().tls, sni: 'bad!name' }, latency: '' });
     expect(Object.keys(faultFormErrors(tls))).toEqual(['tlsSni']);
     expect(faultFormErrors(form({ family: 'dns', target: '' })).target).toBe('Choose a target.');
-    expect(overlayOnlyFamilies).toEqual(['dns', 'tls']);
+    expect(overlayOnlyFamilies).toEqual(['dns', 'tls', 'time']);
   });
 
   it('an overlay of either kind is opened with its fields, its target and its remaining time, and sent back unchanged', () => {
@@ -432,5 +434,89 @@ describe('the DNS and TLS kinds of the dialog', () => {
     const req = lifetimeOf(kept, new Date());
     expect(req.ttl).toBe('30m');
     expect(req.expires_in).toMatch(/^\d+s$/);
+  });
+});
+
+// M34: a time fault is a kind of the dialog; it is an overlay of its own kind (`time`), never a configured fault, and it has no
+// global scope and no remote network as its target.
+describe('the time kind of the dialog', () => {
+  const timeForm = (over: Partial<FaultForm> = {}, time: Partial<ReturnType<typeof emptyTime>> = {}): FaultForm =>
+    form({ family: 'time', duration: '5m', time: { ...emptyTime(), ...time }, ...over });
+
+  it('is the time part of the overlay request, with the target and the duration, and no fault body', () => {
+    const f = timeForm({}, { shift: 'offset', offset: '+400d' });
+    expect(faultFormErrors(f)).toEqual({});
+    const req = formToOverlay(f);
+    expect(req).toEqual({ target: { device: 'd1' }, time: { offset: '+400d' }, ttl: '5m' });
+    expect(CreateOverlayBody.safeParse(req).success).toBe(true);
+    expect(req.fault).toBeUndefined();
+    expect(formToFault(f)).toEqual({});
+  });
+
+  it('narrows the fault to the server the device asked', () => {
+    const f = timeForm({}, { traffic: { protocol: 'any', ports: '', destKind: 'hostname', destination: 'time.google.com' }, shift: 'absolute', absolute: '1970-01-01T00:00:00Z', skew: '500' });
+    const req = formToOverlay(f);
+    expect(req.time).toEqual({ destination: { hostname: 'time.google.com' }, absolute: '1970-01-01T00:00:00Z', skew_ppm: 500 });
+    expect(CreateOverlayBody.safeParse(req).success).toBe(true);
+  });
+
+  it('is aimed at a device, a group or a network, never at everything or a remote network', () => {
+    for (const target of ['device:d1', 'group:g1', 'network:n1']) expect(faultFormErrors(timeForm({ target }))).toEqual({});
+    for (const target of ['global', 'remote_network:client:c1']) {
+      expect(faultFormErrors(timeForm({ target })).target).toMatch(/device, a group or a network/);
+      expect(timeTargetOk(target)).toBe(false);
+    }
+    // the other kinds keep their targets
+    expect(faultFormErrors(form({ target: 'global' })).target).toBeUndefined();
+    expect(timeTargetOk('device:')).toBe(false);
+  });
+
+  it('checks the fields of the kind, not the impairment fields', () => {
+    const bad = timeForm({ latency: '' }, { offset: 'tomorrow' });
+    expect(Object.keys(faultFormErrors(bad))).toEqual(['timeOffset']);
+    expect(faultFormErrors(timeForm({ target: '' })).target).toBe('Choose a target.');
+  });
+
+  it('is opened with its fields, its target and its remaining time, and sent back unchanged', () => {
+    const expires = new Date(Date.now() + 60_000).toISOString();
+    const o: Overlay = {
+      id: 'o1',
+      kind: 'time',
+      owner: { type: 'user', id: 'admin', name: 'admin' },
+      created_at: '2026-10-25T10:00:00Z',
+      updated_at: '2026-10-25T10:00:00Z',
+      generation: 1,
+      target: { group: 'g1' },
+      time: { destination: { cidr: '203.0.113.0/24' }, ports: [12300], protocol: 'udp', answer: 'kiss_of_death', kiss_code: 'RATE' },
+      ttl: '5m',
+      expires_at: expires,
+    };
+    const f = overlayToForm(o);
+    expect(f.family).toBe('time');
+    expect(f.target).toBe('group:g1');
+    expect(f.duration).toBe('keep');
+    expect(f.time.traffic).toMatchObject({ ports: '12300', destKind: 'cidr', destination: '203.0.113.0/24' });
+    expect(formToOverlay(f)).toMatchObject({ target: { group: 'g1' }, time: o.time, ttl: '5m' });
+  });
+
+  it('says what the fault does in the preview', () => {
+    expect(previewSentence(timeForm({}, { shift: 'offset', offset: '+400d' }), 'ESP32-42')).toBe(
+      'ESP32-42 · NTP queries to every server → the correct time +400d · expires after 5 min',
+    );
+    const tg = { protocol: 'any' as const, ports: '', destKind: 'hostname' as const, destination: 'time.google.com' };
+    expect(previewSentence(timeForm({ duration: 'perm' }, { answer: 'silence', traffic: tg }), 'Network IoT')).toBe(
+      'Network IoT · NTP queries to time.google.com → no answer (the query is counted) · until removed',
+    );
+  });
+
+  it("puts the gateway's pointers on the fields", () => {
+    expect(fieldOf('/time/offset')).toBe('timeOffset');
+    expect(fieldOf('/time/absolute')).toBe('timeAbsolute');
+    expect(fieldOf('/time/skew_ppm')).toBe('timeSkew');
+    expect(fieldOf('/time/kiss_code')).toBe('timeKiss');
+    expect(fieldOf('/time/destination/cidr')).toBe('destination');
+    expect(fieldOf('/time/ports/0')).toBe('ports');
+    expect(fieldOf('/time')).toBe('timeChange');
+    expect(fieldOf('/target')).toBe('target');
   });
 });

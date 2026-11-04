@@ -77,6 +77,10 @@ export function formToCheck(f: CheckForm): Check {
     case 'dns_query_seen':
       out.dns_query_seen = { name: f.dnsName.trim() };
       break;
+    case 'ntp_queried':
+      // the check has no fields: `ntp_queried: {}`
+      out.ntp_queried = {};
+      break;
     case 'traffic_not_seen': {
       const except = f.except.map((r) => destinationOf(r)).filter((d): d is Destination => d !== undefined);
       out.traffic_not_seen = { ...trafficMatch(f.traffic), ...(except.length ? { except } : {}) };

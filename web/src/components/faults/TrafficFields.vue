@@ -12,8 +12,10 @@ defineProps<{
   noDestination?: boolean;
   /** Leave the protocol out (a selector that is TCP by its kind: a TLS case). */
   noProtocol?: boolean;
-  /** What an empty ports field means, when it is not "any port" (a TLS case: 443 and 8883). */
+  /** What an empty ports field means, when it is not "any port" (a TLS case: 443 and 8883; a time fault: 123). */
   portsPlaceholder?: string;
+  /** Offer only the destinations that name a server: anywhere, an address or prefix, a host name (a time fault asks for the server the device asked). */
+  serverDestinations?: boolean;
 }>();
 const form = defineModel<TrafficForm>({ required: true });
 const uid = useId();
@@ -56,8 +58,8 @@ const eid = (f: string) => `${uid}-${f}-error`;
         <label class="label" :for="fid('destKind')">Destination</label>
         <select :id="fid('destKind')" v-model="form.destKind" class="input" @change="destKindChanged">
           <option value="any">Anywhere</option>
-          <option value="uplink">Uplink (Internet)</option>
-          <option value="network">A network</option>
+          <option v-if="!serverDestinations || form.destKind === 'uplink'" value="uplink">Uplink (Internet)</option>
+          <option v-if="!serverDestinations || form.destKind === 'network'" value="network">A network</option>
           <option value="cidr">An address or prefix</option>
           <option value="hostname">A host name (DNS-derived)</option>
         </select>

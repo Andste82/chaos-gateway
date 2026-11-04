@@ -109,3 +109,10 @@ export function subnetOf(address: string | undefined): string {
   const net = (value & mask) >>> 0;
   return `${[24, 16, 8, 0].map((s) => (net >>> s) & 255).join('.')}/${len}`;
 }
+
+/** An instant in words for the sentences and chips: "1970-01-01 00:00:00 UTC"; a text that is none is returned as it is. */
+export function instantText(iso: string): string {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return iso;
+  return new Date(ms).toISOString().replace('T', ' ').replace(/\.000Z$/, ' UTC').replace(/Z$/, ' UTC');
+}

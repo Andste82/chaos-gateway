@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CreateRevisionBody } from '../api/generated/zod/revisions/revisions';
-import { emptyProfileForm, formToProfile, profileFieldOf, profileFormErrors, profileToForm, type ProfileForm } from './profileForm';
+import { emptyProfileForm, formToProfile, keptParts, profileFieldOf, profileFormErrors, profileToForm, type ProfileForm } from './profileForm';
 
 const ID = 'c0000000-0000-4000-8000-0000000000c1';
 /** The profile as the spec checks it in a revision. */
@@ -55,6 +55,17 @@ describe('the profile editor (P3-M13-03)', () => {
     expect(formToProfile({ ...f, impairmentOn: false }, base)).toEqual({ name: 'dns-and-delay', parts: { dns: { action: 'servfail' } } });
     // the kept part is a part: the profile is not empty without the others
     expect(profileFormErrors({ ...f, impairmentOn: false }, [], base).parts).toBeUndefined();
+  });
+
+  it('keeps a time part the editor does not make: a copy of a built-in time profile keeps it', () => {
+    const base = { name: 'late', parts: { time: { offset: '+1y' }, impairment: { latency: '5ms' } } };
+    const f = profileToForm(base);
+    expect(formToProfile({ ...f, impairmentOn: false }, base)).toEqual({ name: 'late', parts: { time: { offset: '+1y' } } });
+    expect(profileFormErrors({ ...f, impairmentOn: false }, [], base).parts).toBeUndefined();
+    // without any part the profile is empty
+    expect(profileFormErrors({ ...f, impairmentOn: false }, []).parts).toBeDefined();
+    expect(keptParts(base)).toEqual({ time: { offset: '+1y' } });
+    expect(valid(formToProfile({ ...f, impairmentOn: false }, base))).toBe(true);
   });
 
   it('checks the name, the parts and the fields', () => {

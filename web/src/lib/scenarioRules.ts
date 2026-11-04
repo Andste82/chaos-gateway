@@ -13,6 +13,8 @@ export interface Topology {
   networkOf?: (device: string) => string | undefined;
   /** The ids of the members of a group. */
   membersOf?: (group: string) => string[] | undefined;
+  /** Whether a profile (by id or name) has a time part; unknown for a profile that is not loaded. */
+  hasTimePart?: (profile: string) => boolean | undefined;
 }
 
 /** The id the gateway keeps for the beginning of the run (`start` in a window). */
@@ -28,7 +30,7 @@ export const messages = {
   zeroWindow: 'The window must be longer than zero.',
 };
 
-const overlayKeys = ['profile', 'fault', 'rule', 'dns', 'tls', 'dhcp', 'wireguard'] as const;
+const overlayKeys = ['profile', 'fault', 'rule', 'dns', 'tls', 'dhcp', 'time', 'wireguard'] as const;
 
 /** A step of these types creates an overlay of the run that a later `remove` can take away. */
 export function createsOverlay(s: Step): boolean {
@@ -103,6 +105,27 @@ export function tunnelOutsideTarget(tunnel: { client?: string; link?: string } |
   }
   if (tunnel.link !== undefined) return !same(target.network, tunnel.link);
   return false;
+}
+
+/**
+ * What the gateway refuses of the target of a time fault (`timeTarget`): the NTP server tells a client's scope from its address, a
+ * device, a group or a network; a remote network has no clients of the server. Undefined for a target that is none of the kinds
+ * (the scenario's own rules say that) and for one that is fine.
+ */
+export function timeTargetProblem(target: Scope): string | undefined {
+  const k = kindOf(target);
+  if (k === undefined || k === 'device' || k === 'group' || k === 'network') return undefined;
+  return `A time fault targets a device, a group or a network, not ${k === 'global' ? 'everything' : 'a remote network'}: narrow the step to one.`;
+}
+
+/**
+ * What the gateway refuses of a `profile` step whose profile has a time part (`profileTimeTarget`): the activation competes like
+ * a time fault, so the same target rule holds. Undefined for a profile without a time part and for one that is not known.
+ */
+export function profileTimeTargetProblem(profile: string | undefined, target: Scope, topo: Topology = {}): string | undefined {
+  if (!profile || !topo.hasTimePart?.(profile)) return undefined;
+  const problem = timeTargetProblem(target);
+  return problem?.replace('A time fault targets', 'A profile with a time part targets');
 }
 
 /**

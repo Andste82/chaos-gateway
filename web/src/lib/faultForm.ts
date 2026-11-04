@@ -3,9 +3,9 @@
 // and the advanced ones (`netemForm`), an MTU/PMTUD fault (size and mode) and a tunnel fault (the
 // impairment of a WireGuard client's or a link's encrypted traffic, M10) — the presets to start
 // from, the checks under the fields, the live preview sentence, and the request it becomes: an
-// overlay (`POST /overlays`) or a configured fault in a candidate revision. A DNS fault and a TLS case (M23b) are
-// kinds of the dialog as well, with the fields of their own (`dnsForm`, `tlsForm`); they are overlays only, as the API
-// has no configured fault of these families.
+// overlay (`POST /overlays`) or a configured fault in a candidate revision. A DNS fault, a TLS case (M23b) and a time fault
+// (M34) are kinds of the dialog as well, with the fields of their own (`dnsForm`, `tlsForm`, `timeForm`); they are overlays
+// only, as the API has no configured fault of these families.
 import type { ConfigFault, FaultBody, MtuParams, Overlay, OverlayRequest, Protocol, Scope, TunnelRef } from '../api/generated/model';
 import { completeSetupBodyConfigurationOneNetworksOneNameRegExp as nameRegExp } from '../api/generated/zod/system/system';
 import { gatewayNow } from './clock';
@@ -24,15 +24,16 @@ import {
 } from './netemForm';
 import { describeDestination, formatPorts } from './rules';
 import { remoteCidrError } from './scopes';
+import { emptyTime, timeBody, timeEffect, timeErrors, timeFieldOf, timeScope, timeToForm, type TimeField, type TimeForm } from './timeForm';
 import { emptyTls, tlsBody, tlsEffect, tlsErrors, tlsFieldOf, tlsScope, tlsToForm, type TlsField, type TlsForm } from './tlsForm';
 import { destinationOf, trafficErrors, trafficMatch, type DestKind } from './trafficForm';
 
 export { parseRate, presets, rateText, type Direction } from './netemForm';
 
-/** The kinds of the dialog: the three families of a fault body, and the DNS fault and the TLS case, which are overlays of their own kinds. */
-export type FaultFamily = 'impairment' | 'mtu' | 'tunnel' | 'dns' | 'tls';
-/** The kinds of the dialog that are overlays only: the API has no configured DNS fault or TLS case. */
-export const overlayOnlyFamilies: readonly FaultFamily[] = ['dns', 'tls'];
+/** The kinds of the dialog: the three families of a fault body, and the DNS fault, the TLS case and the time fault, which are overlays of their own kinds. */
+export type FaultFamily = 'impairment' | 'mtu' | 'tunnel' | 'dns' | 'tls' | 'time';
+/** The kinds of the dialog that are overlays only: the API has no configured DNS fault, TLS case or time fault. */
+export const overlayOnlyFamilies: readonly FaultFamily[] = ['dns', 'tls', 'time'];
 export type MtuMode = NonNullable<MtuParams['mode']>;
 export type { DestKind } from './trafficForm';
 
@@ -60,9 +61,10 @@ export interface FaultForm extends ImpairmentForm {
   keepTtl: string;
   /** the name of a configured fault */
   name: string;
-  /** a DNS fault's action, names and what the action needs; a TLS case's case, selection and settings */
+  /** a DNS fault's action, names and what the action needs; a TLS case's case, selection and settings; a time fault's answer, time and server */
   dns: DnsForm;
   tls: TlsForm;
+  time: TimeForm;
 }
 
 export interface TrafficPreset {
@@ -80,7 +82,7 @@ export const trafficPresets: Record<string, TrafficPreset> = {
   dns: { label: 'DNS · UDP 53', protocol: 'udp', ports: [53] },
 };
 
-export const familyLabels: Record<FaultFamily, string> = { impairment: 'Impairment', mtu: 'MTU / PMTUD', tunnel: 'Tunnel', dns: 'DNS', tls: 'TLS' };
+export const familyLabels: Record<FaultFamily, string> = { impairment: 'Impairment', mtu: 'MTU / PMTUD', tunnel: 'Tunnel', dns: 'DNS', tls: 'TLS', time: 'Time (NTP)' };
 
 export const mtuModes: { value: MtuMode; label: string; hint: string }[] = [
   { value: 'icmp', label: 'ICMP · fragmentation needed', hint: 'Larger packets are refused with "fragmentation needed": path MTU discovery works. The server caches the smaller path MTU for the shared NAT address (about 10 min), which reaches other devices talking to it.' },
@@ -115,6 +117,7 @@ export function emptyForm(target = 'global'): FaultForm {
     name: '',
     dns: emptyDns(),
     tls: emptyTls(),
+    time: emptyTime(),
   };
 }
 
@@ -213,13 +216,14 @@ export function tunnelValue(t: TunnelRef | undefined): string {
 }
 
 /** A problem of the form: a parameter (`download.<field>` of the download set), or a field of the fault. */
-export type FaultField = ImpairmentField | DnsField | TlsField | 'ports' | 'destination' | 'name' | 'target' | 'tunnel' | 'mtuSize' | 'mtuMode' | 'duration';
+export type FaultField = ImpairmentField | DnsField | TlsField | TimeField | 'ports' | 'destination' | 'name' | 'target' | 'tunnel' | 'mtuSize' | 'mtuMode' | 'duration';
 
 /** The problems of the form, by field; empty when it can be applied. */
 export function faultFormErrors(f: FaultForm, layer: 'overlay' | 'config' = 'overlay'): Partial<Record<FaultField, string>> {
   const e: Partial<Record<FaultField, string>> = {};
   if (f.family === 'dns') Object.assign(e, dnsErrors(f.dns));
   else if (f.family === 'tls') Object.assign(e, tlsErrors(f.tls));
+  else if (f.family === 'time') Object.assign(e, timeErrors(f.time));
   else if (f.family === 'mtu') {
     const size = Number(f.mtuSize);
     if (!f.mtuSize.trim() || !Number.isInteger(size) || size < 552 || size > 1500) e.mtuSize = 'A packet size from 552 to 1500 bytes.';
@@ -236,9 +240,15 @@ export function faultFormErrors(f: FaultForm, layer: 'overlay' | 'config' = 'ove
     if (!f.target) e.target = 'Choose a target.';
     const remote = remoteCidrError(f.target);
     if (remote) e.target = remote;
+    // the NTP server tells a client's scope from its address: a device, a group or a network (a global or remote scope has no address to tell it by)
+    else if (f.target && f.family === 'time' && !timeTargetOk(f.target)) e.target = timeTargetMessage;
   }
   return e;
 }
+
+/** The scopes a time fault can be aimed at (`target_kind`): a device, a group or a network. */
+export const timeTargetOk = (target: string): boolean => /^(device|group|network):./.test(target);
+export const timeTargetMessage = 'A time fault targets a device, a group or a network, not everything or a remote network.';
 
 /** The selector of the traffic: protocol, ports and destination. */
 function match(f: FaultForm): Pick<FaultBody, 'protocol' | 'ports' | 'port_ranges' | 'destination'> {
@@ -258,7 +268,8 @@ export function formToFault(f: FaultForm): FaultBody {
   switch (f.family) {
     case 'dns':
     case 'tls':
-      // a DNS fault and a TLS case are no fault body: `formToOverlay` makes their own parts
+    case 'time':
+      // a DNS fault, a TLS case and a time fault are no fault body: `formToOverlay` makes their own parts
       return {};
     case 'mtu':
       return { family: 'mtu', ...match(f), mtu: mtuOf(f.mtuSize, f.mtuMode) };
@@ -277,7 +288,7 @@ export function formToFault(f: FaultForm): FaultBody {
 export function formToOverlay(f: FaultForm, now: Date = gatewayNow()): OverlayRequest {
   const base: OverlayRequest = {
     ...(f.family === 'tunnel' ? {} : { target: scopeOf(f.target) }),
-    ...(f.family === 'dns' ? { dns: dnsBody(f.dns) } : f.family === 'tls' ? { tls: tlsBody(f.tls) } : { fault: formToFault(f) }),
+    ...(f.family === 'dns' ? { dns: dnsBody(f.dns) } : f.family === 'tls' ? { tls: tlsBody(f.tls) } : f.family === 'time' ? { time: timeBody(f.time) } : { fault: formToFault(f) }),
   };
   return { ...base, ...lifetimeOf(f, now) };
 }
@@ -363,7 +374,7 @@ function withLifetime(f: FaultForm, extra: { ttl?: string; expiresAt?: string; n
   return f;
 }
 
-/** The form of an overlay the dialog edits: a fault, a DNS fault or a TLS case. */
+/** The form of an overlay the dialog edits: a fault, a DNS fault, a TLS case or a time fault. */
 export function overlayToForm(o: Overlay): FaultForm {
   const extra = { ttl: o.ttl, expiresAt: o.expires_at };
   const f = faultToForm(o.kind === 'fault' ? o.fault : undefined, o.target, extra);
@@ -374,6 +385,10 @@ export function overlayToForm(o: Overlay): FaultForm {
   if (o.kind === 'tls') {
     f.family = 'tls';
     f.tls = tlsToForm(o.tls);
+  }
+  if (o.kind === 'time') {
+    f.family = 'time';
+    f.time = timeToForm(o.time);
   }
   return f;
 }
@@ -403,6 +418,10 @@ export function previewSentence(f: FaultForm, targetName: string, layer: 'overla
     const to = f.tls.traffic.destKind === 'any' ? '' : `to ${describeDestination(destinationOf(f.tls.traffic), names)}`;
     return `${targetName} · ${tlsScope(f.tls, to)} → ${tlsEffect(f.tls.case, f.tls.case === 'intercept' ? f.tls.intercept.rules.length : 0)} · ${until}`;
   }
+  if (f.family === 'time') {
+    const t = timeBody(f.time);
+    return `${targetName} · ${timeScope(f.time)} → ${timeEffect(t)} · ${until}`;
+  }
   if (f.family === 'mtu') return `${targetName} · ${traffic} → packets above ${f.mtuSize} bytes: ${mode} · ${until}`;
   if (f.family === 'tunnel') return `${targetName} · ${directionText[f.direction]} → ${chips.join(', ')} · ${until}`;
   return `${targetName} · ${traffic} · ${directionText[f.direction]} → ${chips.join(', ')} · ${until}`;
@@ -419,6 +438,7 @@ export function fieldOf(path: string | undefined, each = false): FaultField | un
   // the parts of a DNS fault and a TLS case: "/dns/delay", "/tls/ports/0", "/tls/sni/1"
   if (/^\/dns(\/|$)/.test(p)) return dnsFieldOf(p.slice(4));
   if (/^\/tls(\/|$)/.test(p)) return tlsFieldOf(p.slice(4));
+  if (/^\/time(\/|$)/.test(p)) return timeFieldOf(p.slice(5));
   // a remote network's prefix is the target's, not the destination's ("/target/remote_network/cidr")
   if (/\/remote_network(\/|$)/.test(p)) return 'target';
   if (/\/destination(\/|$)/.test(p)) return 'destination';

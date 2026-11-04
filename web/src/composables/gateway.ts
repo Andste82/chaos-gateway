@@ -444,7 +444,7 @@ export interface ActiveFault {
 }
 
 // overlay kinds that impair traffic; access rules are not faults (plan §2.4, D25)
-const faultKinds = new Set(['fault', 'profile', 'dns', 'tls', 'dhcp', 'wireguard']);
+const faultKinds = new Set(['fault', 'profile', 'dns', 'tls', 'time', 'dhcp', 'wireguard']);
 
 /** The faults that act now: impairing overlays and the enabled configured faults, overlays first. */
 export function useActiveFaults() {

@@ -13,6 +13,7 @@ port 8883. Replace them with yours.
 - [A slow, lossy mobile link during a firmware update](#a-slow-lossy-mobile-link-during-a-firmware-update)
 - [The broker's name stops resolving](#the-brokers-name-stops-resolving)
 - [A device that must reject a bad certificate](#a-device-that-must-reject-a-bad-certificate)
+- [A device whose clock is wrong](#a-device-whose-clock-is-wrong)
 - [DHCP: a short lease and a new address](#dhcp-a-short-lease-and-a-new-address)
 - [Connectivity that comes and goes](#connectivity-that-comes-and-goes)
 - [Keep the packets of a failing run](#keep-the-packets-of-a-failing-run)
@@ -230,6 +231,69 @@ A case selects new connections; `--cut-existing` resets the open ones. The first
 can judge says so in its note (`trusts_test_ca` of the device). Interception, where the gateway decrypts the traffic of a device
 that trusts its CA and changes the HTTP exchanges, is the case `intercept` (`chaosctl intercept set`); it is an optional part of the
 gateway and is described in the [user guide](user-guide.md#tls-cases-and-interception).
+
+## A device whose clock is wrong
+
+Devices take their time from NTP, and a wrong time breaks them in ways that are hard to see: a certificate that is not valid yet, a token that
+has already expired, a schedule that fires twice. The gateway's NTP server answers the device's queries instead of the real server
+(`offset`, `absolute`, `skew`, `leap`, `unsynchronized`, `kiss-of-death`, `silence` and invalid answers), and the eight presets
+(`time-plus-1y`, `time-minus-1d`, `time-1970`, `time-2038`, `time-ntp-era-1`, `time-leap-second`, `time-unsynchronized`, `time-kiss-of-death`)
+are built-in profiles. A fault for one device does not touch the device next to it, and the NTP traffic of its target is redirected to the
+server even when the device has a hardcoded server (an NTS client is the exception: it gets no time from the gateway).
+
+```sh run
+chaosctl time set offset --offset +400d --device esp32-42 --ttl 10m
+chaosctl time set kiss-of-death --kiss-code RATE --network IoT --to time.example.org --ttl 10m
+chaosctl overlay list --json | jq -r 'map(.kind) | sort | join(",")'
+```
+
+```text output
+time,time
+```
+
+The served time **jumps** when a fault starts and jumps back when it ends, and the device sees either only when it polls next, which may be
+hours away for a device that asks once an hour. Do not sleep: `chaosctl wait ntp` returns at the next query of the device (exit `0`, `1`
+when the time runs out), so a test sets the fault, waits for the query, and then looks at what the device did with the wrong time:
+
+```sh run exit=1
+chaosctl time set absolute --absolute 1970-01-01T00:00:00Z --device esp32-42 --ttl 10m
+chaosctl wait ntp esp32-42 --timeout 2s
+```
+
+```text output
+time absolute set on device esp32-42: overlay …, removed at …
+chaosctl: timed out after 2s: the device did not ask the gateway's NTP server …
+```
+
+The simulated gateway of the examples carries no traffic, so the device never asks and the wait runs out. On a real gateway the
+Time panel of the device page shows the same: the last query, the server the device asked, the time served and its offset from the
+correct time, and `GET /devices/esp32-42/ntp` has it for a script.
+
+The same as a scenario. It lets the device ask once, serves a clock 400 days ahead, waits for the next query, and takes the fault away again. The
+check passes when the device asked the server inside its window (whether the device took the time is not visible on the network: add a
+check on its effect, such as `tls_rejected` for a broker whose certificate the shifted clock makes invalid):
+
+```yaml schema=Scenario
+name: stale-clock
+target: {device: esp32-42}
+zero_hit: error
+steps:
+  - {id: ntp-up, at: 0s, wait: {for: ntp_query_seen, timeout: 10m}}
+  - {id: ahead,  at: 5s, time: {offset: +400d}}
+  - {id: polled, at: 10s, wait: {for: ntp_query_seen, timeout: 10m}}
+  - {id: back,   at: 20s, remove: ahead}
+checks:
+  - name: the device asks again with the wrong clock in force
+    ntp_queried: {}
+    window: {from: ahead, until: back}
+```
+
+`zero_hit: error` makes the run fail when the time fault shaped no answer: the device does not ask the gateway (DHCP gives it the
+gateway as NTP server unless the network names others, and a time fault redirects the queries of a hardcoded server by itself), or it uses
+NTS. To test only one server ("`time.google.com` is wrong, the fallback is right"), name it with `--to`; the gateway gives each such
+server a port of its own, up to 32 per gateway. A delayed or one-way slow NTP path is not a time fault but a latency fault on UDP
+port 123 with a delay in one direction only (the `upload` set of a fault, in the web app or the API), which shifts the offset a client
+measures by half of the difference between the two directions.
 
 ## DHCP: a short lease and a new address
 

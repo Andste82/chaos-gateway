@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -65,5 +67,35 @@ func TestEveryBuiltinProfileHasTheVersion5UUIDOfItsName(t *testing.T) {
 		if b.ID != want {
 			t.Errorf("%s: id %s, want %s", b.Profile.Name, b.ID, want)
 		}
+	}
+}
+
+// The time parts of the built-in time profiles, as a file the web app's tests read (web/src/lib/timeForm.test.ts compares them with
+// its presets): the eight faults of the preset buttons are the built-in profiles, and neither side can change without the other.
+// Run with UPDATE_GOLDEN=1 to write the file after a deliberate change.
+func TestTheBuiltInTimeProfilesAreTheFileTheWebAppReads(t *testing.T) {
+	parts := map[string]model.TimeFault{}
+	for _, p := range BuiltinProfiles() {
+		if p.Profile.Parts.Time != nil {
+			parts[p.Profile.Name] = *p.Profile.Parts.Time
+		}
+	}
+	got, err := json.MarshalIndent(parts, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = append(got, '\n')
+	const file = "testdata/builtin_time_profiles.json"
+	if os.Getenv("UPDATE_GOLDEN") != "" {
+		if err := os.WriteFile(file, got, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("the built-in time profiles differ from %s (UPDATE_GOLDEN=1 writes it, and web/src/lib/timeForm.ts must follow):\n%s", file, got)
 	}
 }

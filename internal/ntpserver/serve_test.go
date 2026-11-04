@@ -179,6 +179,17 @@ func TestTheBasePortIsFatalWhenItCannotBeOpened(t *testing.T) {
 
 // The receive timestamp comes from the kernel (SO_TIMESTAMPNS) where the socket has it switched on.
 func TestTheKernelStampsTheReceiveTime(t *testing.T) {
+	// qemu-user (the arm64 unit tests) does not know the option: there the listener serves without it (timestampsUnavailable), and
+	// the property belongs to the real kernel, which the amd64 runs and the level 1 tests have
+	probe, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	perr := EnableKernelTimestamps(probe)
+	_ = probe.Close()
+	if timestampsUnavailable(perr) {
+		t.Skip("the environment does not know SO_TIMESTAMPNS (ENOPROTOOPT), as qemu-user: " + perr.Error())
+	}
 	pc, err := ListenUDP("127.0.0.1")(0)
 	if err != nil {
 		t.Fatal(err)

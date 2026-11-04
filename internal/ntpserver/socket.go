@@ -1,9 +1,11 @@
 package ntpserver
 
 import (
+	"errors"
 	"net"
 	"net/netip"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -35,10 +37,19 @@ func ListenUDP(host string) ListenFunc {
 		if err != nil {
 			return nil, err
 		}
-		if err := EnableKernelTimestamps(pc); err != nil {
+		if err := EnableKernelTimestamps(pc); err != nil && !timestampsUnavailable(err) {
 			_ = pc.Close()
 			return nil, err
 		}
 		return pc, nil
 	}
+}
+
+// timestampsUnavailable reports whether err says that the environment does not know the kernel's receive time stamps at all
+// (ENOPROTOOPT: an emulation such as qemu-user, which the arm64 unit tests run under, or a kernel built without them). That is
+// no reason to stop serving: readPacket then returns the zero time and the server stamps the datagram with its own clock, which
+// is the documented fallback, a little less exact because the time a datagram waited for the server to be scheduled is in it.
+// Every other error (a closed socket, no permission) still stops the listener.
+func timestampsUnavailable(err error) bool {
+	return errors.Is(err, syscall.ENOPROTOOPT)
 }

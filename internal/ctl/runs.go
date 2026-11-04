@@ -609,7 +609,7 @@ func (a *app) abortCmd() *cobra.Command {
 }
 
 func (a *app) waitCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "wait", Short: "Wait for a device or a run"}
+	cmd := &cobra.Command{Use: "wait", Short: "Wait for a device, its NTP query or a run"}
 	var o awaitOptions
 	runWait := &cobra.Command{
 		Use:   "run <run>",
@@ -643,6 +643,6 @@ interrupt or --timeout; it only stops waiting (exit 2).`,
 	runWait.Flags().DurationVar(&o.timeout, "timeout", 0, "stop waiting after this time (exit 2); 0: wait for the end")
 	runWait.Flags().StringVar(&o.junit, "junit", "", "write the JUnit report to this file")
 	runWait.Flags().StringVar(&o.artifacts, "artifacts", "", "write the reports, the events and the captures of the run into this directory")
-	cmd.AddCommand(a.waitDeviceCmd(), runWait)
+	cmd.AddCommand(a.waitDeviceCmd(), a.waitNTPCmd(), runWait)
 	return cmd
 }

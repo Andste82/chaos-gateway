@@ -11,6 +11,14 @@ const titles: Record<string, string> = {
   intermittent: 'Intermittent',
   'dns-broken': 'DNS broken',
   'tls-broken': 'TLS broken',
+  'time-plus-1y': 'Time +1 year',
+  'time-minus-1d': 'Time -1 day',
+  'time-1970': 'Time 1970',
+  'time-2038': 'Time 2038',
+  'time-ntp-era-1': 'Time NTP era 1',
+  'time-leap-second': 'Time leap second',
+  'time-unsynchronized': 'Time unsynchronized',
+  'time-kiss-of-death': 'Time kiss-of-death',
 };
 
 /** The names of the built-in profiles: reserved, a custom profile cannot have one (case-insensitive). */

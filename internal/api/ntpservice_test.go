@@ -713,3 +713,51 @@ func TestManyNewClientsCauseOneReadOfTheFlowsAndAForeignAddressNone(t *testing.T
 		t.Errorf("after the interval the table is read again: %v", s)
 	}
 }
+
+// The runs read the log through the observer: oldest first by the time of the query, whatever the order of arrival (a batch of the
+// server arrives late); the answer, the fault, the offset and the server asked are carried over; a query over the rate limit, a
+// connection to the key-establishment port and a client no device owns are not queries of a device.
+func TestTheObserverOfTheRunsReadsTheQueriesOldestFirstAndLeavesOutWhatIsNoQuery(t *testing.T) {
+	g, _ := tlsGateway(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	fault := "0194f4f0-0000-7000-8000-0000000000aa"
+	g.mustPostNTP(
+		ntpEntry("10.10.0.31", 123, now.Add(2*time.Second), map[string]any{"answer": "normal", "fault": fault, "offset_ms": -86400000, "server": "203.0.113.7:123"}),
+		ntpEntry("10.10.0.31", 123, now.Add(time.Second), map[string]any{"answer": "silence"}),
+		ntpEntry("10.10.0.31", 123, now.Add(3*time.Second), map[string]any{"answer": "dropped"}),
+		ntpEntry("10.10.0.31", 4460, now.Add(4*time.Second), map[string]any{"kind": "nts_ke"}),
+		ntpEntry("10.10.0.99", 123, now.Add(5*time.Second), map[string]any{"answer": "normal"}),
+		ntpEntry("10.10.0.32", 123, now.Add(6*time.Second), map[string]any{"answer": "normal"}),
+	)
+	qs := g.srv.NTPObserverQueries([]string{espID}, now)
+	if len(qs) != 2 {
+		t.Fatalf("%d queries, want the two of the device that are queries: %+v", len(qs), qs)
+	}
+	if !qs[0].Time.Equal(now.Add(time.Second)) || qs[0].Answer != "silence" || qs[0].Fault != "" || qs[0].Server != "" || qs[0].OffsetMs != nil || qs[0].Device != espID {
+		t.Errorf("the oldest is the one that arrived second: %+v", qs[0])
+	}
+	if !qs[1].Time.Equal(now.Add(2*time.Second)) || qs[1].Answer != "normal" || qs[1].Fault != fault || qs[1].Server != "203.0.113.7:123" || qs[1].OffsetMs == nil || *qs[1].OffsetMs != -86400000 {
+		t.Errorf("the carried fields: %+v", qs[1])
+	}
+	if got := g.srv.NTPQueriesOf([]string{espID}, now); len(got) != 2 || !got[0].Time.Before(got[1].Time) {
+		t.Errorf("oldest first: %+v", got)
+	}
+	if len(g.srv.NTPObserverQueries([]string{espID}, now.Add(1500*time.Millisecond))) != 1 || len(g.srv.NTPObserverQueries([]string{espID, espTrustID}, now)) != 3 {
+		t.Error("since and several devices")
+	}
+}
+
+// A client no device owns has counters but no history, so a flood of source addresses costs no memory beyond the state of each.
+func TestAClientNoDeviceOwnsKeepsNoRecentQueries(t *testing.T) {
+	g, _ := tlsGateway(t)
+	now := time.Now().UTC()
+	var entries []map[string]any
+	entries = append(entries, ntpEntry("10.10.0.31", 123, now, nil))
+	for i := 1; i <= 300; i++ {
+		entries = append(entries, ntpEntry(fmt.Sprintf("10.20.%d.%d", i/200, i%200+1), 123, now, nil))
+	}
+	g.mustPostNTP(entries...)
+	if states, recent := g.srv.NTPRetained(); states != 301 || recent != 1 {
+		t.Errorf("%d states and %d recent entries, want 301 and the one of the device", states, recent)
+	}
+}

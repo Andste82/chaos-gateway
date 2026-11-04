@@ -9,6 +9,7 @@ import (
 
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/model"
+	"github.com/Andste82/chaos-gateway/internal/run"
 )
 
 // SafeModeHolds are the ids of the operations that safe mode refuses (plan §3.9).
@@ -134,4 +135,20 @@ func (s *Server) NTPQueriesOf(devices []string, since time.Time) []model.NtpQuer
 		out = append(out, l.e)
 	}
 	return out
+}
+
+// NTPObserverQueries is what the runs read of the NTP log through the observer interface (run.Observer.NTPQueries).
+func (s *Server) NTPObserverQueries(devices []string, since time.Time) []run.NTPQuery {
+	return runObserver{s}.NTPQueries(devices, since)
+}
+
+// NTPRetained counts the per-device states the API keeps and the entries of their rings.
+func (s *Server) NTPRetained() (states, recent int) {
+	s.ntp.logMu.Lock()
+	defer s.ntp.logMu.Unlock()
+	for _, d := range s.ntp.devices {
+		states++
+		recent += len(d.recent)
+	}
+	return states, recent
 }

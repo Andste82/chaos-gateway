@@ -49,6 +49,10 @@ const ntpFlowsEvery = time.Second
 // whose destination no fault names and the observed flows do not settle (decision D36).
 const ntpServerUnknown = "an external server (redirected)"
 
+// ntpRecentPerDevice is how many entries of its own log the API keeps for each device (GET /devices/{id}/ntp): a device that
+// polls once an hour keeps its history when another one polls every second and pushes it out of the shared log.
+const ntpRecentPerDevice = 50
+
 // ntpMaxDevices bounds the per-device state and the maps of the event limits: each is cleaned of what is old when it is full.
 const ntpMaxDevices = 8192
 
@@ -121,6 +125,28 @@ type ntpDevice struct {
 	LastOffsetMs *int64
 	LastFault    string
 	LastServer   string
+	// recent is the device's newest log entries, at most ntpRecentPerDevice (the entries over the rate limit and the NTS
+	// connections included: they are what the device did). It is a ring once it is full: next is the place of the oldest
+	// entry, which the next one replaces, so a busy device costs no copy per query.
+	recent []model.NtpQueryLogEntry
+	next   int
+}
+
+// addRecent keeps an entry in the device's ring.
+func (d *ntpDevice) addRecent(e model.NtpQueryLogEntry) {
+	if len(d.recent) < ntpRecentPerDevice {
+		d.recent = append(d.recent, e)
+		return
+	}
+	d.recent[d.next] = e
+	d.next = (d.next + 1) % ntpRecentPerDevice
+}
+
+// recentOldestFirst returns a copy of the ring in the order of arrival.
+func (d *ntpDevice) recentOldestFirst() []model.NtpQueryLogEntry {
+	out := make([]model.NtpQueryLogEntry, 0, len(d.recent))
+	out = append(out, d.recent[d.next:]...)
+	return append(out, d.recent[:d.next]...)
 }
 
 // ntpLastPoll is when the NTP server last asked for its configuration, zero before the first poll.
@@ -344,6 +370,9 @@ func (s *Server) noteNTP(snap *engine.Snapshot, l *loggedNTP, now time.Time) []n
 		key = l.client.String()
 	}
 	d := s.ntpDeviceOf(key, now)
+	if l.device != "" { // a client no device owns has counters but no history: a flood of source addresses must not cost memory
+		d.addRecent(e)
+	}
 	if isNTSKE(e) {
 		d.NTSKE++
 		if s.ntp.nts[key] {
@@ -548,6 +577,7 @@ func (s *Server) ntpDeviceState(device string) (ntpDevice, bool) {
 		return ntpDevice{}, false
 	}
 	out := *d
+	out.recent, out.next = d.recentOldestFirst(), 0
 	out.Answers = make(map[string]int64, len(d.Answers))
 	for k, v := range d.Answers {
 		out.Answers[k] = v

@@ -899,7 +899,7 @@ func TestAnNTSKeyEstablishmentConnectionIsRefusedAndReportedForTheDeviceOnTheRea
 
 // M34 level 1: a scenario with a time step runs on the real clock and the real kernel: the step shifts the served time of its target
 // while the run lasts, the run's end takes the overlay out, and the time is the host's again. (The wait NTP query seen and the
-// check NTP queried come with the runner of stage 3 of M34, and their tests with it.)
+// check NTP queried have the test below.)
 func TestAScenarioWithATimeStepShiftsTheServedTimeUntilTheRunEndsOnTheRealKernel(t *testing.T) {
 	b := newNTPBed(t)
 	g, a := b.g, b.top.A
@@ -925,6 +925,61 @@ func TestAScenarioWithATimeStepShiftsTheServedTimeUntilTheRunEndsOnTheRealKernel
 		t.Errorf("%d overlays are left after the run", n)
 	}
 	b.until(t, "the host's time after the run", a, ntpGateway, func(r sntpReply) bool { return r.correct(clockTolerance()) })
+}
+
+// M34 level 1: a scenario with a time step, the wait NTP query seen and the check NTP queried, on the real clock and the real
+// kernel. A client of the test network asks the gateway's server while the run waits; the query goes through the redirect to the
+// server, which answers with the fault of the step and reports it to the API, and the wait ends at it. The check passes on the same
+// query with the answer in its evidence, and the fault, which shaped the answer, is no zero hit.
+func TestAScenarioWithATimeStepAWaitForTheQueryAndTheCheckSeesTheQueryOfARealClientOnTheRealKernel(t *testing.T) {
+	b := newNTPBed(t)
+	g, a := b.g, b.top.A
+	g.mintToken("overlays")
+	body := inlineRun("time-wait", iotTarget,
+		step("shift", "0s", "time", map[string]any{"offset": "+400d"}),
+		step("polled", "1s", "wait", map[string]any{"for": "ntp_query_seen", "timeout": "90s"}),
+		step("end", "3s", "restore", true),
+	)
+	body["inline"].(map[string]any)["checks"] = []any{
+		map[string]any{"ntp_queried": map[string]any{}, "window": map[string]any{"from": "shift", "until": "end"}},
+	}
+	r := g.postRun(body, "")
+	if r.Status != 201 {
+		t.Fatalf("%d %s", r.Status, r.Body)
+	}
+	id := r.json(t)["id"].(string)
+	overlay := g.waitStep(id, "shift", "applied")["overlay"].(string)
+
+	// the client polls until the wait has ended; its first query after the step is the one the wait takes
+	var last sntpReply
+	waitFor(t, 90*time.Second, "the wait for the NTP query ends", func() bool {
+		last = b.ask(t, a, ntpGateway, "--timeout", "1.5")
+		return stepOf(g.run(id), "polled")["status"] == "applied"
+	})
+	if !last.Replied {
+		t.Logf("the last query was not answered: %+v", last)
+	}
+	done := g.waitRun(id, "passed")
+
+	c := done["checks"].([]any)[0].(map[string]any)
+	if c["status"] != "passed" || c["type"] != "ntp_queried" || !strings.Contains(c["message"].(string), "a device asked the NTP server for the time") {
+		t.Fatalf("the check: %v", c)
+	}
+	ev, _ := c["evidence"].([]any)
+	if len(ev) != 1 {
+		t.Fatalf("the evidence: %v", c["evidence"])
+	}
+	e := ev[0].(map[string]any)
+	off, _ := e["offset_ms"].(float64)
+	if e["kind"] != "ntp_query" || e["device"] != espID || e["fault"] != overlay || e["answer"] != "normal" || math.Abs(off-float64(fault400d.Milliseconds())) > 60000 {
+		t.Errorf("the query in the evidence is not the one the fault of the step answered: %v", e)
+	}
+	if ws := warningCodes(done); len(ws) != 0 {
+		t.Errorf("warnings %v: the fault shaped the queries of the client", done["warnings"])
+	}
+	if n := len(g.overlaysOf(id)); n != 0 {
+		t.Errorf("%d overlays are left after the run", n)
+	}
 }
 
 // M34 acceptance (plan §3.10): the server answers 5,000 queries per second and adds less than a millisecond to an answer. The

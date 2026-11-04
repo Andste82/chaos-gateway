@@ -444,6 +444,42 @@ func (e DestinationUplink) Valid() bool {
 	}
 }
 
+// Defines values for DeviceNtpLastQueryAnswer.
+const (
+	DeviceNtpLastQueryAnswerDropped        DeviceNtpLastQueryAnswer = "dropped"
+	DeviceNtpLastQueryAnswerKissOfDeath    DeviceNtpLastQueryAnswer = "kiss_of_death"
+	DeviceNtpLastQueryAnswerNormal         DeviceNtpLastQueryAnswer = "normal"
+	DeviceNtpLastQueryAnswerOriginMismatch DeviceNtpLastQueryAnswer = "origin_mismatch"
+	DeviceNtpLastQueryAnswerSilence        DeviceNtpLastQueryAnswer = "silence"
+	DeviceNtpLastQueryAnswerUnsynchronized DeviceNtpLastQueryAnswer = "unsynchronized"
+	DeviceNtpLastQueryAnswerWrongMode      DeviceNtpLastQueryAnswer = "wrong_mode"
+	DeviceNtpLastQueryAnswerZeroTransmit   DeviceNtpLastQueryAnswer = "zero_transmit"
+)
+
+// Valid indicates whether the value is a known member of the DeviceNtpLastQueryAnswer enum.
+func (e DeviceNtpLastQueryAnswer) Valid() bool {
+	switch e {
+	case DeviceNtpLastQueryAnswerDropped:
+		return true
+	case DeviceNtpLastQueryAnswerKissOfDeath:
+		return true
+	case DeviceNtpLastQueryAnswerNormal:
+		return true
+	case DeviceNtpLastQueryAnswerOriginMismatch:
+		return true
+	case DeviceNtpLastQueryAnswerSilence:
+		return true
+	case DeviceNtpLastQueryAnswerUnsynchronized:
+		return true
+	case DeviceNtpLastQueryAnswerWrongMode:
+		return true
+	case DeviceNtpLastQueryAnswerZeroTransmit:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeviceObservedSources.
 const (
 	DeviceObservedSourcesConfig    DeviceObservedSources = "config"
@@ -4022,6 +4058,53 @@ type DeviceIdentifiers struct {
 	Macs *[]MacAddress `json:"macs,omitempty"`
 }
 
+// DeviceNtp defines model for DeviceNtp.
+type DeviceNtp struct {
+	// Answers How many answers each time fault shaped.
+	Answers []struct {
+		Count int64 `json:"count"`
+		Fault Uuid  `json:"fault"`
+	} `json:"answers"`
+	Device Uuid `json:"device"`
+
+	// Dropped The queries over the device's rate limit that the server did not answer.
+	Dropped int64 `json:"dropped"`
+
+	// LastQuery The last query of the device that was answered or deliberately not (the *Time* panel of the device detail).
+	LastQuery *DeviceNtpLastQuery `json:"last_query,omitempty"`
+
+	// NtsKe The connections to the NTS key-establishment port (TCP 4460), or queries with NTS extension fields, that the server cannot answer.
+	NtsKe int64 `json:"nts_ke"`
+
+	// Queries The client queries of the device, answered or silenced; queries over the rate limit (`dropped`) and NTS key-establishment connections (`nts_ke`) are not in it.
+	Queries int64 `json:"queries"`
+
+	// Recent The newest entries of the device's log, newest first.
+	Recent []NtpQueryLogEntry `json:"recent"`
+
+	// Silenced The queries a `silence` fault left unanswered (they are in `queries`).
+	Silenced int64 `json:"silenced"`
+}
+
+// DeviceNtpLastQuery The last query of the device that was answered or deliberately not (the *Time* panel of the device detail).
+type DeviceNtpLastQuery struct {
+	Answer *DeviceNtpLastQueryAnswer `json:"answer,omitempty"`
+
+	// Fault The time fault overlay that shaped the answer.
+	Fault *Uuid `json:"fault,omitempty"`
+
+	// OffsetMs The served time minus the correct time, in milliseconds.
+	OffsetMs   *int64     `json:"offset_ms,omitempty"`
+	ServedTime *time.Time `json:"served_time,omitempty"`
+
+	// Server The server the device asked (`ip:port`), or `an external server (redirected)` where nothing says which it was (decision D36).
+	Server string    `json:"server"`
+	Time   time.Time `json:"time"`
+}
+
+// DeviceNtpLastQueryAnswer defines model for DeviceNtpLastQuery.Answer.
+type DeviceNtpLastQueryAnswer string
+
 // DeviceObserved defines model for DeviceObserved.
 type DeviceObserved struct {
 	Addresses *[]Ipv4 `json:"addresses,omitempty"`
@@ -5729,6 +5812,15 @@ type NtpQueryLogEntryAnswer string
 // NtpQueryLogEntryKind `nts_ke` - a connection to the server's NTS key-establishment port (TCP 4460), or a query with NTS extension fields on a UDP port, that the server cannot answer (plan §2.18); `port` is the port it arrived on, and the fields below are absent.
 type NtpQueryLogEntryKind string
 
+// NtpQueryPage defines model for NtpQueryPage.
+type NtpQueryPage struct {
+	Items      []NtpQueryLogEntry `json:"items"`
+	NextCursor *string            `json:"next_cursor,omitempty"`
+
+	// Now The gateway's own time when it answered, to the nanosecond (the `Date` header has a resolution of a second). A client that waits for the next query starts at it, on the clock the entries are stamped with.
+	Now time.Time `json:"now"`
+}
+
 // NtpServiceConfig defines model for NtpServiceConfig.
 type NtpServiceConfig struct {
 	// Faults Resolved time faults, the precedence of §2.4 already applied per group of sources and per redirect port: for a
@@ -6821,7 +6913,7 @@ type ProfileView struct {
 	// Decided by the maintainer on 2026-10-11.
 	Available bool `json:"available"`
 
-	// Builtin Built-in profiles have fixed UUIDs and reserved names (`normal`, `lte`, `bad-lte`, `satellite`, `congested-wifi`, `offline`, `intermittent`, `dns-broken`, `tls-broken`).
+	// Builtin Built-in profiles have fixed UUIDs and reserved names (`normal`, `lte`, `bad-lte`, `satellite`, `congested-wifi`, `offline`, `intermittent`, `dns-broken`, `tls-broken`, and the presets of the time family `time-plus-1y`, `time-minus-1d`, `time-1970`, `time-2038`, `time-ntp-era-1`, `time-leap-second`, `time-unsynchronized`, `time-kiss-of-death`).
 	Builtin bool `json:"builtin"`
 
 	// Config A named bundle across families (plan §2.9). Each part competes in its own family when the profile is activated (overlay).
@@ -8472,6 +8564,14 @@ type ExportWireGuardNetworkParamsFormat string
 type ListLeasesParams struct {
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListNtpQueriesParams defines parameters for ListNtpQueries.
+type ListNtpQueriesParams struct {
+	Cursor *Cursor    `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *Limit     `form:"limit,omitempty" json:"limit,omitempty"`
+	Device *Ref       `form:"device,omitempty" json:"device,omitempty"`
+	Since  *time.Time `form:"since,omitempty" json:"since,omitempty"`
 }
 
 // ListOverlaysParams defines parameters for ListOverlays.

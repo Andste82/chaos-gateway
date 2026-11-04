@@ -2,6 +2,7 @@ package domain
 
 import (
 	"strings"
+	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/model"
 )
@@ -12,7 +13,7 @@ type BuiltinProfile struct {
 	ID      string
 	Profile model.Profile
 	// Milestone is the milestone from which the profile is usable; empty when it always is.
-	// "dns-broken" came with M20 and "tls-broken" with M21 (plan §2.9): none waits for a milestone now.
+	// "dns-broken" came with M20 and "tls-broken" with M21 (plan §2.9), the presets of the time family with M34 (plan §2.18): none waits for a milestone now.
 	Milestone string
 }
 
@@ -108,6 +109,70 @@ var builtinProfiles = []BuiltinProfile{
 				Protocol: ptr(model.Protocol("tcp")),
 				Ports:    &[]int{443, 8883},
 			}},
+		},
+	},
+	{
+		ID: "c1dab135-4a46-5b42-8f31-ac40cff25a7b",
+		Profile: model.Profile{
+			Name:        "time-plus-1y",
+			Description: ptr("The served time is one year ahead (a certificate that is not valid yet, a token from the future)"),
+			Parts:       model.ProfileParts{Time: &model.TimeFault{Offset: ptr(model.TimeOffset("+1y"))}},
+		},
+	},
+	{
+		ID: "0d6f4221-e214-5920-87b5-8b61736318ce",
+		Profile: model.Profile{
+			Name:        "time-minus-1d",
+			Description: ptr("The served time is one day behind (a certificate that has expired, a token that has not been issued yet)"),
+			Parts:       model.ProfileParts{Time: &model.TimeFault{Offset: ptr(model.TimeOffset("-1d"))}},
+		},
+	},
+	{
+		ID: "1a1ebde7-54eb-5d9f-b768-12fa8fc1df67",
+		Profile: model.Profile{
+			Name:        "time-1970",
+			Description: ptr("The served time is 1970-01-01 00:00:00 UTC (a device that lost its clock)"),
+			Parts:       model.ProfileParts{Time: &model.TimeFault{Absolute: ptr(time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC))}},
+		},
+	},
+	{
+		ID: "35e4fa1e-2dba-5356-8169-2ce5b7c65c62",
+		Profile: model.Profile{
+			Name:        "time-2038",
+			Description: ptr("The served time is 2038-01-19 03:09:07 UTC, five minutes before a signed 32-bit time_t overflows"),
+			Parts:       model.ProfileParts{Time: &model.TimeFault{Absolute: ptr(time.Date(2038, 1, 19, 3, 9, 7, 0, time.UTC))}},
+		},
+	},
+	{
+		ID: "13ccac50-8353-53f0-9c89-bb44be9021ca",
+		Profile: model.Profile{
+			Name:        "time-ntp-era-1",
+			Description: ptr("The served time is 2036-02-07 06:23:16 UTC, five minutes before the 32-bit seconds of NTP roll over into era 1"),
+			Parts:       model.ProfileParts{Time: &model.TimeFault{Absolute: ptr(time.Date(2036, 2, 7, 6, 23, 16, 0, time.UTC))}},
+		},
+	},
+	{
+		ID: "f564dfd6-68af-5ad9-ade8-acc59e527c90",
+		Profile: model.Profile{
+			Name:        "time-leap-second",
+			Description: ptr("The served time is 2016-12-31 23:55:00 UTC with the leap indicator set to insert a second at the end of the day"),
+			Parts:       model.ProfileParts{Time: &model.TimeFault{Absolute: ptr(time.Date(2016, 12, 31, 23, 55, 0, 0, time.UTC)), Leap: ptr(model.TimeFaultLeapInsert)}},
+		},
+	},
+	{
+		ID: "866d37d3-4e54-56eb-87b0-834f697eb522",
+		Profile: model.Profile{
+			Name:        "time-unsynchronized",
+			Description: ptr("The NTP server answers unsynchronized (leap indicator 3, stratum 16)"),
+			Parts:       model.ProfileParts{Time: &model.TimeFault{Answer: ptr(model.TimeFaultAnswerUnsynchronized)}},
+		},
+	},
+	{
+		ID: "68a521c8-2dea-5d0f-b6b2-3a83d601537c",
+		Profile: model.Profile{
+			Name:        "time-kiss-of-death",
+			Description: ptr("The NTP server answers a kiss-of-death DENY (stratum 0): the client must stop using the server"),
+			Parts:       model.ProfileParts{Time: &model.TimeFault{Answer: ptr(model.TimeFaultAnswerKissOfDeath), KissCode: ptr(model.TimeFaultKissCodeDENY)}},
 		},
 	},
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -37,6 +38,11 @@ const dnsSettle = time.Second
 // responder reports a handshake after it ended, in batches, so one that ended at the very end of the window is not in the
 // API's log yet when the window closes; its time stamp, not the moment of the poll, decides whether it was inside.
 const tlsSettle = time.Second
+
+// ntpSettle is how long the final look of an `ntp_queried` check waits after its window has closed: the NTP server reports its
+// queries in batches (every 500 ms), so one that arrived at the very end of the window is not in the API's log yet when the
+// window closes; its time stamp, not the moment of the poll, decides whether it was inside.
+const ntpSettle = time.Second
 
 // maxEvidence bounds the observations that a check keeps as its evidence.
 const maxEvidence = 10
@@ -90,9 +96,12 @@ func newLiveCheck(cfg *model.Configuration, idx int, c *model.Check) *liveCheck 
 	case "tls_accepted":
 		lc.match, lc.tls = *c.TlsAccepted, "accepted"
 	}
-	if lc.kind == "dns_query_seen" {
+	switch lc.kind {
+	case "dns_query_seen":
 		lc.what = "a query for " + lc.dns
-	} else {
+	case "ntp_queried":
+		lc.what = "an NTP query"
+	default:
 		lc.what = describeMatch(cfg, lc.match)
 	}
 	return lc
@@ -102,7 +111,7 @@ func newLiveCheck(cfg *model.Configuration, idx int, c *model.Check) *liveCheck 
 // fails without; the others fail on one.
 func (c *liveCheck) positive() bool {
 	switch c.kind {
-	case "reconnected", "traffic_seen", "dns_query_seen", "tls_rejected", "tls_accepted":
+	case "reconnected", "traffic_seen", "dns_query_seen", "ntp_queried", "tls_rejected", "tls_accepted":
 		return true
 	}
 	return false
@@ -148,20 +157,25 @@ func (c *liveCheck) needsNets() bool {
 }
 
 // decideAt is the offset from which a check whose window has closed is decided without the observation that
-// would have decided it earlier: the end of the window, for a `dns_query_seen` check a settle time later.
+// would have decided it earlier: the end of the window, for a check of a log (the DNS log, the NTP log, the handshakes of
+// the TLS responder) a settle time later.
 func (c *liveCheck) decideAt() time.Duration {
 	switch {
 	case c.kind == "dns_query_seen":
 		return c.wend + dnsSettle
+	case c.kind == "ntp_queried":
+		return c.wend + ntpSettle
 	case c.tls != "":
 		return c.wend + tlsSettle
 	}
 	return c.wend
 }
 
-// usesFlows reports whether the check looks at the connections (the others at the DNS log or the handshakes of the
+// usesFlows reports whether the check looks at the connections (the others at the DNS log, the NTP log or the handshakes of the
 // TLS responder).
-func (c *liveCheck) usesFlows() bool { return c.kind != "dns_query_seen" && c.tls == "" }
+func (c *liveCheck) usesFlows() bool {
+	return c.kind != "dns_query_seen" && c.kind != "ntp_queried" && c.tls == ""
+}
 
 // ---- names
 
@@ -175,6 +189,9 @@ func checkName(cfg *model.Configuration, c *model.Check) string {
 	what := lc.dns
 	switch lc.kind {
 	case "dns_query_seen":
+	case "ntp_queried":
+		// the check has no selector: its name is its type and its window
+		return fmt.Sprintf("%s %s", lc.kind, describeWindow(c.Window))
 	case "traffic_not_seen":
 		what = lc.what
 		if len(lc.except) > 0 {
@@ -424,6 +441,8 @@ func (m *Manager) runChecks(ctx context.Context, r *runState, start time.Duratio
 				m.feed(r, c, nets, devSet, startedSince(append(slices.Clone(prevEvents), events...), c.wstartWall), nowWall)
 			case c.armed && c.tls != "":
 				m.lookTLS(r, c, devs, nets)
+			case c.armed && c.kind == "ntp_queried":
+				m.lookNTP(r, c, devs)
 			case c.armed:
 				m.lookDNS(r, c, devs)
 			}
@@ -577,6 +596,67 @@ func (m *Manager) lookDNS(r *runState, c *liveCheck, devs []engine.DeviceState) 
 	}
 }
 
+// lookNTP looks into the NTP server's log for an `ntp_queried` check whose window is open: a query of a device of the target,
+// asked inside the window. What the server answered does not matter (a time fault, silence included); whether the device took
+// the answer is not visible on the network.
+func (m *Manager) lookNTP(r *runState, c *liveCheck, devs []engine.DeviceState) {
+	if len(devs) == 0 {
+		return
+	}
+	for _, q := range m.cfg.Observer.NTPQueries(ids(devs), c.wstartWall) {
+		if c.ended && q.Time.After(c.wendWall) {
+			continue
+		}
+		ev := map[string]any{"kind": "ntp_query", "device": q.Device, "time": q.Time.UTC().Format(time.RFC3339Nano)}
+		if q.Answer != "" {
+			ev["answer"] = q.Answer
+		}
+		if q.OffsetMs != nil {
+			ev["offset_ms"] = *q.OffsetMs
+		}
+		if q.Fault != "" {
+			ev["fault"] = q.Fault
+		}
+		if q.Server != "" {
+			ev["server"] = q.Server
+		}
+		c.evidence = append(c.evidence, ev)
+		m.decide(r, c, model.CheckResultStatusPassed, fmt.Sprintf("a device asked the NTP server for the time %s into the window%s", q.Time.Sub(c.wstartWall).Round(time.Millisecond), describeNTPAnswer(q)))
+		return
+	}
+}
+
+// describeNTPAnswer says in a few words how the server answered a query, for the message of a check: " (answered: normal, served
+// time +9600h0m0s off)".
+func describeNTPAnswer(q NTPQuery) string {
+	if q.Answer == "" {
+		return ""
+	}
+	out := " (answered: " + strings.ReplaceAll(q.Answer, "_", " ")
+	if q.OffsetMs != nil && *q.OffsetMs != 0 {
+		ms := *q.OffsetMs
+		sign := "+"
+		if ms < 0 {
+			sign = "-"
+		}
+		// a Duration counts nanoseconds in an int64 and holds about 292 years: an absolute time further away (the domain sets no upper
+		// bound) would come out with a wrong value and sign, and the smallest int64 cannot be negated
+		const maxMs = math.MaxInt64 / int64(time.Millisecond)
+		if ms > maxMs || ms < -maxMs {
+			return out + ", served time more than 292 years off)"
+		}
+		d := time.Duration(ms) * time.Millisecond
+		if d < 0 {
+			d = -d
+		}
+		if d >= time.Second {
+			d = d.Round(time.Second)
+		}
+		out += ", served time " + sign + d.String() + " off"
+	}
+	return out + ")"
+}
+
 // endWindow decides a check whose window has closed without the observation that would have decided it
 // earlier: a positive check has failed, a negative one has passed. A connection check that could not read the
 // connections at its last poll cannot say either way: it is an error.
@@ -589,6 +669,11 @@ func (m *Manager) endWindow(r *runState, c *liveCheck, flowErr error, devs []eng
 		m.lookDNS(r, c, devs)
 		if !c.decided {
 			m.decide(r, c, model.CheckResultStatusFailed, fmt.Sprintf("no device of the target asked for %s in %s", c.dns, window))
+		}
+	case c.kind == "ntp_queried":
+		m.lookNTP(r, c, devs)
+		if !c.decided {
+			m.decide(r, c, model.CheckResultStatusFailed, fmt.Sprintf("no device of the target asked the gateway's NTP server for the time in %s (a device with a hardcoded server asks the gateway only where its queries are redirected, and one with NTS or another time source not at all)", window))
 		}
 	case c.tls != "":
 		m.lookTLS(r, c, devs, nets)

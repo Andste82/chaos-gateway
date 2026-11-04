@@ -1110,6 +1110,28 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/DeviceView'}
         default: {$ref: '#/components/responses/Problem'}
+  /devices/{deviceId}/ntp:
+    get:
+      tags: [devices]
+      operationId: getDeviceNtp
+      summary: What one device did with the gateway's NTP server (M34)
+      description: |
+        The per-device state of the NTP server (plan §2.18): how many queries the device sent, how many the server left
+        unanswered on purpose (`silence`) or dropped over the rate limit, the answers each time fault shaped, the last query
+        with the time served and the server asked, and the newest entries of its log (at most 50, newest first). The numbers
+        count since the API started and are gone after a restart, as the query log. A device that never asked has zeros and
+        no `last_query`; an unknown device is `404`.
+      x-milestone: M34
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: The device's use of the NTP server
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeviceNtp'}
+        default: {$ref: '#/components/responses/Problem'}
   /flows:
     get:
       tags: [devices]
@@ -2046,6 +2068,33 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/DnsQueryPage'}
+        default: {$ref: '#/components/responses/Problem'}
+  /ntp/queries:
+    get:
+      tags: [devices]
+      operationId: listNtpQueries
+      summary: Query log of the NTP server, newest first
+      description: |
+        The queries the gateway's NTP server answered (or left unanswered on purpose) and the connections to its NTS
+        key-establishment port, newest first (M34). The gateway keeps the newest 20000 in memory; the log is empty after a
+        restart.
+      x-milestone: M34
+      x-required-scope: read
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: device
+          in: query
+          schema: {$ref: '#/components/schemas/Ref'}
+        - name: since
+          in: query
+          schema: {type: string, format: date-time}
+      responses:
+        '200':
+          description: Queries
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/NtpQueryPage'}
         default: {$ref: '#/components/responses/Problem'}
   /intercept/flows:
     get:
@@ -5653,7 +5702,7 @@ components:
         id: {$ref: '#/components/schemas/Uuid'}
         builtin:
           type: boolean
-          description: Built-in profiles have fixed UUIDs and reserved names (`normal`, `lte`, `bad-lte`, `satellite`, `congested-wifi`, `offline`, `intermittent`, `dns-broken`, `tls-broken`).
+          description: Built-in profiles have fixed UUIDs and reserved names (`normal`, `lte`, `bad-lte`, `satellite`, `congested-wifi`, `offline`, `intermittent`, `dns-broken`, `tls-broken`, and the presets of the time family `time-plus-1y`, `time-minus-1d`, `time-1970`, `time-2038`, `time-ntp-era-1`, `time-leap-second`, `time-unsynchronized`, `time-kiss-of-death`).
         available:
           type: boolean
           description: |
@@ -6679,6 +6728,78 @@ components:
           type: array
           items: {$ref: '#/components/schemas/DnsQueryLogEntry'}
         next_cursor: {type: string}
+    NtpQueryPage:
+      type: object
+      required: [items, now]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/NtpQueryLogEntry'}
+        next_cursor: {type: string}
+        now:
+          type: string
+          format: date-time
+          description: The gateway's own time when it answered, to the nanosecond (the `Date` header has a resolution of a second). A client that waits for the next query starts at it, on the clock the entries are stamped with.
+    DeviceNtp:
+      type: object
+      required: [device, queries, silenced, dropped, nts_ke, answers, recent]
+      properties:
+        device: {$ref: '#/components/schemas/Uuid'}
+        queries:
+          type: integer
+          format: int64
+          description: The client queries of the device, answered or silenced; queries over the rate limit (`dropped`) and NTS key-establishment connections (`nts_ke`) are not in it.
+        silenced:
+          type: integer
+          format: int64
+          description: The queries a `silence` fault left unanswered (they are in `queries`).
+        dropped:
+          type: integer
+          format: int64
+          description: The queries over the device's rate limit that the server did not answer.
+        nts_ke:
+          type: integer
+          format: int64
+          description: The connections to the NTS key-establishment port (TCP 4460), or queries with NTS extension fields, that the server cannot answer.
+        answers:
+          type: array
+          description: How many answers each time fault shaped.
+          items:
+            type: object
+            required: [fault, count]
+            properties:
+              fault: {$ref: '#/components/schemas/Uuid'}
+              count: {type: integer, format: int64}
+        last_query: {$ref: '#/components/schemas/DeviceNtpLastQuery'}
+        recent:
+          type: array
+          maxItems: 50
+          description: The newest entries of the device's log, newest first.
+          items: {$ref: '#/components/schemas/NtpQueryLogEntry'}
+    DeviceNtpLastQuery:
+      type: object
+      description: The last query of the device that was answered or deliberately not (the *Time* panel of the device detail).
+      required: [time, server]
+      properties:
+        time:
+          type: string
+          format: date-time
+        answer:
+          type: string
+          enum: [normal, unsynchronized, kiss_of_death, silence, origin_mismatch, zero_transmit, wrong_mode, dropped]
+        served_time:
+          type: string
+          format: date-time
+        offset_ms:
+          type: integer
+          format: int64
+          description: The served time minus the correct time, in milliseconds.
+        fault:
+          allOf: [{$ref: '#/components/schemas/Uuid'}]
+          description: The time fault overlay that shaped the answer.
+        server:
+          type: string
+          description: The server the device asked (`ip:port`), or `an external server (redirected)` where nothing says which it was (decision D36).
     NtpServiceConfig:
       type: object
       required: [generation, networks, faults, listen]

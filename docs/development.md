@@ -9,7 +9,7 @@ How to build, test and generate code. Everything runs in the devcontainer
 |---|---|
 | `api/` | `openapi.yaml`, the source of truth for the domain model and the REST API; examples and their validator |
 | `cmd/chaosgw`, `cmd/chaosctl` | the core binary and the CLI (`chaosgw exec` is the executor, which removes everything it created when it stops, and `chaosgw teardown` does that on demand (M27); `chaosgw tls` is the TLS responder (M21), which hands the connections of the case `intercept` to the proxy (M22); `cmd/chaosctl` is a `main` over `internal/ctl`) |
-| `internal/ctl` | `chaosctl` (M18): the commands (Cobra), the API client with its token and certificate options, runs that are waited for with their lease, `wait device`, `with`; the commands of the application-layer kinds, `dns set`, `tls set` and `dhcp set` (M23b), and the interception, `intercept set`, `intercept flows` and `tls ca` (M23c); the probes, `probe list`, `probe add` and `probe remove` (M26a) |
+| `internal/ctl` | `chaosctl` (M18): the commands (Cobra), the API client with its token and certificate options, runs that are waited for with their lease, `wait device`, `with`; the commands of the application-layer kinds, `dns set`, `time set` (M34), `tls set` and `dhcp set` (M23b), `wait ntp` (M34), and the interception, `intercept set`, `intercept flows` and `tls ca` (M23c); the probes, `probe list`, `probe add` and `probe remove` (M26a) |
 | `internal/clock` | injectable clock: real and fake, wall time apart from monotonic time |
 | `internal/preflight` | kernel version, the one shared kernel-module list, namespace capability |
 | `internal/testbed` | namespace topologies for integration tests; `vmrun` runs them in a VM; the starter of the interception proxy for the tests that run the real mitmproxy (M22) |
@@ -3319,7 +3319,7 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
 
 - **The catalogue** (`domain/builtin.go`). `normal`, `lte`, `bad-lte`, `satellite`, `congested-wifi`, `offline`,
   `intermittent` have fixed UUIDs (version 5 of the name) and reserved names; `dns-broken` and `tls-broken` exist in the
-  catalogue; `dns-broken` has been available since M20 and `tls-broken` since M21. They are not part of any configuration: a key equal to a built-in
+  catalogue; `dns-broken` has been available since M20 and `tls-broken` since M21; the eight presets of the time family (M34: `time-plus-1y`, `time-minus-1d`, `time-1970`, `time-2038`, `time-ntp-era-1`, `time-leap-second`, `time-unsynchronized`, `time-kiss-of-death`; a time part alone, usable at once) follow the same rule. They are not part of any configuration: a key equal to a built-in
   UUID and a name equal to a built-in name (any case) are `reserved_name`, so a configured profile can never shadow one.
   Custom profiles are the `profiles` of the configuration, keyed by UUID. They are created, changed and deleted with a
   candidate revision like every configured object (P2-M11-02; decided by the maintainer on 2026-10-11: no endpoints of
@@ -3391,8 +3391,10 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
 | Deletion rules | `TestARevisionThatDeletesAnActivatedProfileIsRefusedUnlessForced` (engine), `TestDeletingAnActivatedProfileNeedsForceAndListsTheReferences` (API) |
 | TTL and lease of an activation | `TestAProfileActivationExpiresWithItsTTL`, `TestAProfileActivationWithALeaseIsRenewedAndExpiresWithItsFaults`, `TestSwitchingAProfileRestartsItsTTLAndExpiryRemovesWhateverProfileIsActive` (engine, fake clock), `TestAProfileActivationEndsWithItsTTLOnTheWire` (the profile leaves the kernel, the configuration fault it replaced is back, a device only the profile named is clean) |
 | Force delete on the wire | `TestForceDeletingAnActivatedProfileTakesItOffTheWire` (refused without force and still impairing; with force the scope is back to baseline, the activation on the other network untouched) |
+| The time family in scenarios (M34, stage 3: the wait `ntp_query_seen`, the check `ntp_queried`, the step `time`, the zero hit of a time fault, the built-in presets) | `TestTheNtpWaitAndTheNtpCheckAreAcceptedWhenTheRunIsCreated`, `TestAWaitForAnNtpQueryNeedsAQueryOfTheTargetAfterTheWaitBegan`, `TestAWaitForAnNtpQueryThatTimesOutEndsTheRunAsError`, `TestAWaitForAnNtpQueryOfAGroupEndsWithAnyDeviceOfIt`, `TestAnNtpQueryIsSeenOnlyInsideTheWindowFromADeviceOfTheTarget`, `TestAQueryThatTheServerLeftUnansweredPassesTheNtpQueriedCheck`, `TestAnNtpQueriedCheckFailsWhenTheWindowClosesWithoutAQuery`, `TestAnNtpQueryAfterTheWindowDoesNotCountAndOneAtItsLastMomentDoes`, `TestAnNtpQueryOfTheWindowThatIsLoggedAfterItsEndStillCounts`, `TestAnNtpQueriedCheckDoesNotReadTheConnections`, `TestTheNameOfAnNtpQueriedCheckIsItsTypeAndItsWindow`, `TestAnNtpQueryStampedAtTheStartOfTheWaitEndsIt` (the start is inclusive), `TestAnNtpQueryWhileTheStepOfTheWindowIsBeingAppliedCounts` and `TestAnNtpQueryWhileTheStepThatClosesTheWindowIsBeingAppliedCounts` (the window opens at the hand-over and closes at the answer), `TestTheMessageOfAnNtpQueriedCheckSaysHowFarTheServedTimeIs` (the rounding, the sign, an offset beyond 292 years), `TestAnUnshapedAnswerPassesTheNtpQueriedCheckAndTheMessageSaysSo`, `TestAnNtpQueriedCheckOfANetworkPassesOnAnyDeviceOfItAndAnEmptyGroupFails`, `TestASecondTimeStepOfTheSameKeyIsJudgedByItsOwnQueries`, `TestATimeFaultThatAnotherOneOverridesIsAZeroHitOverTheAPI` (API), `TestATimeStepWritesATimeOverlayOwnedByTheRunAndIsReplacedByTheSameKey`, `TestATimeStepMayNarrowTheTargetToADeviceOfTheGroup`, `TestATimeFaultThatShapedNoAnswerIsAZeroHitWarning`, `TestAZeroHitTimeFaultFailsARunWithZeroHitError`, `TestAProfileWithOnlyATimePartIsJudgedByTheQueriesItShaped`, `TestTheStaleClockScenarioRunsFromTheFirstQueryToTheCheck` (run, on the fake clock), `TestATimeScenarioWaitsForTheQueryAndChecksItOverTheAPI`, `TestATimeFaultThatNoQueryMetFailsTheCheckAndIsAZeroHitOverTheAPI`, `TestABuiltInTimePresetAsAProfileStepIsServedAndCountedOverTheAPI` (API), `TestTheTimePresetsAreBuiltInProfilesWithATimePartOnly`, `TestEveryBuiltinProfileHasTheVersion5UUIDOfItsName` (domain) |
+| The reads of the NTP server's state and `chaosctl time` (M34, stage 3: `GET /ntp/queries`, `GET /devices/{deviceId}/ntp`, `time set`, `wait ntp`) | `TestTheStateOfADeviceShowsItsQueriesTheAnswersPerFaultAndTheLastQuery`, `TestTheRecentQueriesOfADeviceAreBoundedAndNotPushedOutByAnotherDevice`, `TestTheNTPQueryLogIsListedNewestFirstAndFilteredByDeviceAndTime`, `TestThePagesOfAFilteredNTPQueryLogHoldEveryEntryOnce`, `TestTheNTPQueryLogRefusesABadCursor`, `TestTheAnswersOfADeviceAreListedByFaultInOrder`, `TestAClientNoDeviceOwnsKeepsNoRecentQueries`, `TestTheObserverOfTheRunsReadsTheQueriesOldestFirstAndLeavesOutWhatIsNoQuery`, `TestChaosctlMakesTimeFaultsAndExplainsThem`, `TestChaosctlWaitsForTheNtpQueryOfADevice` (API), `TestTheFlagsOfATimeFaultBecomeItsBody`, `TestWaitNtpThatRunsOutOfTimeWithoutAnAnswerFromTheGatewayExits2`, `TestWaitNtpGivesUpOnAGatewayThatFailsTenPollsInARow`, `TestANtpPollThatHangsIsCutOffAndTheWaitGoesOn`, `TestWaitNtpEndsOnASignalARefusalAndAnUnknownDevice`, `TestWaitNtpStartsAtTheGatewaysClockAndNotAtTheNewestEntry`, `TestWaitNtpWithoutADateStartsAtTheNewestTimeOfTheLog`, `TestDescribeNTPQuery` (ctl) |
 | A `time` part (M34, stages 1 and 2) | `TestAProfileWithATimePartIsAvailableSinceTheServerExists`, `TestTheTimePartOfAProfileIsValidatedLikeATimeFault`, `TestTheActivationOfAProfileWithATimePartNeedsADeviceAGroupOrANetwork` (domain), `TestTheEngineListsTheTimeKindAndFamilyAsSupported`, `TestAnInvalidTimeFaultIsRefusedByTheValidationAndChangesNothing`, `TestTheTimePartOfAProfileIsAnNTPFaultAndCompetesInTheTimeFamily` (engine), `TestAProfileWithATimePartIsAvailableAndItsActivationIsAccepted` (API) |
-| The time family (M34, stage 1: offset grammar of 365-day years and a length of at most 64, the rules of a time fault and the code `invalid_time_fault`, no port of the DNS and DHCP services, the precedence in which only a device scope ranks a destination, the scenario step, wait and check, and the refusals that stay until the later stages) | `TestParseTimeOffset`, `TestATimeFaultThatIsNotValid`, `TestOnAGroupAndOnANetworkTheNewerTimeFaultWinsWhetherOrNotItNamesAServer`, `TestATimeFaultForOneServerBeatsAFaultOfTheSameScopeForEveryServer`, `TestTheTimeStepOfAScenarioIsValidated`, `TestTheWaitForAnNTPQueryHasNoSelector`, `TestTheCheckForAnNTPQuery`, `TestTheWinnerOfARedirectPortIsTheFirstFaultOfTheRankThatNamesNoServerOrThisOne`, `TestTheSelectorOfATimeFaultIsItsDestinationTogetherWithItsPorts`, `TestTheOverlayExamplesShowEveryEffectOfATimeFault` (domain), `TestTheNtpWaitAndTheNtpCheckAreRefusedUntilTheRunnerHasThem`, `TestATimeStepAndAProfileWithATimePartAreAcceptedWhenTheRunIsCreated` (run), `TestATimeOverlayIsAcceptedAndAnInvalidOneIsRefusedByTheValidation` (API) |
+| The time family (M34, stage 1: offset grammar of 365-day years and a length of at most 64, the rules of a time fault and the code `invalid_time_fault`, no port of the DNS and DHCP services, the precedence in which only a device scope ranks a destination, the scenario step, wait and check; the refusals of stage 1 were replaced by the tests of the stages 2 and 3) | `TestParseTimeOffset`, `TestATimeFaultThatIsNotValid`, `TestOnAGroupAndOnANetworkTheNewerTimeFaultWinsWhetherOrNotItNamesAServer`, `TestATimeFaultForOneServerBeatsAFaultOfTheSameScopeForEveryServer`, `TestTheTimeStepOfAScenarioIsValidated`, `TestTheWaitForAnNTPQueryHasNoSelector`, `TestTheCheckForAnNTPQuery`, `TestTheWinnerOfARedirectPortIsTheFirstFaultOfTheRankThatNamesNoServerOrThisOne`, `TestTheSelectorOfATimeFaultIsItsDestinationTogetherWithItsPorts`, `TestTheOverlayExamplesShowEveryEffectOfATimeFault` (domain), `TestATimeStepAndAProfileWithATimePartAreAcceptedWhenTheRunIsCreated` (run), `TestATimeOverlayIsAcceptedAndAnInvalidOneIsRefusedByTheValidation` (API) |
 | Catalogue, custom CRUD, availability | `internal/api/profiles_test.go` (`TestTheProfileCatalogueListsTheBuiltInProfilesAndAllOfThemAreAvailable`, `TestACustomProfileIsCreatedChangedAndDeletedWithRevisions`, `TestACustomProfileWithAnInterceptPartIsAvailableAndActivatesLikeOneWithADNSOrTLSPart`, `TestAProfileIsActivatedSwitchedAndListedOverTheAPI`), `TestAProfileWithAPartOfALaterMilestoneIsRefusedAndNothingChanges` |
 | The kernel accepts profile-expanded targets | `TestEveryCompiledTCTreeIsAcceptedByTheKernel` (`faults-profiles`, `faults-builtin-profiles`), `TestEveryCompiledRulesetIsAcceptedByTheKernel` (the same and `profiles-mtu`) |
 
@@ -4801,7 +4803,8 @@ Plan §2.10 and M16. A scenario's `checks` evaluate what the gateway observes of
 that is tied to a step, and a fault, rule or profile of a run that matched no packet is reported, because a `passed` run
 whose fault never hit proves nothing. M15 refused a scenario with checks (`unsupported_feature`, M16); this build runs
 them: `GET /capabilities` lists `check_types` `reconnected`, `no_connection`, `traffic_seen`, `traffic_not_seen` and
-`dns_query_seen` and the feature `checks`. `tls_rejected` and `tls_accepted` came with M21 (`422 unsupported_feature` before); a check for a host name
+`dns_query_seen` and the feature `checks` (the TLS checks came with M21 and `ntp_queried` with M34: the capabilities list them all, and the
+check `ntp_queried`, with its settle time `ntpSettle` and its decision from the NTP log, is described in the M34 section). `tls_rejected` and `tls_accepted` came with M21 (`422 unsupported_feature` before); a check for a host name
 (a `destination` or an `except` with `hostname`) came with M20.
 
 ### How it works
@@ -4826,7 +4829,7 @@ them: `GET /capabilities` lists `check_types` `reconnected`, `no_connection`, `t
   before it was answered, and the window of the answer failed `no_connection from cut until restore` with that
   connection and missed it for `reconnected from restore` (CI run 39208509316: the level 1 tests of M16 and M18).
   So the moment depends on what the check claims (`opensAt`, `closesAt`). A **positive** check (`reconnected`,
-  `traffic_seen`, `dns_query_seen`) looks for what the change makes possible, which cannot happen before the change
+  `traffic_seen`, `dns_query_seen`, `ntp_queried`) looks for what the change makes possible, which cannot happen before the change
   takes effect and may happen before the answer: its window opens when the step is **handed over**, and an `until`
   closes it at the **answer**. A **negative** check (`no_connection`, `traffic_not_seen`) claims that nothing happens
   while the change is in force: its window opens at the **answer** (the change is in force for sure), and an `until`
@@ -4880,7 +4883,7 @@ them: `GET /capabilities` lists `check_types` `reconnected`, `no_connection`, `t
   500 ms and by one request, so the decision of a `dns_query_seen` check waits `dnsSettle` (1 s) after the window has
   closed, still filtering on the time stamp (a query asked at the end of the window counts, one stamped after it does
   not; P4-AUDIT-20).
-- **When a check is decided.** A positive check (`reconnected`, `traffic_seen`, `dns_query_seen`) is `passed` at the
+- **When a check is decided.** A positive check (`reconnected`, `traffic_seen`, `dns_query_seen`, `ntp_queried`) is `passed` at the
   first observation and `failed` when the window closes without one. A negative check (`no_connection`,
   `traffic_not_seen`) is `failed` at the first observation and `passed` when the window closes. `error` is for a
   connection check that cannot read the connections at the poll where its window closes (`could not be read`): it
@@ -6719,9 +6722,9 @@ P31-M35a-08 (the explain card's source).
 - **The endpoint.** `GET /metrics` (scope `read`, so a scraper needs an API token; `Content-Type: text/plain; version=0.0.4`) answers from the engine's snapshot and the kernel at the moment of the
   request: nothing is kept between two scrapes, no client library is linked (`internal/metrics.Set` collects the series of one scrape and writes them sorted, with the escapes of the format, and reports a
   name or label the format does not allow instead of writing it). The spec lists every family under `/metrics`. All names start with `chaosgw_`:
-  - **Counters of M7 to M9 and M35a** are read by the code that serves them over the REST API (`readOverlayContext`, `counterOf`, `withDNS`, `withTLS`, `ruleCounter`, `forwardCounter`), so the two
+  - **Counters of M7 to M9 and M35a** are read by the code that serves them over the REST API (`readOverlayContext`, `counterOf`, `withDNS`, `withTLS`, `withNTP`, `ruleCounter`, `forwardCounter`), so the two
     cannot disagree: `chaosgw_fault_{packets,bytes}_total{layer,id,kind,name}` per configured fault (`layer="config"`, `kind` is the family) and per overlay (`layer="overlay"`, `kind` the overlay's kind:
-    fault, profile, dns, tls, wireguard), `chaosgw_rule_{packets,bytes}_total{layer,id,name,action}` per access rule of the compiled plan (configured and overlay rules) and for the anti-lockout rule
+    fault, profile, dns, tls, time, wireguard; the time part of a profile counts into the profile's series), `chaosgw_rule_{packets,bytes}_total{layer,id,name,action}` per access rule of the compiled plan (configured and overlay rules) and for the anti-lockout rule
     (`layer="system"`), `chaosgw_forward_{connections,bytes}_total{id,name,entry}` per forward in the kernel, and `chaosgw_counter_epoch`, the epoch `GET /state` reports (a counter that starts over is a
     counter reset for Prometheus; the per-object epochs stay in the REST API).
   - **Queues.** `chaosgw_queue_{sent_packets,sent_bytes,dropped_packets,overlimits}_total` and the gauges `chaosgw_queue_{backlog_packets,backlog_bytes,epoch}` per netem leaf (`fault_id`, `layer`, `source`,
@@ -6805,7 +6808,7 @@ interfaces of the bridge and the uplink against them). It ran in the emulated VM
 
 | Plan M26 | Test |
 |---|---|
-| Scope: Prometheus metrics endpoint (counters from M7–M9, interface and queue statistics, system health) | `TestMetricsReportTheCountersOfFaultsRulesForwardsAndQueuesAgainstKnownTraffic`, `TestMetricsCountOverlaysByKind`, `TestMetricsLeaveOutWhatCannotBeReadAndSayWhichSourceFailed`, `TestMetricsNeedAToken`, level 1 `TestMetricsCountKnownTrafficOnTheRealKernel` |
+| Scope: Prometheus metrics endpoint (counters from M7–M9, interface and queue statistics, system health) | `TestMetricsReportTheCountersOfFaultsRulesForwardsAndQueuesAgainstKnownTraffic`, `TestMetricsCountOverlaysByKind`, `TestMetricsCountTheQueriesATimeFaultShapedLikeTheOverlaysViewDoes` (M34: a time overlay and a profile with a time part, the series equal the REST counters), `TestMetricsLeaveOutWhatCannotBeReadAndSayWhichSourceFailed`, `TestMetricsNeedAToken`, level 1 `TestMetricsCountKnownTrafficOnTheRealKernel` |
 | Scope: flow view in the UI (flow data from M6a) | `e2e/flows.spec.ts` (the Flows screen, its filters, Pause), `lib/flows.test.ts`, `TestAForwardedConnectionIsAFlowOfTheTargetDevice` |
 | Scope: a device's flows and recent DNS queries on the device detail (P3-M12-02) | `e2e/flows.spec.ts` (the device detail's panels) |
 | Scope: the explain card's source behind the uplink or the management network, destination defaulting to the entry side's address, a forwarded connection picked in the flow view explained (P31-M35a-08) | `e2e/flows.spec.ts` (the explain card), `TestAForwardedConnectionIsAFlowOfTheTargetDevice` (the flow and its explanation) |
@@ -7332,8 +7335,38 @@ plan) and `e2e_ntpclients_test.go` (the clients), and in `internal/engine/integr
   port, and not for a hostname, where it does not.
 - **Timing.** The assertions on time (50 ms of the host clock, 3 ms of drift in 10 s, the half of a latency within 40 ms, the 5,000 queries per second and the added millisecond) hold where
   `testbed.Accurate()` is true; under software emulation the tolerances are wide and the test asserts the function. The figures of the load test are written to the measurement record.
-- **The wait and the check of stage 3.** The scenario test runs a *time* step and not the wait *NTP query seen*: the runner of the wait and of the check *NTP queried* is stage 3 of the
-  milestone, and its tests come with it.
+- **The wait and the check of stage 3.** The scenario test `TestAScenarioWithATimeStepShiftsTheServedTimeUntilTheRunEndsOnTheRealKernel` runs a *time* step alone; the test
+  `TestAScenarioWithATimeStepAWaitForTheQueryAndTheCheckSeesTheQueryOfARealClientOnTheRealKernel` adds the wait *NTP query seen* and the check *NTP queried*, with a client of the test network
+  that asks the gateway's server while the run waits. The runner of the wait and of the check is tested at level 0 as well (`internal/run/ntp_test.go` on the fake clock with a fake observer, `internal/api/runs_time_test.go` over the API with the query log that the server posts).
+  What the runner decides, and why: the wait ends at the first query of a device of the target that arrived after the wait began; the check passes at the first query inside its
+  window, a positive check that fails when the window closes without one (the settle time is one second, the server reports in batches of 500 ms); both count every query whatever
+  the server answered (`silence` and a kiss-of-death are queries), and neither counts a query over the rate limit or a connection to the NTS-KE port (`ntpQueries` in
+  `internal/api/ntpservice.go`). A device with a hardcoded server shows only where its queries are redirected, so the message of a missing query names that and NTS. There is no
+  precondition `uses_gateway_ntp`: a device may poll once an hour, so that a query before the run says nothing, and the check is the answer to whether it asked. The zero hit of a
+  time fault is a time overlay (or a profile with a time part) that the server answered no query with (the counter of the overlay counts the queries it shaped, in packets);
+  a profile whose only part is a time part is not a profile that "impairs nothing". The built-in presets of the time family are the profiles `time-plus-1y`, `time-minus-1d`,
+  `time-1970`, `time-2038`, `time-ntp-era-1`, `time-leap-second`, `time-unsynchronized` and `time-kiss-of-death` (`domain/builtin.go`, a time part each; the kiss code of the
+  last one is `DENY`, the leap second preset is 2016-12-31 23:55:00 UTC with the insert indicator).
+
+### The reads and `chaosctl time` (stage 3)
+
+- **Two reads in the public API** (`internal/api/ntpreads.go`, scope `read`; stage 1 had no route for them, so the spec got them here): `GET /ntp/queries` lists the log of the server
+  newest first (the newest 20000 entries in memory, as `GET /dns/queries`, with `device` by name or id, `since` and the cursor), and `GET /devices/{deviceId}/ntp` is the state of one
+  device (`DeviceNtp`): the counters (`queries`, `silenced`, `dropped`, `nts_ke`), the answers per fault, the last query with the server asked (what the *Time* panel of stage 4 shows)
+  and `recent`, a ring of the device's own newest 50 entries (`ntpRecentPerDevice`, a fixed ring that costs no copy per query, kept only for a client a device owns: a flood of source
+  addresses has counters and no history), so that a device that polls every second does not push the history of one that polls once an hour out of
+  the shared log. The list reads the log newest first under its lock and stops with the page, so a wait that polls it costs the page and not the log. A device that never asked has zeros and no `last_query`; an unknown device is `404`. Both are memory only and empty after a restart. They are in the lists that derive
+  from the spec (the scope test and the search for secrets), which need no entry.
+- **`chaosctl time set <fault>`** (`timeCmd` in `internal/ctl/appfamilies.go`): `offset`, `absolute`, `skew`, `leap`, `unsynchronized`, `kiss-of-death`, `silence` and `invalid`, with
+  the flags `--offset`, `--absolute`, `--skew-ppm`, `--leap`, `--kiss-code`, `--invalid`, `--to` and `--port`, and the target flags of the other families except `--global` (a time fault
+  has no global target). The first four are served times and may be combined (`skew` on top of `--offset`, `leap` with `--absolute`: the plan's leap preset); the others are the whole
+  fault and take no field of a served time. The command checks what is certain without the gateway (the field a fault needs, one it does not use, `--offset` with `--absolute`, the
+  enumerations); the grammar of an offset, the date and the ports are left to the gateway, whose refusal is printed with its pointer.
+- **`chaosctl wait ntp <device>`** (`waitNTP` in `internal/ctl/wait.go`) polls `GET /ntp/queries?device=`. It starts at the `now` of the gateway's first answer (the gateway's clock, to the nanosecond, so a query answered before the command began does not count and one that arrived between the command
+  and its first poll does; a gateway that sends no `now` gets the `Date` header, to the second, where a query of the second before may count) and ends at the oldest query by time that is not before it, by the time in the gateway's log and not by the clock of the machine that runs it (the log is in the
+  order of arrival, and the server reports in batches of 500 ms); without a usable `now` or `Date` the newest time in the log is the start; a query over the rate limit and an NTS connection do not end it. Exit 0
+  with the answer on standard output, 1 when the time runs out (the message names the hardcoded server and NTS as the likely cause), 2 when the gateway cannot be asked, as `wait device`.
+  `chaosctl explain` needs no change: it prints the family `time` like the others (try `--protocol udp --port 123`).
 
 ### Acceptance map (plan M34 "Tests" and "Acceptance")
 
@@ -7357,7 +7390,7 @@ plan) and `e2e_ntpclients_test.go` (the clients), and in `internal/engine/integr
 | level 1: modes 6 and 7, and queries from the uplink and the management network, get no answer; no reply is larger than its query | `TestModes6And7AndQueriesFromTheUplinkAndTheManagementNetworkGetNoAnswerAndNoReplyIsLargerThanItsQueryOnTheRealKernel` |
 | level 1: with the service namespace gone, redirected NTP fails closed | `TestRedirectedNTPFailsClosedWithoutTheServiceNamespaceOnTheRealKernel` |
 | level 1: the host clock reported unsynchronized makes the server answer with stratum 16 | `TestTheHostClockReportedUnsynchronizedMakesTheServerAnswerWithStratum16OnTheRealKernel` (and `TestAnUnsynchronizedHostClockMakesTheServerAnswerStratum16` at level 0) |
-| level 1: a scenario with a *time* step (the wait *NTP query seen* is stage 3) | `TestAScenarioWithATimeStepShiftsTheServedTimeUntilTheRunEndsOnTheRealKernel` |
+| level 1: a scenario with a *time* step, a wait *NTP query seen* and the check *NTP queried* | `TestAScenarioWithATimeStepShiftsTheServedTimeUntilTheRunEndsOnTheRealKernel`, `TestAScenarioWithATimeStepAWaitForTheQueryAndTheCheckSeesTheQueryOfARealClientOnTheRealKernel` |
 | Risk 37: NTS-KE connections are reported | `TestAnNTSKeyEstablishmentConnectionIsRefusedAndReportedForTheDeviceOnTheRealKernel`, `TestNTSKeyEstablishmentIsReportedAndRefused` (level 0) |
 | Acceptance: 5,000 queries/s and less than 1 ms added | `TestTheServerAnswersFiveThousandQueriesPerSecondThroughTheRedirectAndAddsLessThanAMillisecondOnTheRealKernel` (level 1, asserted under `Accurate()`, recorded in the measurement record), `TestTheServerAnswers5000QueriesPerSecondOnTheLoopback` and `TestBuildingAnAnswerTakesLessThanAMillisecond` (level 0 floors) |
 | level 0: encoding and parsing of NTP packets (fuzzed) | `FuzzPacket` (`make fuzz`, the seventh target), `TestAPacketIsParsedAndWrittenFieldByField`, `TestADatagramShorterThanTheHeaderIsNoPacket` |

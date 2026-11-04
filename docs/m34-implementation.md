@@ -49,7 +49,7 @@ application-layer families (DNS faults, TLS cases, DHCP actions).
 - **Engine and API:** lift the family: empty `domain.unavailableFamilies` (`profile.go`) and replace the tests that pin the refusals of stage 1
   (`TestATimeFaultAndAProfileWithATimePartAreRefusedUntilTheServerExists`, `TestATimeOverlayIsRefusedUntilTheServerExists`,
   `TestAProfileWithATimePartIsListedAsUnavailableAndItsActivationIsRefused`, `TestATimeStepAndAProfileWithATimePartAreRefusedWhenTheRunIsCreated` and
-  `TestTheNtpWaitAndTheNtpCheckAreRefusedUntilTheRunnerHasThem` (stage 3 for the last one), the stub tests in `internal/api/ntpservice_test.go`); once an
+  `TestTheNtpWaitAndTheNtpCheckAreRefusedUntilTheRunnerHasThem` (stage 3 for the last one; done, it is replaced by `TestTheNtpWaitAndTheNtpCheckAreAcceptedWhenTheRunIsCreated`), the stub tests in `internal/api/ntpservice_test.go`); once an
   activated profile can have a time part, `partsOf` in `internal/api/profiles.go` (its `FamilyTime` case, used by the effect of a profile) needs a test, since the
   activation is refused in stage 1; `Snapshot.NTPFaults` (`engine/engine.go`, `owner.go`), the `Supported*` lists, `engine/events.go` (three events),
   `internal/api/ntpservice.go` after `dns.go` and `tlsservice.go` (config long poll with `lastPollAt`, the query post that adds the device by

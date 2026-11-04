@@ -173,7 +173,7 @@ Choose what the server answers:
 |---|---|---|
 | a time of your choice | the correct time plus an **offset** (`+400d`, `-90s`, `-1y2d`; a year has 365 days), or an **absolute** instant that runs on from the moment the fault starts; on top of it a **drift** in ppm (1000 ppm adds 10 ms in 10 s) and a **leap** indicator (insert or delete) | certificates "not yet valid" or expired, tokens, schedules, clock discipline, leap-second handling |
 | unsynchronized | leap indicator 3, stratum 16 | a correct client ignores the server; a careless one takes its time |
-| kiss-of-death | stratum 0 with the code `RATE` (poll less often), `DENY` or `RSTR` (stop using the server) | the back-off of the client |
+| kiss-of-death | stratum 0 with the code `RATE` (poll less often), `DENY` or `RSTR` (stop using the server, as RFC 5905 says) | the back-off of the client; chrony reacts to `RATE` only and treats the other codes as an unsynchronized answer |
 | silence | no answer; the query is counted | no time at boot, fallback servers, retry back-off (a drop rule would not count the queries and would hit more than NTP) |
 | an invalid answer | the origin timestamp is wrong, the transmit timestamp is zero, or the mode is not 4 | a correct client discards it; a careless one is open to spoofing |
 

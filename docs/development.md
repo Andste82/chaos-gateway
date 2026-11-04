@@ -7327,8 +7327,8 @@ plan) and `e2e_ntpclients_test.go` (the clients), and in `internal/engine/integr
   alike would not cancel out), reads a time stamp in the era nearest to its own clock, reports the offset and the delay of RFC 5905 and says whether a correct client would take the
   answer (a reply to its own request from the address it asked, not unsynchronized, not a kiss code). `chronyd -Q` measures once and prints the offset; it is the real client for
   "unsynchronized is rejected", "kiss-of-death DENY", "origin mismatch is discarded" and the shift by a latency fault. `ntpdig` (ntpsec) asks once and prints the offset, the stratum and
-  the leap. A `chronyd` that runs as a daemon (`-x`: it never touches the clock) polls every second, so that the counters of the server show a RATE lengthening its poll interval and a DENY
-  stopping it. `fakentp.py` is "the real server" behind the uplink, or the server in the device's own network, with a label as its reference id and a log of its queries. The image of the
+  the leap. A `chronyd` that runs as a daemon (`-x`: it never touches the clock) polls every second, so that the counters of the server show a RATE lengthening its poll interval (chrony 4.8 reacts to RATE only: a DENY or RSTR is for it an
+  unsynchronized answer and it goes on asking, though RFC 5905 tells a client to stop). `fakentp.py` is "the real server" behind the uplink, or the server in the device's own network, with a label as its reference id and a log of its queries. The image of the
   development container installs `chrony` and `ntpsec-ntpdig`. The Python client is run against the real server on the loopback by a level 0 test
   (`ntpclient_test.go`, `TestThePythonSNTPClientReadsTheAnswersOfTheServerAsTheTestbedTestsExpect`), so a mistake of the client shows here and not first in the testbed.
 - **D36 in the tests.** The destination selectors are tests by port: the ports are read from the server's configuration (`Listen`) and from the log (`Port`), never assumed, because the
@@ -7414,7 +7414,7 @@ refused with 422), and their `schema=` blocks are validated against the spec.
 | level 1: `skew_ppm 1000` adds 10 ms over 10 s | `TestASkewOf1000PPMAddsTenMillisecondsOverTenSecondsOnTheRealKernel` |
 | Scope: `leap` (insert, delete) with the preset before midnight | `TestALeapFaultSetsTheLeapIndicatorAndServesTheMinutesBeforeMidnightOnTheRealKernel` |
 | level 1: `unsynchronized` makes chrony reject the server | `TestAnUnsynchronizedAnswerMakesChronyRejectTheServerOnTheRealKernel` |
-| level 1: `kiss_of_death DENY` makes chrony drop the server, `RATE` lengthens its poll interval (the counters show it) | `TestAKissOfDeathDENYMakesChronyDropTheServerAndRATELengthensItsPollIntervalOnTheRealKernel` |
+| level 1: `kiss_of_death` `RATE` lengthens the poll interval of chrony (the counters show it), `DENY` is not taken as time (chrony 4.8 goes on asking: it reacts to RATE only) | `TestAKissOfDeathRATELengthensThePollIntervalOfChronyAndDENYIsNotTakenOnTheRealKernel` |
 | level 1: `silence` leaves the query unanswered and counted while DNS of the same device works | `TestSilenceLeavesTheQueryUnansweredAndCountedWhileDNSOfTheSameDeviceWorksOnTheRealKernel` |
 | level 1: `origin_mismatch` is discarded by chrony and accepted by a careless client (the answer is in the log for the check) | `TestAnOriginMismatchIsDiscardedByChronyAndAcceptedByACarelessClientOnTheRealKernel` |
 | level 1: a destination selector affects only queries to the server it names (a hostname; by port, D36) | `TestADestinationSelectorOnAHostnameAffectsOnlyQueriesToTheAddressesOfThatNameOnTheRealKernel`, `TestEachDestinationSelectorGetsAPortOfItsOwnAndTheServerTellsTheServerAskedFromItOnTheRealKernel` |

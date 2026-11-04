@@ -28,8 +28,11 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
 # --- Network and testbed tools (plan §4.5) ------------------------------------
 # Gateway stack: nftables, tc/iproute2, conntrack, ethtool, WireGuard, BIRD 2,
 # Kea. Test clients: ping, dig, curl, openssl, iperf3, mosquitto, udhcpc
-# (busybox), socat, netcat. Capture: tcpdump, tshark. dnsmasq is the upstream
-# resolver/DHCP comparison in the spikes.
+# (busybox), socat, netcat, and for the NTP server (M34) chrony (`chronyd -Q`
+# asks a server once and prints the offset without setting the clock) and
+# ntpsec-ntpdig (`ntpdig` asks once and prints the offset). busybox ntpd -q is
+# not used: it sets the global clock. Capture: tcpdump, tshark. dnsmasq is the
+# upstream resolver/DHCP comparison in the spikes.
 # Kea and BIRD are pinned to the same versions as deploy/Dockerfile (M6a-01, M4c-17), so
 # devcontainer-based tests exercise the same behaviour the deployed containers run.
 ARG KEA_VERSION=3.0.3-1
@@ -38,7 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 nftables iptables conntrack ethtool kmod procps psmisc \
     iputils-ping iputils-tracepath arping bind9-dnsutils netcat-openbsd socat \
     iperf3 mosquitto-clients openssl tcpdump tshark gnupg \
-    busybox-static udhcpc \
+    busybox-static udhcpc chrony ntpsec-ntpdig \
     wireguard-tools "bird2=${BIRD_VERSION}" \
     "kea-dhcp4-server=${KEA_VERSION}" kea-admin \
     dnsmasq-base dnsmasq-utils \

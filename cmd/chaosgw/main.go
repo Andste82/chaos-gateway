@@ -28,6 +28,7 @@ var subcommands = []struct {
 	{"dns", "M6b", "DNS proxy in the service namespace", runDNS},
 	{"svcns", "M6b", "holder of the service namespace", runSvcNS},
 	{"tls", "M21", "TLS responder in the service namespace", runTLS},
+	{"ntp", "M34", "NTP server with time faults in the service namespace", runNTP},
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }

@@ -214,7 +214,11 @@ func renderExpr(e any) string {
 				if f, ok := m["type_flags"]; ok {
 					s += " " + renderExpr(f)
 				}
-				return s + " to " + renderExpr(m["addr"])
+				s += " to " + renderExpr(m["addr"])
+				if port, ok := m["port"]; ok {
+					s += ":" + renderExpr(port)
+				}
+				return s
 			case "jump", "goto":
 				return k + " " + v.(map[string]any)["target"].(string)
 			case "reject":

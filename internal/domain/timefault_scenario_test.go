@@ -51,21 +51,22 @@ func TestTheFamiliesOfAProfileIncludeTime(t *testing.T) {
 	}
 }
 
-// The time family is described and validated, but the server arrives with stage 2 of M34: until then a profile with a time
-// part is stored and shown, and its activation is refused as a whole (the engine reads UnavailableParts).
-func TestAProfileWithATimePartIsUnavailableUntilTheServerExists(t *testing.T) {
+// The time family is served since stage 2 of M34 (the NTP server), so a profile with a time part is available. The
+// mechanism that holds a family back stays: a build that describes a family before it serves it names it in
+// SetUnavailableFamilies, and the profile is then unavailable as a whole.
+func TestAProfileWithATimePartIsAvailableSinceTheServerExists(t *testing.T) {
 	p := model.Profile{Name: "clock", Parts: model.ProfileParts{Time: &model.TimeFault{Absolute: ptr(ntpEpoch.AddDate(70, 0, 0))}}}
-	if got := UnavailableParts(p); len(got) != 1 || got[0] != (UnavailablePart{FamilyTime, "M34"}) {
+	if got := UnavailableParts(p); len(got) != 0 {
 		t.Fatalf("%+v", got)
 	}
-	// the other parts of a profile stay available, and so does every profile of the catalogue
+	// the other parts of a profile are available, too
 	other := model.Profile{Parts: model.ProfileParts{Dns: &model.DnsFault{Action: "servfail"}, Tls: &model.TlsCase{Case: "expired"}}}
 	if got := UnavailableParts(other); len(got) != 0 {
 		t.Errorf("%+v", got)
 	}
-	// the family is available once the build serves it
-	defer SetUnavailableFamilies(map[string]string{})()
-	if got := UnavailableParts(p); len(got) != 0 {
+	// a family that is held back makes the profile unavailable, with the milestone
+	defer SetUnavailableFamilies(map[string]string{FamilyTime: "M99"})()
+	if got := UnavailableParts(p); len(got) != 1 || got[0] != (UnavailablePart{FamilyTime, "M99"}) {
 		t.Errorf("%+v", got)
 	}
 }

@@ -55,6 +55,38 @@ func TestTheAccessVerdictFollowsTheMatrixAndItsDefault(t *testing.T) {
 	}
 }
 
+// The NTP server of a network (plan §2.18) answers UDP 123 on the gateway address: the redirect stands in front of the
+// input chain, so the protection of the test networks lets it through for the gateways that have the server, and for them
+// only.
+func TestTheGatewaysNTPServerAnswersUDP123OnItsAddressOnly(t *testing.T) {
+	w := accessWorld(t, nil)
+	facts := AccessFacts{Gateway: []netip.Addr{netip.MustParseAddr("10.10.0.1"), netip.MustParseAddr("10.99.0.1")},
+		NTP: []netip.Addr{netip.MustParseAddr("10.10.0.1")}}
+	a := netip.MustParseAddr
+	for _, c := range []struct {
+		name, dst, proto string
+		port             int
+		want             string
+	}{
+		{"UDP 123 to a gateway with the server", "10.10.0.1", "udp", 123, "allow"},
+		{"UDP 123 without a protocol", "10.10.0.1", "", 123, "allow"},
+		{"TCP 123 is not NTP", "10.10.0.1", "tcp", 123, "drop"},
+		{"another UDP port", "10.10.0.1", "udp", 124, "drop"},
+		{"TCP 4460 (NTS key establishment) to a gateway with the server", "10.10.0.1", "tcp", 4460, "allow"},
+		{"UDP 4460 is not NTS key establishment", "10.10.0.1", "udp", 4460, "drop"},
+		{"TCP 4460 to a gateway without the server", "10.99.0.1", "tcp", 4460, "drop"},
+		{"a gateway without the server", "10.99.0.1", "udp", 123, "drop"},
+	} {
+		got := w.AccessVerdict(a("10.10.0.5"), a(c.dst), c.proto, c.port, facts)
+		if got.Verdict != c.want || got.Layer != AccessGatewayProtection {
+			t.Errorf("%s: %+v, want %s", c.name, got, c.want)
+		}
+		if c.want == "drop" && strings.Contains(got.Reason, "NTP") != (c.dst == "10.10.0.1") {
+			t.Errorf("%s: the reason names the server wrongly: %s", c.name, got.Reason)
+		}
+	}
+}
+
 func TestAnExplicitEntryBeatsTheDefaultAndTheMoreSpecificEndpointComesFirst(t *testing.T) {
 	hubClient := "lab-rA"
 	deny := func(c *model.Configuration) {

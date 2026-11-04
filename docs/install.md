@@ -487,6 +487,7 @@ failed check is a thing to fix, the others go on working.
 | `host.modules` | the required kernel modules; those that exist and are not loaded are loaded | `linux-modules-extra-$(uname -r)` for a kernel without them; the host setup loads them at boot |
 | `host.ip_forward` | `net.ipv4.ip_forward` (the first apply switches it on) | the host setup makes it permanent |
 | `host.ping_group_range` | the unprivileged ICMP socket of the ping of the diagnostics | the host setup |
+| `host.clock` | the host clock is synchronized, which the gateway's NTP server serves | a time service on the host (`chrony`, `systemd-timesyncd`) |
 | `host.proc_sys` | `/proc/sys` is writable in the executor's container | the executor container is privileged (`compose.yaml`) |
 | `host.netns` | a network namespace can be made, and `/run/netns` is shared with the host (`rshared`) | the mounts of the executor in `compose.yaml` |
 | `host.firewall` | no other firewall (`ufw`, `firewalld`, an `nft` table of your own) whose drop verdicts would hit test traffic | allow the traffic of the test networks there, or stop it |

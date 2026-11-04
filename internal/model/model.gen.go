@@ -1072,6 +1072,7 @@ func (e ExplanationAccessLayer) Valid() bool {
 const (
 	ExplanationServiceDnsProxy     ExplanationService = "dns_proxy"
 	ExplanationServiceNone         ExplanationService = "none"
+	ExplanationServiceNtpServer    ExplanationService = "ntp_server"
 	ExplanationServiceTlsProxy     ExplanationService = "tls_proxy"
 	ExplanationServiceTlsResponder ExplanationService = "tls_responder"
 )
@@ -1082,6 +1083,8 @@ func (e ExplanationService) Valid() bool {
 	case ExplanationServiceDnsProxy:
 		return true
 	case ExplanationServiceNone:
+		return true
+	case ExplanationServiceNtpServer:
 		return true
 	case ExplanationServiceTlsProxy:
 		return true
@@ -1209,6 +1212,7 @@ func (e FlowProtocol) Valid() bool {
 // Defines values for FlowService.
 const (
 	FlowServiceDnsProxy     FlowService = "dns_proxy"
+	FlowServiceNtpServer    FlowService = "ntp_server"
 	FlowServiceTlsProxy     FlowService = "tls_proxy"
 	FlowServiceTlsResponder FlowService = "tls_responder"
 )
@@ -1217,6 +1221,8 @@ const (
 func (e FlowService) Valid() bool {
 	switch e {
 	case FlowServiceDnsProxy:
+		return true
+	case FlowServiceNtpServer:
 		return true
 	case FlowServiceTlsProxy:
 		return true
@@ -4551,7 +4557,8 @@ type Event struct {
 	// `answer`, at most one per device and fault every 10 s); `ntp_query_seen` that a device asked the server for the
 	// time (`data`: `device`; the wait condition of that name reads the server's own record of the queries and does not
 	// depend on this event, so the event may be limited without a wait missing a query); `nts_seen` that a device made an
-	// NTS key-establishment connection (TCP 4460), which the server cannot answer (once per device).
+	// NTS key-establishment connection (TCP 4460) or sent a query with NTS extension fields to the server, which cannot answer
+	// either (once per device).
 	Type EventType `json:"type"`
 }
 
@@ -4566,7 +4573,8 @@ type Event struct {
 // `answer`, at most one per device and fault every 10 s); `ntp_query_seen` that a device asked the server for the
 // time (`data`: `device`; the wait condition of that name reads the server's own record of the queries and does not
 // depend on this event, so the event may be limited without a wait missing a query); `nts_seen` that a device made an
-// NTS key-establishment connection (TCP 4460), which the server cannot answer (once per device).
+// NTS key-establishment connection (TCP 4460) or sent a query with NTS extension fields to the server, which cannot answer
+// either (once per device).
 type EventType string
 
 // Explanation defines model for Explanation.
@@ -5693,7 +5701,7 @@ type NtpQueryLogEntry struct {
 	// Fault The time fault overlay that shaped the answer.
 	Fault *Uuid `json:"fault,omitempty"`
 
-	// Kind `nts_ke` - a connection to the server's NTS key-establishment port (TCP 4460) that the server cannot answer (plan §2.18); the fields below are absent.
+	// Kind `nts_ke` - a connection to the server's NTS key-establishment port (TCP 4460), or a query with NTS extension fields on a UDP port, that the server cannot answer (plan §2.18); `port` is the port it arrived on, and the fields below are absent.
 	Kind *NtpQueryLogEntryKind `json:"kind,omitempty"`
 
 	// OffsetMs The served time minus the correct time, in milliseconds.
@@ -5718,7 +5726,7 @@ type NtpQueryLogEntry struct {
 // NtpQueryLogEntryAnswer How the server answered; `dropped` - not answered because the device's rate limit (16 per second) was exceeded.
 type NtpQueryLogEntryAnswer string
 
-// NtpQueryLogEntryKind `nts_ke` - a connection to the server's NTS key-establishment port (TCP 4460) that the server cannot answer (plan §2.18); the fields below are absent.
+// NtpQueryLogEntryKind `nts_ke` - a connection to the server's NTS key-establishment port (TCP 4460), or a query with NTS extension fields on a UDP port, that the server cannot answer (plan §2.18); `port` is the port it arrived on, and the fields below are absent.
 type NtpQueryLogEntryKind string
 
 // NtpServiceConfig defines model for NtpServiceConfig.
@@ -6803,10 +6811,9 @@ type ProfileView struct {
 	// activation produces.
 	Activations *[]ProfileActivation `json:"activations,omitempty"`
 
-	// Available False while a part of the profile is not in this build. Every part is available since M22 (the `dns` family
-	// since M20, the certificate and handshake cases of the `tls` family, `tls-broken` among them, since M21, and the
-	// case `intercept` since M22) except the `time` part (M34): a profile with a `time` part is false here, with the
-	// milestone M34 in `unavailable_reason`, until the NTP server is in the build; the field stays for a part a later
+	// Available False while a part of the profile is not in this build. Every part is available (the `dns` family since M20, the
+	// certificate and handshake cases of the `tls` family, `tls-broken` among them, since M21, the case `intercept`
+	// since M22 and the `time` part, which the NTP server answers, since M34); the field stays for a part a later
 	// milestone adds. A profile with a part that is not in the build can be defined and shown, but activating it
 	// is refused with `unsupported_feature`. So is applying a revision that gives a profile
 	// such a part while an overlay activates it (the profile and the milestone are named; remove

@@ -88,7 +88,12 @@ func (r *nftRecorder) take() (elements, full int) {
 	return
 }
 
-func newDHCPBed(t *testing.T) *dhcpBed {
+func newDHCPBed(t *testing.T) *dhcpBed { return newDHCPBedWith(t, false) }
+
+// newDHCPBedWith is newDHCPBed; with serviceNS the engine is told that a service namespace exists, as in the product (the
+// holder is a process in a network namespace of its own, like the svcns container), so that what depends on the namespace
+// (the NTP server as the DHCP option 42, plan M34) is in the configuration of Kea.
+func newDHCPBedWith(t *testing.T, serviceNS bool) *dhcpBed {
 	t.Helper()
 	for _, tool := range []string{"kea-dhcp4", "busybox", "conntrack"} {
 		if _, err := exec.LookPath(tool); err != nil {
@@ -166,9 +171,28 @@ func newDHCPBed(t *testing.T) *dhcpBed {
 		}
 	})
 	rec := &nftRecorder{Local: apply.Local{E: ex}}
-	e, err := engine.New(engine.Config{Store: st, Exec: rec, Namespace: top.GW.Name, Clock: &clock.Real{},
+	ecfg := engine.Config{Store: st, Exec: rec, Namespace: top.GW.Name, Clock: &clock.Real{},
 		Log:  slog.New(slog.NewTextHandler(engineLog, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		DHCP: &engine.KeaDHCP{Client: kc, Base: base}})
+		DHCP: &engine.KeaDHCP{Client: kc, Base: base}}
+	if serviceNS {
+		svc := fmt.Sprintf("cgsvc-m34-%d", time.Now().UnixNano()%1000000000)
+		holder := top.GW.Start("unshare", "-n", "sleep", "3600")
+		gwInode := netnsInode(t, "/run/netns/"+top.GW.Name)
+		holderDeadline := time.Now().Add(10 * time.Second)
+		for {
+			if comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", holder.Pid())); strings.TrimSpace(string(comm)) == "sleep" && netnsInode(t, fmt.Sprintf("/proc/%d/ns/net", holder.Pid())) != gwInode {
+				break
+			}
+			if time.Now().After(holderDeadline) {
+				t.Fatal("the holder did not enter its own network namespace")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Cleanup(func() { _ = exec.Command("ip", "netns", "delete", svc).Run() })
+		ecfg.ServiceNS = svc
+		ecfg.ServiceHolderPID = func() int { return holder.Pid() }
+	}
+	e, err := engine.New(ecfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,17 +270,24 @@ func setDHCP(c *model.Configuration, id string, scope *model.DhcpScope) {
 // udhcpc starts a DHCP client in a namespace and returns the file its script logs to.
 func (b *dhcpBed) udhcpc(ns *testbed.Namespace, tries int) (logFile string) {
 	b.t.Helper()
+	return b.udhcpcWith(ns, tries)
+}
+
+// udhcpcWith is udhcpc with more arguments for the client, for example `-O ntpsrv` to request option 42, which Kea
+// sends only to a client that asks for it.
+func (b *dhcpBed) udhcpcWith(ns *testbed.Namespace, tries int, extra ...string) (logFile string) {
+	b.t.Helper()
 	dir := b.t.TempDir()
 	logFile = filepath.Join(dir, "client.log")
 	script := filepath.Join(dir, "udhcpc.sh")
 	// The line is logged after the address is set: waitBound returns on it, and a test that then routes via the gateway
 	// needs the address on the interface (the emulated weekly run once lost that race: "Nexthop has invalid gateway").
-	body := "#!/bin/sh\ncase \"$1\" in\n  bound) ip addr flush dev $interface; ip addr add $ip/24 dev $interface ;;\n  renew) ;;\n  deconfig) ip addr flush dev $interface ;;\nesac\necho \"$1 ip=$ip router=$router dns=$dns lease=$lease domain=$domain\" >> " + logFile + "\n"
+	body := "#!/bin/sh\ncase \"$1\" in\n  bound) ip addr flush dev $interface; ip addr add $ip/24 dev $interface ;;\n  renew) ;;\n  deconfig) ip addr flush dev $interface ;;\nesac\necho \"$1 ip=$ip router=$router dns=$dns lease=$lease domain=$domain ntpsrv=$ntpsrv\" >> " + logFile + "\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		b.t.Fatal(err)
 	}
 	ns.Must("ip", "addr", "flush", "dev", "eth0")
-	ns.Start("busybox", "udhcpc", "-f", "-i", "eth0", "-s", script, "-t", fmt.Sprint(tries), "-T", "2", "-A", "2")
+	ns.Start("busybox", append([]string{"udhcpc", "-f", "-i", "eth0", "-s", script, "-t", fmt.Sprint(tries), "-T", "2", "-A", "2"}, extra...)...)
 	return logFile
 }
 

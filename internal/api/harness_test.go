@@ -43,6 +43,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/domain"
 	"github.com/Andste82/chaos-gateway/internal/engine"
 	"github.com/Andste82/chaos-gateway/internal/executor"
+	"github.com/Andste82/chaos-gateway/internal/ntpserver"
 	"github.com/Andste82/chaos-gateway/internal/probe"
 	"github.com/Andste82/chaos-gateway/internal/secrets"
 	"github.com/Andste82/chaos-gateway/internal/store"
@@ -137,6 +138,9 @@ type options struct {
 	// apiClock is the API server's clock (nil: the real one), for a test whose result must not depend on
 	// how fast the machine runs, e.g. a cache with a lifetime
 	apiClock clock.Clock
+	// hostClock says whether the host clock is synchronized, for the health of the NTP server (nil: synchronized; the
+	// machine that runs the tests is not a reference)
+	hostClock ntpserver.SyncState
 	// maxRuns limits the queued and running runs (0: the default of the manager)
 	maxRuns int
 	// started is when the gateway process started (zero: now)
@@ -275,6 +279,10 @@ func newGW(t *testing.T, opts ...func(*options)) *gw {
 			return []netip.Addr{netip.MustParseAddr("192.0.2.53")}
 		}}
 	capCfg(&apiCfg)
+	apiCfg.HostClock = o.hostClock
+	if apiCfg.HostClock == nil {
+		apiCfg.HostClock = ntpserver.Synchronized
+	}
 	apiCfg.Diagnostics = o.diagnostics
 	apiCfg.ProcDir = o.procDir
 	apiCfg.MetricsReadTimeout = o.metricsTimeout

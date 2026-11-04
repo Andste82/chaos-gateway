@@ -6,6 +6,9 @@ import (
 	"net"
 	"sort"
 	"time"
+
+	"github.com/Andste82/chaos-gateway/internal/engine"
+	"github.com/Andste82/chaos-gateway/internal/model"
 )
 
 // SafeModeHolds are the ids of the operations that safe mode refuses (plan §3.9).
@@ -54,6 +57,13 @@ func OSConfigCacheReadsOfALateCaller() int {
 	return reads
 }
 
+// SetNTPPoll shortens the NTP configuration's long poll for tests and returns a function that restores it.
+func SetNTPPoll(wait, tick time.Duration) (restore func()) {
+	old := ntpPoll
+	ntpPoll.wait, ntpPoll.tick = wait, tick
+	return func() { ntpPoll = old }
+}
+
 // SetTLSPoll shortens the TLS configuration's long poll for tests and returns a function that restores it.
 func SetTLSPoll(wait, tick time.Duration) (restore func()) {
 	old := tlsPoll
@@ -90,3 +100,38 @@ type fakeConn struct {
 }
 
 func (f fakeConn) LocalAddr() net.Addr { return f.local }
+
+// NTPDevice is what the API knows of a device's use of the NTP server (the per-device state of M34).
+type NTPDevice = ntpDevice
+
+// NTPDeviceState returns the state of a device (UUID), false for a device that never asked the NTP server.
+func (s *Server) NTPDeviceState(device string) (NTPDevice, bool) { return s.ntpDeviceState(device) }
+
+// NTPNetworksOf lists the networks of the server's configuration for a snapshot, as "network gateway clients" lines.
+func NTPNetworksOf(snap *engine.Snapshot) []string {
+	var out []string
+	for _, n := range ntpNetworks(snap) {
+		out = append(out, n.Network+" "+n.Gateway+" "+n.Clients)
+	}
+	return out
+}
+
+// NTPLog returns the query log the API keeps, oldest first, with the device the API found for each entry.
+func (s *Server) NTPLog() []model.NtpQueryLogEntry {
+	s.ntp.logMu.Lock()
+	defer s.ntp.logMu.Unlock()
+	out := make([]model.NtpQueryLogEntry, len(s.ntp.entries))
+	for i, l := range s.ntp.entries {
+		out[i] = l.e
+	}
+	return out
+}
+
+// NTPQueriesOf returns the queries of the devices at or after the time, as the wait and the check of a run read them.
+func (s *Server) NTPQueriesOf(devices []string, since time.Time) []model.NtpQueryLogEntry {
+	var out []model.NtpQueryLogEntry
+	for _, l := range s.ntpQueries(devices, since) {
+		out = append(out, l.e)
+	}
+	return out
+}

@@ -30,6 +30,13 @@ const (
 	// EventHTTPFaultTriggered says that a rule of an interception case acted on an HTTP exchange (M22; the log of the
 	// exchanges carries each one).
 	EventHTTPFaultTriggered = "http_fault_triggered"
+	// EventNTPAnswered says that a time fault shaped an answer of the NTP server (plan §2.18, M34; at most one per device and
+	// fault every 10 s), EventNTPQuerySeen that a device asked the server for the time (what a scenario's wait for the next
+	// query looks for), and EventNTSSeen that a device tried NTS key establishment, which the server cannot answer (once per
+	// device).
+	EventNTPAnswered  = "ntp_answered"
+	EventNTPQuerySeen = "ntp_query_seen"
+	EventNTSSeen      = "nts_seen"
 	// The events of runs (internal/run, M15).
 	EventRunQueued   = "run_queued"
 	EventRunStarted  = "run_started"

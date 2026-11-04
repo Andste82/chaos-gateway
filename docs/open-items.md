@@ -62,7 +62,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   with a reason, or deferred to M38 (the preflight clauses of §3.3/§3.4 and the expiry warning of the installed certificate), see the verdict table. The five
   items the phase raised, P7-M27-01, -02, P7-M28-01, P7-M29-01 and -02, were decided by the maintainer on 2026-10-31 and are closed. **Phase 7 is closed on 2026-11-02 with the release of V1 (`v1.0.0`, `image.yml` run 41543627145).** No item of the phase is open. Two CI items remain as maintenance after V1, not as scope of Phase 7: P7-CI-01 (three timing tests of the weekly emulated jobs, not caused by Phase 7) and P7-CI-02 (a probe namespace seen by a test of another package; watch the level 1 runs); P7-M27-05 (what the engine does when the active revision fails because the executor is not there) was decided by the maintainer on 2026-11-02 and is closed.
 - **M34** (NTP server and time faults, delivered in four stages, D37, branch `m34-ntp`): the questions the stages raise and that no later stage of M34 settles are under
-  [M34 open items](#m34-open-items) at the end of the file. Stage 1 (specification and domain) raised P34-01 to P34-03, all open.
+  [M34 open items](#m34-open-items) at the end of the file. Stage 1 (specification and domain) raised P34-01 to P34-03 and stage 2 (server and wiring) P34-04 to P34-06, all open.
 
 ## Phase 1 audit result
 
@@ -3536,3 +3536,42 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 - Acceptance: for (a) a test shows the refusal on the global target and on a remote network, and a revision that gives an activated profile a time part there is refused; for (b) a test shows the other parts active and the warning present.
 - Needs maintainer: yes
 - Effort: S for (a), M for (b)
+
+### P34-04 Does a fault with `absolute` answer stratum 16 when the host clock is not synchronized
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. Plan §2.18 ("Honest when unsynchronized") names this question itself as open for the maintainer. When the host clock is not synchronized the server answers leap 3 and stratum 16 so that a client does not take an unsynchronized time for good. A fault with `absolute` sets the time by itself, so the time the client gets does not depend on the host clock. Stage 2 serves `absolute` as it is (stratum 2, leap 0): the tester asked for exactly that time, and the host clock is not part of it.
+- Evidence: `docs/plan.md` §2.18, `internal/ntpserver/answer.go` (the `f.absolute.IsZero()` exception), `internal/ntpserver/server_test.go` (`TestAnUnsynchronizedHostClockMakesTheServerAnswerStratum16`).
+- Task: decide whether `absolute` is exempt from the stratum 16 answer.
+- Options: (a) `absolute` is served as it is, whatever the host clock says (what stage 2 does); (b) `absolute` answers stratum 16 and leap 3 as well, so a client sees a clock that it must not use, also when the tester asked for a fixed time.
+- Recommendation: (a): the fault exists to give a device a chosen time, and a client that refuses the answer would make the fault useless on a host that has no time source; the health report and the preflight check `host.clock` still say that the host clock is not synchronized.
+- Acceptance: for (a) the text of §2.18 says that `absolute` is exempt; for (b) the exception in `answer.go` goes and the test shows stratum 16 and leap 3 for a fault with `absolute` too.
+- Needs maintainer: yes
+- Effort: S
+
+### P34-05 Does a destination selector with several ports get one redirect port or one per port
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. D36 gives one redirect port per distinct destination selector. A selector that names several ports or a port range therefore shares one redirect port, and the server cannot tell which of the selector's ports a query was for. A fault without a selector (UDP 123 only) is served on that port for the traffic to the other ports too, and the "server asked" is not named for such a selector. Stage 2 implements D36 as written and documents the limit in plan §2.18.
+- Evidence: `docs/plan.md` §2.18 (the paragraph on hardcoded servers), `internal/compiler/ntp.go` (the allocation of the redirect ports), `internal/compiler/ntp_test.go`.
+- Task: decide whether the limit stays, is removed at the cost of the destination budget, or is refused up front.
+- Options: (a) accept and document the limit (what stage 2 does); (b) allocate a redirect port per (selector, destination port), which uses up the 32-destination budget faster; (c) refuse a time fault whose selector names several ports or ranges in the validation (`invalid_time_fault`).
+- Recommendation: (a) until a tester needs several ports; NTP is on UDP 123 in practice and a selector with another port is the exception.
+- Acceptance: for (a) the text of §2.18 names the limit; for (b) a compiler test shows two ports of one selector on two redirect ports and the budget counted per pair; for (c) a domain test shows the refusal.
+- Needs maintainer: yes
+- Effort: S for (a) and (c), M for (b)
+
+### P34-06 Is the broad deletion of the tracked NTP flows on a change of the redirects acceptable
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. The redirect is NAT and a NAT chain sees only the first packet of a flow, so the engine deletes the tracked NTP flows when an apply changes the redirects of NTP (decided in stage 2, S2-CONF-01). The deletion takes the flows of every client in the namespace, not only those of the affected scope. It does not run on the first apply of a process (the engine does not know what the kernel ran before) and not when only the DNS-derived set of a hostname selector changes, so a device that keeps its source port can keep the decision of its first packet for up to 30 s unreplied or 120 s replied in those two cases.
+- Evidence: `docs/plan.md` §2.18, `internal/engine/ntpflows.go`, `internal/engine/ntpflows_test.go`, `internal/engine/timefault_flows_test.go`.
+- Task: decide whether the broad deletion is acceptable or has to be limited to the affected sources, and whether the two cases that delete nothing need a remedy.
+- Options: (a) keep the broad deletion (what stage 2 does): NTP flows are cheap to recreate, a client sends its next query anyway; (b) limit the deletion to the sources of the changed scopes, which needs the engine to know the addresses of each scope at the time of the change; (c) as (b), and delete also on the first apply and on a change of a DNS-derived set.
+- Recommendation: (a): a query lost in the moment of an apply costs a retry, and the two cases without deletion are bounded by the flow timeouts.
+- Acceptance: for (a) the text of §2.18 names the breadth of the deletion; for (b) and (c) a test shows that the flows of an unaffected client survive the apply and (c) that the first apply and a changed DNS set delete the affected flows.
+- Needs maintainer: yes
+- Effort: S for (a), M for (b) and (c)

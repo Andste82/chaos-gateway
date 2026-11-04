@@ -276,8 +276,8 @@ func (s *Server) GetCapabilities(c *gin.Context) {
 }
 
 // Features are the feature flags of this build (plan §2.15 capabilities): what the milestones up to
-// M14, M35a (port forwarding), M15 (runs), M20 (DNS faults and hostname selectors), M21 (the TLS responder: certificate cases) M23 (DHCP test actions), M24 (diagnostics), M25 (probes), M26 (metrics) and M29 (the replaceable HTTPS certificate) provide.
-var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "dns.faults", "dns.hostname_selectors", "tls.responder", "tls.cases", "tls.intercept", "dhcp.actions", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards", "runs", "checks", "diagnostics", "probes", "metrics", "https.certificate"}
+// M14, M35a (port forwarding), M15 (runs), M20 (DNS faults and hostname selectors), M21 (the TLS responder: certificate cases) M23 (DHCP test actions), M34 (time faults and the NTP server), M24 (diagnostics), M25 (probes), M26 (metrics) and M29 (the replaceable HTTPS certificate) provide.
+var Features = []string{"networks.lan", "networks.wireguard", "routing.static", "routing.bird", "revisions", "events", "audit", "dhcp", "dns.proxy", "dns.faults", "dns.hostname_selectors", "tls.responder", "tls.cases", "tls.intercept", "dhcp.actions", "time.faults", "ntp.server", "devices", "flows", "overlays", "faults.impairment", "faults.mtu", "faults.tunnel", "wireguard.actions", "rules", "profiles", "explain", "port_forwards", "runs", "checks", "diagnostics", "probes", "metrics", "https.certificate"}
 
 // GetSystemInfo implements GET /system/info.
 func (s *Server) GetSystemInfo(c *gin.Context) {
@@ -463,6 +463,12 @@ func (s *Server) healthReport(parent context.Context) (string, []healthComponent
 		}
 		comps = append(comps, proxy)
 	}
+	// the NTP server runs in the service namespace (M34): without one there is none
+	ntpc, ntpDegraded := s.ntpHealth(snap)
+	if ntpDegraded {
+		worse("degraded")
+	}
+	comps = append(comps, ntpc)
 	if err := s.cfg.Audit.Err(); err != nil {
 		comps[0].Status, comps[0].Detail = "unhealthy", "the audit log cannot be written: "+firstLine(err.Error())
 		worse("unhealthy")

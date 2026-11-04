@@ -2,6 +2,7 @@ package domain
 
 import (
 	"net/netip"
+	"slices"
 	"sort"
 
 	"github.com/Andste82/chaos-gateway/internal/model"
@@ -19,6 +20,11 @@ type AccessFacts struct {
 	// Gateway are the addresses the gateway itself answers on (bridge and WireGuard addresses):
 	// traffic to them is judged by the gateway's protection, not by the matrix.
 	Gateway []netip.Addr
+	// NTP are the gateway addresses whose network has the gateway's NTP server (plan §2.18): UDP 123 and TCP 4460 (NTS key
+	// establishment) to them
+	// are redirected to the server in the service namespace in front of the input chain, so the protection of the test
+	// networks does not see them.
+	NTP []netip.Addr
 	// Management are the prefixes of the management network as the kernel tells it: the allowed
 	// sources (the set the anti-lockout rule, the matrix endpoint `management` and the two-port guard
 	// match).
@@ -344,6 +350,15 @@ func (w *World) AccessVerdict(src, dst netip.Addr, protocol string, port int, f 
 			return AccessExplanation{Verdict: "allow", Layer: AccessGatewayProtection, Reason: "the gateway's protection covers the test networks only; a management source is not filtered outside SSH and the UI/API (nothing is guaranteed there)"}
 		case protocol == "icmp", port == 53 && (protocol == "udp" || protocol == "tcp" || protocol == ""), port == 67 && (protocol == "udp" || protocol == ""):
 			return AccessExplanation{Verdict: "allow", Layer: AccessGatewayProtection, Reason: "the gateway answers ICMP echo, DNS and DHCP on a test network"}
+		case port == NTPPort && (protocol == "udp" || protocol == "") && slices.Contains(f.NTP, dst):
+			return AccessExplanation{Verdict: "allow", Layer: AccessGatewayProtection, Reason: "the gateway's NTP server answers UDP 123 on a test network"}
+		case port == NTSKEPort && protocol == "tcp" && slices.Contains(f.NTP, dst):
+			// the same redirect as UDP 123 leads the TCP port of NTS key establishment to the server, which accepts the connection
+			// and closes it (an NTS client then reports the key establishment as failed, plan §2.18)
+			return AccessExplanation{Verdict: "allow", Layer: AccessGatewayProtection, Reason: "the gateway's NTP server accepts and closes NTS key establishment (TCP 4460) on a test network"}
+		}
+		if slices.Contains(f.NTP, dst) {
+			return AccessExplanation{Verdict: "drop", Layer: AccessGatewayProtection, Reason: "a test network reaches only ICMP echo, DNS, DHCP and NTP on the gateway"}
 		}
 		return AccessExplanation{Verdict: "drop", Layer: AccessGatewayProtection, Reason: "a test network reaches only ICMP echo, DNS and DHCP on the gateway"}
 	}

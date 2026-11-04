@@ -63,7 +63,7 @@ func TestDNSToOtherResolversIsRedirectedToTheProxyForTheNetworksThatAskForIt(t *
 	var own, other []string
 	for _, r := range rules {
 		switch {
-		case strings.Contains(r, "dnat") && strings.Contains(r, "iifname "+iot.Name) || strings.Contains(r, "meta iifname "+iot.Name):
+		case strings.Contains(r, "dnat") && strings.Contains(r, "port 53") && strings.Contains(r, "iifname "+iot.Name):
 			if strings.Contains(r, "!=") {
 				other = append(other, r)
 			} else {
@@ -86,8 +86,14 @@ func TestDNSToOtherResolversIsRedirectedToTheProxyForTheNetworksThatAskForIt(t *
 	}
 	// the other network and a gateway without the setting have the two rules of the gateway's own address only
 	plain := compileDNSNet(t, false, false, true)
-	if n := len(renderRules(chainOf(t, plain, "prerouting"))); n != 4 {
-		t.Errorf("%d rules without the setting", n)
+	n := 0
+	for _, r := range renderRules(chainOf(t, plain, "prerouting")) {
+		if strings.Contains(r, "dport 53") {
+			n++
+		}
+	}
+	if n != 4 {
+		t.Errorf("%d DNS rules without the setting", n)
 	}
 }
 

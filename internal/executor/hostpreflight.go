@@ -26,6 +26,12 @@ type HostPreflightState struct {
 // owner: the API container's user has to be able to write them.
 func WithPreflight(dirs []preflight.DataDir) Option { return func(e *Executor) { e.pfDirs = dirs } }
 
+// WithHostClock gives the preflight the reader of the host clock's state (adjtimex), for the check host.clock; without it the
+// clock is not checked.
+func WithHostClock(read func() (preflight.ClockState, error)) Option {
+	return func(e *Executor) { e.pfClock = read }
+}
+
 // WithOwnRoot replaces the file system and the kernel release the preflight reads (the executor's own /proc, /sys and
 // /lib/modules); the tests of the checks have no real machine.
 func WithOwnRoot(fsys fs.FS, release string) Option {
@@ -61,6 +67,7 @@ func (e *Executor) HostPreflight(ctx context.Context) HostPreflightState {
 			Run:      e.hostRun,
 			HostFS:   e.hostFS,
 			DataDirs: e.pfDirs,
+			Clock:    e.pfClock,
 		})...)
 	}
 	e.pfAt, e.pfState = e.clock.Now(), st

@@ -206,6 +206,11 @@ func (t *Target) keaSubnet(sid int, id string, n *domain.NetInfo, br *Bridge) (k
 			}
 		}
 	}
+	if len(sub.NTP) == 0 && br.NTP {
+		// the gateway's own NTP server, where the network uses it and the namespace it runs in exists (plan §2.18, Q2); a
+		// scope that names servers keeps them
+		sub.NTP = []netip.Addr{gw}
+	}
 	return sub, true
 }
 

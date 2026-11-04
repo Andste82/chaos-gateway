@@ -77,6 +77,7 @@ type Executor struct {
 	hostFS fs.FS
 	// pfDirs, pfFS and pfRelease are what the preflight looks at (hostpreflight.go); the cache keeps the last run for ten seconds
 	pfDirs    []preflight.DataDir
+	pfClock   func() (preflight.ClockState, error)
 	pfFS      fs.FS
 	pfRelease string
 	pfMu      sync.Mutex

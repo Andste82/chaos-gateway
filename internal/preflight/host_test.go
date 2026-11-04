@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"testing"
 	"testing/fstest"
+	"time"
 )
 
 const hostRelease = "6.8.0-142-generic"
@@ -364,5 +365,38 @@ func TestAnAddressOfTheHostThatOverlapsDockersRangesIsWarnedAbout(t *testing.T) 
 	}
 	if c := run("!no", ""); c.Status != "warn" || !strings.Contains(c.Message, "cannot be listed") {
 		t.Errorf("ip failing: %+v", c)
+	}
+}
+
+// M34: the NTP server serves the host clock, so the preflight says whether it is synchronized. The reading comes from the
+// probe (adjtimex in production); a probe without one makes no check, as the tests of the other checks have no kernel to ask.
+func TestTheHostClockCheckSaysWhetherTheServerCanBeTrusted(t *testing.T) {
+	check := func(read func() (ClockState, error)) (HostCheck, bool) {
+		p := probe(hostFS(nil), versions(nil))
+		p.Clock = read
+		for _, c := range HostChecks(context.Background(), p) {
+			if c.ID == "host.clock" {
+				return c, true
+			}
+		}
+		return HostCheck{}, false
+	}
+
+	if _, ok := check(nil); ok {
+		t.Error("a probe without a clock reader reports the clock")
+	}
+	c, ok := check(func() (ClockState, error) {
+		return ClockState{Synchronized: true, MaxError: 1200 * time.Microsecond}, nil
+	})
+	if !ok || c.Status != "ok" || !strings.Contains(c.Message, "1.2ms") || c.Fix != "" {
+		t.Errorf("a synchronized clock: %+v", c)
+	}
+	c, _ = check(func() (ClockState, error) { return ClockState{MaxError: 16 * time.Second}, nil })
+	if c.Status != "warn" || !strings.Contains(c.Message, "stratum 16") || !strings.Contains(c.Fix, "chrony") {
+		t.Errorf("a clock that is not synchronized: %+v", c)
+	}
+	c, _ = check(func() (ClockState, error) { return ClockState{}, errors.New("operation not permitted") })
+	if c.Status != "warn" || !strings.Contains(c.Message, "operation not permitted") || c.Fix == "" {
+		t.Errorf("a clock that cannot be read: %+v", c)
 	}
 }

@@ -57,6 +57,7 @@ status of the report is the worst status of the checks of the host and of the in
 | `host.netns` | fail, warn | a network namespace can be created, and `/run/netns` is shared with the host (`rshared`) | the executor's mounts in `compose.yaml`: the host's `/run/netns` with propagation `rshared` |
 | `host.firewall` | warn | no other firewall (`ufw`, `firewalld`, an `nft` table of your own) whose drop verdicts would hit test traffic | allow the traffic of the test networks there, or stop it (`ufw disable`, `systemctl disable --now firewalld`) |
 | `host.docker_pools` | warn | no address range of Docker's bridges or `default-address-pools` overlaps an address of the uplink, the management interface or a test network | give Docker other ranges (`default-address-pools` and `bip` in `/etc/docker/daemon.json`, restart Docker) or other addresses to the gateway's networks |
+| `host.clock` | warn | the host clock is synchronized (`adjtimex` reports a disciplined clock whose maximum error is at most 1 s); the NTP server of the gateway serves this clock | start a time service on the host (`chrony`, `systemd-timesyncd`) and wait until `timedatectl status` says `System clock synchronized: yes`; until then the server answers with stratum 16 and leap indicator 3, so a correct client ignores it |
 | `host.data.<dir>` | fail | the directories below `/var/lib/chaosgw` exist and belong to the API's user (65532); the secrets are mode 0700 | `sudo sh /opt/chaosgw/host-setup.sh --data-only` |
 | `interfaces.os_config` | warn | the executor reads the host's netplan, NetworkManager and systemd-networkd configuration (mounted read-only below `/host`) | give the executor the host's `/etc` and `/usr/lib/systemd/network` read-only (`compose.yaml` does) |
 | `interface.<name>.os_config` | fail for an interface assigned to a test network, warn for a candidate | the operating system configures this interface (netplan, NetworkManager, systemd-networkd), which a test interface must not have: it would put an address or a DHCP client on a port of a test network | the `fix` of the line says what to remove (the netplan entry, the NetworkManager connection, the networkd file) and the host setup writes the rule that keeps networkd off the interface (`--test-interface`); then `sudo netplan apply` |
@@ -80,6 +81,12 @@ itself when nobody confirms; the setup opens again with a new token in the log. 
 **`GET /system/health` says `degraded`, the DNS proxy has not polled.** Normal until the first configuration is applied, because the
 DNS proxy fetches its configuration from the API and the link is made by the first apply. If it stays after the setup, look at the logs of
 `api` and `dns`.
+
+**`GET /system/health` says `degraded`, the NTP server has not polled.** The same as for the DNS proxy: the server fetches its
+configuration from the API, and the link is made by the first apply. The component `ntp` is `disabled` while the gateway has no
+service namespace. If it stays `degraded` after the setup, look at the logs of `api` and `ntp`. The detail of the component also says
+when the host clock is not synchronized (the check `host.clock` of the preflight): the server then answers with stratum 16 and leap
+indicator 3, and a device that checks the answer takes no time from it.
 
 **A device gets no address.** [DHCP does not answer](install.md#troubleshooting-dhcp-does-not-answer): the port is `unmanaged` by
 networkd, it has a link and is in the network's bridge, Kea listens on the bridge. A DHCP `silence` or `short-lease` action in force on

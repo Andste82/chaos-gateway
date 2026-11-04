@@ -70,6 +70,7 @@ var knownTypes = func() map[string]bool {
 		model.EventTypeRunQueued, model.EventTypeRunStarted, model.EventTypeRunStep, model.EventTypeRunCheck, model.EventTypeRunFinished,
 		model.EventTypeCaptureStarted, model.EventTypeCaptureStopped, model.EventTypeDiskLow,
 		model.EventTypeDnsFaultTriggered, model.EventTypeDnsSetEpoch, model.EventTypeTlsHandshake, model.EventTypeHttpFaultTriggered,
+		model.EventTypeNtpAnswered, model.EventTypeNtpQuerySeen, model.EventTypeNtsSeen,
 	} {
 		m[string(t)] = true
 	}
@@ -224,6 +225,24 @@ func describe(ev engine.Event) string {
 		}
 		acts, _ := ev.Data["actions"].([]string)
 		return "HTTP rule (" + strings.Join(acts, ", ") + ") acted on a request of " + who + " to " + str("host") + str("path")
+	case "ntp_answered":
+		who := str("device_name")
+		if who == "" {
+			who = str("client")
+		}
+		return "time fault " + str("overlay") + " shaped the answer of the NTP server to " + who + " (" + str("answer") + ")"
+	case "ntp_query_seen":
+		who := str("device_name")
+		if who == "" {
+			who = str("client")
+		}
+		return who + " asked the NTP server for the time"
+	case "nts_seen":
+		who := str("device_name")
+		if who == "" {
+			who = str("client")
+		}
+		return who + " tried NTS key establishment, which the NTP server cannot answer"
 	case "dns_set_epoch":
 		return "the DNS-derived set of " + str("pattern") + " was replaced: it starts empty"
 	case "safe_mode":

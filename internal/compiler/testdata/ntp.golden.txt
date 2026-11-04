@@ -1,0 +1,31 @@
+# server's faults
+overlay:00000000-0000-4000-8000-000000000001:time  port 123  time offset +400d, skew 50 ppm  scope "device esp32-42"  sources 10.10.0.42/32
+overlay:00000000-0000-4000-8000-000000000001:time  port 12301  time offset +400d, skew 50 ppm  scope "device esp32-42"  sources 10.10.0.42/32
+overlay:00000000-0000-4000-8000-000000000002:time  port 12302  time absolute 2038-01-19T03:14:07Z  scope "device esp32-42"  sources 10.10.0.42/32
+overlay:00000000-0000-4000-8000-000000000001:time  port 12303  time offset +400d, skew 50 ppm  scope "device esp32-42"  sources 10.10.0.42/32
+overlay:00000000-0000-4000-8000-000000000004:time  port 12301  time leap delete  scope "network IoT"  sources 10.10.0.43/32
+overlay:00000000-0000-4000-8000-000000000003:time  port 12303  time kiss_of_death RATE  scope "group sensors"  sources 10.10.0.43/32
+overlay:00000000-0000-4000-8000-000000000005:time  port 123  time silence  scope "device lab-host"  sources 10.20.0.50/32
+overlay:00000000-0000-4000-8000-000000000004:time  port 12301  time leap delete  scope "network IoT"  sources 10.10.0.0/24,10.30.0.0/24
+# listen [123 12301 12302 12303]
+# prerouting (without DNS)
+meta iifname br-iot ip saddr 10.10.0.42/32 ip daddr 203.0.113.0/24 udp dport 123 dnat ip to 169.254.100.2:12302
+meta iifname br-iot ip saddr 10.10.0.42/32 ct original ip saddr . ct original ip daddr @dns_002811bfbc_65394f ip daddr != { 10.10.0.0/24, 10.30.0.0/24 } udp dport 123 dnat ip to 169.254.100.2:12303
+meta iifname br-iot ip saddr 10.10.0.42/32 ip daddr 10.10.0.1 udp dport { 123, 5123 } dnat ip to 169.254.100.2:12301
+meta iifname br-iot ip saddr 10.10.0.42/32 ip daddr != { 10.10.0.0/24, 10.30.0.0/24 } udp dport { 123, 5123 } dnat ip to 169.254.100.2:12301
+meta iifname br-iot ip saddr 10.10.0.42/32 ip daddr != { 10.10.0.0/24, 10.30.0.0/24 } udp dport 123 dnat ip to 169.254.100.2:123
+meta iifname br-iot ip saddr 10.10.0.43/32 ct original ip saddr . ct original ip daddr @dns_002811bfbc_65394f ip daddr != { 10.10.0.0/24, 10.30.0.0/24 } udp dport 123 dnat ip to 169.254.100.2:12303
+meta iifname br-iot ip saddr 10.10.0.43/32 ip daddr 10.10.0.1 udp dport { 123, 5123 } dnat ip to 169.254.100.2:12301
+meta iifname br-iot ip saddr 10.10.0.43/32 ip daddr != { 10.10.0.0/24, 10.30.0.0/24 } udp dport { 123, 5123 } dnat ip to 169.254.100.2:12301
+meta iifname br-lab ip saddr 10.20.0.50/32 ip daddr != 10.20.0.0/24 udp dport 123 dnat ip to 169.254.100.2:123
+meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr 10.10.0.1 udp dport { 123, 5123 } dnat ip to 169.254.100.2:12301
+meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr != { 10.10.0.0/24, 10.30.0.0/24 } udp dport { 123, 5123 } dnat ip to 169.254.100.2:12301
+meta iifname br-iot ip daddr 10.10.0.1 udp dport 123 dnat ip to 169.254.100.2:123
+meta iifname br-iot ip daddr 10.10.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460
+meta iifname br-lab ip daddr 10.20.0.1 udp dport 123 dnat ip to 169.254.100.2:123
+meta iifname br-lab ip daddr 10.20.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460
+meta iifname br-lab ip daddr != 10.20.0.0/24 udp dport 123 dnat ip to 169.254.100.2:123
+meta iifname br-lab ip daddr != 10.20.0.0/24 tcp dport 4460 dnat ip to 169.254.100.2:4460
+# forward (the accepts towards the namespace)
+meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 udp dport { 123, 12301, 12302, 12303 } accept
+meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 tcp dport 4460 accept

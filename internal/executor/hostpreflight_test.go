@@ -139,3 +139,32 @@ func TestAThrowAwayNamespaceOfAKilledCheckIsRemovedByTheCleanup(t *testing.T) {
 		t.Errorf("deleted %v: %v", deleted, r.commands())
 	}
 }
+
+// M34: the executor reads the host clock for the check host.clock when it is given a reader (the privileged process has the
+// host's clock; production passes adjtimex), and reports nothing about it without one.
+func TestTheExecutorReportsTheStateOfTheHostClock(t *testing.T) {
+	r := &toolRunner{}
+	r.respond = func(c Command) (Result, error) { return Result{Stdout: string(c.Tool) + " 1.0\n"}, nil }
+	clockOf := func(opts ...Option) (preflight.HostCheck, bool) {
+		e := newExec(t, r, append([]Option{WithOwnRoot(preflightHost(), "6.8.0-1")}, opts...)...)
+		for _, c := range readPreflight(t, e).Checks {
+			if c.ID == "host.clock" {
+				return c, true
+			}
+		}
+		return preflight.HostCheck{}, false
+	}
+	if _, ok := clockOf(); ok {
+		t.Error("an executor without a clock reader reports the clock")
+	}
+	c, ok := clockOf(WithHostClock(func() (preflight.ClockState, error) { return preflight.ClockState{}, nil }))
+	if !ok || c.Status != "warn" || !strings.Contains(c.Message, "not synchronized") {
+		t.Errorf("a clock that is not synchronized: %+v", c)
+	}
+	c, ok = clockOf(WithHostClock(func() (preflight.ClockState, error) {
+		return preflight.ClockState{Synchronized: true, MaxError: time.Millisecond}, nil
+	}))
+	if !ok || c.Status != "ok" {
+		t.Errorf("a synchronized clock: %+v", c)
+	}
+}

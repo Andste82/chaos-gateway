@@ -345,6 +345,14 @@ func (e *Engine) Explain(ctx context.Context, q ExplainQuery) (*Explanation, err
 			out.Service = "dns_proxy"
 		}
 	}
+	// NTP: a query to the gateway's own address, to any server of a network that redirects them (`ntp.redirect_hardcoded`) and
+	// the queries a time fault selects (plan §2.18; the redirect of a scope with a time fault does not depend on the network's
+	// setting, Q3) are answered by the NTP server, unless something in front of the redirect stops them first
+	if snap.Service != nil && out.Service == "" && dstIP.IsValid() && (query.Protocol == "" || query.Protocol == "udp") && !stoppedBeforeTheRedirect(out.Access) {
+		if domain.Winner(results, domain.FamilyTime) != nil || (q.Port == compiler.ServiceNTPPort && redirectsNTP(snap, sub.Network, dstIP)) {
+			out.Service = "ntp_server"
+		}
+	}
 	// a TLS case that decides the connection: it is answered by the TLS responder (plan §2.8), unless something in front
 	// of the redirect stops the connection first: an access rule (E11: access rules before redirects), the gateway's
 	// protection or the guard of the management network. The access matrix is not asked: the answer comes from the gateway.
@@ -430,6 +438,24 @@ func gatewayAddrs(snap *Snapshot) []netip.Addr {
 	return out
 }
 
+// ntpGatewayAddrs are the gateway addresses the NTP server answers on: the networks whose time service is on, and the
+// WireGuard networks. Without a service namespace there is no server and no redirect to it.
+func ntpGatewayAddrs(snap *Snapshot) []netip.Addr {
+	if snap.Service == nil {
+		return nil
+	}
+	var out []netip.Addr
+	for _, b := range snap.Bridges {
+		if b.NTP {
+			out = append(out, b.Address.Addr())
+		}
+	}
+	for _, w := range snap.WireGuardInterfaces {
+		out = append(out, w.Address.Addr())
+	}
+	return out
+}
+
 // interfaceOfNetwork is the interface traffic from a network arrives on.
 func interfaceOfNetwork(snap *Snapshot, network string) string {
 	for _, b := range snap.Bridges {
@@ -448,7 +474,7 @@ func interfaceOfNetwork(snap *Snapshot, network string) string {
 func (e *Engine) accessFacts(snap *Snapshot) domain.AccessFacts {
 	// the management network is what the kernel matches (P31-AUDIT-01): the allowed sources, and in the
 	// three-port topology the guard also drops the management interface's subnet
-	f := domain.AccessFacts{Gateway: gatewayAddrs(snap), Management: append([]netip.Prefix(nil), snap.Management.Sources...), UIPort: snap.Management.UIPort}
+	f := domain.AccessFacts{Gateway: gatewayAddrs(snap), NTP: ntpGatewayAddrs(snap), Management: append([]netip.Prefix(nil), snap.Management.Sources...), UIPort: snap.Management.UIPort}
 	// two-port: the management network lies behind the uplink interface
 	f.TwoPort = snap.Applied != nil && snap.Management.Name != "" && snap.Management.Name == snap.Applied.Uplink.Name
 	if !f.TwoPort {
@@ -509,6 +535,35 @@ func (e *Engine) explainForwarded(snap *Snapshot, world *domain.World, q Explain
 	a := world.ForwardedDecision(domain.ForwardedQuery{Forward: f, Target: st.Target, Network: st.Network, Device: owner,
 		Peer: sub.IP, Protocol: proto, Port: q.Port}, e.accessFacts(snap))
 	return explainedForward{out, ExplainAccess{Verdict: a.Verdict, Layer: a.Layer, Rule: a.Rule, Reason: a.Reason}}, true
+}
+
+// redirectsNTP reports whether the network of the source sends NTP to the server for the address: the address is the
+// network's gateway (its time service is on, or it is a WireGuard network), or the network redirects hardcoded servers and
+// the address lies outside its own segments, as for DNS (redirectsDNS).
+func redirectsNTP(snap *Snapshot, network string, dst netip.Addr) bool {
+	for _, b := range snap.Bridges {
+		if !strings.EqualFold(b.NetworkID, network) {
+			continue
+		}
+		if b.NTP && b.Address.Addr() == dst {
+			return true
+		}
+		if !b.RedirectNTP || b.Address.Masked().Contains(dst) {
+			return false
+		}
+		for _, r := range b.Routes {
+			if p, err := netip.ParsePrefix(r); err == nil && p.Contains(dst) {
+				return false
+			}
+		}
+		return true
+	}
+	for _, w := range snap.WireGuardInterfaces {
+		if strings.EqualFold(w.NetworkID, network) && w.Address.Addr() == dst {
+			return true
+		}
+	}
+	return false
 }
 
 // redirectsDNS reports whether the network of the source redirects DNS to the proxy for a resolver at this address:

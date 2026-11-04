@@ -21,9 +21,9 @@ const espTrustID = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
 
 // tlsGateway is a gateway with a service namespace, a device that trusts the test CA (esp32-42), one that does not (esp32-43)
 // and the service token; admin is the admin's token.
-func tlsGateway(t *testing.T) (g *gw, admin string) {
+func tlsGateway(t *testing.T, mods ...func(*options)) (g *gw, admin string) {
 	t.Helper()
-	g = newGW(t, func(o *options) { o.serviceNS = "cgsvc" })
+	g = newGW(t, append([]func(*options){func(o *options) { o.serviceNS = "cgsvc" }}, mods...)...)
 	g.k.ServiceNamespace("cgsvc")
 	g.finishSetup()
 	id := g.mustPatch(map[string]any{

@@ -388,9 +388,9 @@ case in `Decode`, golden tests in `plan_test.go`, rejection tests in `decode_tes
 `fuzz_test.go`. The fuzz targets check that anything the decoder accepts yields inert commands that
 stay in scope.
 
-`make fuzz` runs the six fuzz targets of the executor's interface for `FUZZTIME` each (default 60s, 6 minutes in CI; the list is in "Security hardening (M29)"); the
+`make fuzz` runs the seven fuzz targets (the six of the executor's interface and the NTP packet parser of M34) for `FUZZTIME` each (default 60s, 7 minutes in CI; the list is in "Security hardening (M29)"); the
 nightly workflow runs them for 45 minutes each. A crashing input lands in
-`testdata/fuzz/` of its package (`internal/executor` or `internal/capture`); commit it as a regression test with the fix.
+`testdata/fuzz/` of its package (`internal/executor`, `internal/capture` or `internal/ntpserver`); commit it as a regression test with the fix.
 
 Captures (M17) are not operations of this queue: a capture lives as long as a connection of its own, like a watch,
 and changes nothing in the network configuration (see "Packet captures (M17)").
@@ -3332,7 +3332,7 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
   (`engine.checkProfileAvailable`, after `ValidateOverlay` resolved the reference, P2-M11-01), so a half-working profile never
   runs; the compiler ignores the parts of families it does not resolve yet. Transferred to the plan on 2026-10-11: M20 and M21
   lift the check family by family (`domain.unavailableFamilies`), and their acceptance criteria include that a profile with a
-  `dns` part (M20) or a `tls` part (M21) activates and its part competes in that family. Both are done, and so is the case `intercept` of a `tls` part (M22): every family is available but `time` (M34, until its server is in the build: `unavailableFamilies` holds `time` with the milestone M34, and a profile with a `time` part is shown as not available and refused at activation; the tests name another family with `domain.SetUnavailableFamilies`).
+  `dns` part (M20) or a `tls` part (M21) activates and its part competes in that family. Both are done, and so is the case `intercept` of a `tls` part (M22): every family is available, `time` (M34) included since its server is in the build: `unavailableFamilies` is empty again, and the tests name a family with `domain.SetUnavailableFamilies`.
 - **Activation** is an overlay of kind `profile` with the key *(owner, kind, target)*: one profile per owner and target, so
   writing the activation again with another profile **switches** it (`200`, the same overlay id, the same TTL rules as any
   overlay: `ttl`, `lease`, `renew`, reset, restart). The fault ids follow the existing rules (M8b): a switch between
@@ -3391,8 +3391,8 @@ M8b and M10 apply them) or an MTU fault (M10), and the kernel gates cover profil
 | Deletion rules | `TestARevisionThatDeletesAnActivatedProfileIsRefusedUnlessForced` (engine), `TestDeletingAnActivatedProfileNeedsForceAndListsTheReferences` (API) |
 | TTL and lease of an activation | `TestAProfileActivationExpiresWithItsTTL`, `TestAProfileActivationWithALeaseIsRenewedAndExpiresWithItsFaults`, `TestSwitchingAProfileRestartsItsTTLAndExpiryRemovesWhateverProfileIsActive` (engine, fake clock), `TestAProfileActivationEndsWithItsTTLOnTheWire` (the profile leaves the kernel, the configuration fault it replaced is back, a device only the profile named is clean) |
 | Force delete on the wire | `TestForceDeletingAnActivatedProfileTakesItOffTheWire` (refused without force and still impairing; with force the scope is back to baseline, the activation on the other network untouched) |
-| A `time` part (M34, stage 1) | `TestAProfileWithATimePartIsUnavailableUntilTheServerExists`, `TestTheTimePartOfAProfileIsValidatedLikeATimeFault`, `TestTheActivationOfAProfileWithATimePartNeedsADeviceAGroupOrANetwork` (domain), `TestATimeFaultAndAProfileWithATimePartAreRefusedUntilTheServerExists` (engine), `TestAProfileWithATimePartIsListedAsUnavailableAndItsActivationIsRefused` (API) |
-| The time family (M34, stage 1: offset grammar of 365-day years and a length of at most 64, the rules of a time fault and the code `invalid_time_fault`, no port of the DNS and DHCP services, the precedence in which only a device scope ranks a destination, the scenario step, wait and check, and the refusals that stay until the later stages) | `TestParseTimeOffset`, `TestATimeFaultThatIsNotValid`, `TestOnAGroupAndOnANetworkTheNewerTimeFaultWinsWhetherOrNotItNamesAServer`, `TestATimeFaultForOneServerBeatsAFaultOfTheSameScopeForEveryServer`, `TestTheTimeStepOfAScenarioIsValidated`, `TestTheWaitForAnNTPQueryHasNoSelector`, `TestTheCheckForAnNTPQuery`, `TestTheWinnerOfARedirectPortIsTheFirstFaultOfTheRankThatNamesNoServerOrThisOne`, `TestTheSelectorOfATimeFaultIsItsDestinationTogetherWithItsPorts`, `TestTheOverlayExamplesShowEveryEffectOfATimeFault` (domain), `TestTheNtpWaitAndTheNtpCheckAreRefusedUntilTheRunnerHasThem`, `TestATimeStepAndAProfileWithATimePartAreRefusedWhenTheRunIsCreated` (run), `TestATimeOverlayIsRefusedUntilTheServerExists` (API) |
+| A `time` part (M34, stages 1 and 2) | `TestAProfileWithATimePartIsAvailableSinceTheServerExists`, `TestTheTimePartOfAProfileIsValidatedLikeATimeFault`, `TestTheActivationOfAProfileWithATimePartNeedsADeviceAGroupOrANetwork` (domain), `TestTheEngineListsTheTimeKindAndFamilyAsSupported`, `TestAnInvalidTimeFaultIsRefusedByTheValidationAndChangesNothing`, `TestTheTimePartOfAProfileIsAnNTPFaultAndCompetesInTheTimeFamily` (engine), `TestAProfileWithATimePartIsAvailableAndItsActivationIsAccepted` (API) |
+| The time family (M34, stage 1: offset grammar of 365-day years and a length of at most 64, the rules of a time fault and the code `invalid_time_fault`, no port of the DNS and DHCP services, the precedence in which only a device scope ranks a destination, the scenario step, wait and check, and the refusals that stay until the later stages) | `TestParseTimeOffset`, `TestATimeFaultThatIsNotValid`, `TestOnAGroupAndOnANetworkTheNewerTimeFaultWinsWhetherOrNotItNamesAServer`, `TestATimeFaultForOneServerBeatsAFaultOfTheSameScopeForEveryServer`, `TestTheTimeStepOfAScenarioIsValidated`, `TestTheWaitForAnNTPQueryHasNoSelector`, `TestTheCheckForAnNTPQuery`, `TestTheWinnerOfARedirectPortIsTheFirstFaultOfTheRankThatNamesNoServerOrThisOne`, `TestTheSelectorOfATimeFaultIsItsDestinationTogetherWithItsPorts`, `TestTheOverlayExamplesShowEveryEffectOfATimeFault` (domain), `TestTheNtpWaitAndTheNtpCheckAreRefusedUntilTheRunnerHasThem`, `TestATimeStepAndAProfileWithATimePartAreAcceptedWhenTheRunIsCreated` (run), `TestATimeOverlayIsAcceptedAndAnInvalidOneIsRefusedByTheValidation` (API) |
 | Catalogue, custom CRUD, availability | `internal/api/profiles_test.go` (`TestTheProfileCatalogueListsTheBuiltInProfilesAndAllOfThemAreAvailable`, `TestACustomProfileIsCreatedChangedAndDeletedWithRevisions`, `TestACustomProfileWithAnInterceptPartIsAvailableAndActivatesLikeOneWithADNSOrTLSPart`, `TestAProfileIsActivatedSwitchedAndListedOverTheAPI`), `TestAProfileWithAPartOfALaterMilestoneIsRefusedAndNothingChanges` |
 | The kernel accepts profile-expanded targets | `TestEveryCompiledTCTreeIsAcceptedByTheKernel` (`faults-profiles`, `faults-builtin-profiles`), `TestEveryCompiledRulesetIsAcceptedByTheKernel` (the same and `profiles-mtu`) |
 
@@ -5732,7 +5732,7 @@ Plan §2.4 (E11), §2.8, §3.3 and M21, with the acceptance carried over from Ph
 of the precedence rules has a mechanism now: selected new connections of a device are routed unchanged into the service namespace and end at
 the TLS responder, which shows a deliberately broken certificate (or breaks the handshake) and reports what the device did with it. The check types
 `tls_rejected` and `tls_accepted` and the step type `tls` of M16 work, "TLS broken" activates, and the `tls` family is lifted from
-`domain.unavailableFamilies` (it was empty after M22, which brought the case `intercept`, refused with `unsupported_feature` until then; M34 puts `time` into it until the NTP server exists).
+`domain.unavailableFamilies` (it was empty after M22, which brought the case `intercept`, refused with `unsupported_feature` until then; M34 put `time` into it in stage 1, and the NTP server of stage 2 took it out again).
 
 ### How it works
 
@@ -7038,7 +7038,7 @@ There is no change of the spec and none of the HTTP API: the preflight adds chec
   refuses a wrong `--dir` (the root, a relative path, `..`) before it changes anything and never deletes a directory that holds neither `compose.yaml` nor `.env`. They are tested at level 0 against stubs of docker, curl and id
   (`tools/deployscripts/install_test.go`, `uninstall_test.go`; `--prefix` makes `uninstall.sh` work below a directory without root) and checked with shellcheck in CI. The level 2 deployment test does not call
   them: it tests the steps one by one (host setup, `compose up`), which is the same code.
-- **`deploy/compose.yaml`** is made from the compose files of the containers (`compose.executor.yaml`, `compose.api.yaml`, `compose.kea.yaml`, `compose.dns.yaml`: the holder `svcns` and the DNS proxy, `compose.tls.yaml`, `compose.bird.yaml`,
+- **`deploy/compose.yaml`** is made from the compose files of the containers (`compose.executor.yaml`, `compose.api.yaml`, `compose.kea.yaml`, `compose.dns.yaml`: the holder `svcns` and the DNS proxy, `compose.tls.yaml`, `compose.ntp.yaml`: the NTP server, `compose.bird.yaml`,
   `compose.tlsproxy.yaml`, `compose.teardown.yaml`) by `tools/composegen` (`make compose`; `make check-compose`, part of `make check-generated`, and a Go test fail when it is not current). The files stay what the lower levels start
   (the executor alone, with BIRD, the proxy of the interception alone), so there is one definition of every container. The union has three changes: a dependency on a service of another file that is optional in its file
   (`required: false`) is a plain one, the interception proxy is under the profile `interception` (`COMPOSE_PROFILES=interception`), and the project is named `chaosgw`. The image is
@@ -7047,7 +7047,7 @@ There is no change of the spec and none of the HTTP API: the preflight adds chec
   `create_host_path: false`: Docker would make a missing directory as root's, which the API container (user 65532, no capability) could not write (issue #57); the host setup makes them with their owners instead, and a compose file started
   without it fails with the name of the missing directory. The sockets between the containers (`chaosgw-run`, `chaosgw-bird`, `chaosgw-kea-run`, `chaosgw-kea-events`, `chaosgw-svcns`) stay named volumes: they carry no state, and the Kea events
   directory takes its owner from the image. `teardown --purge` empties the directories and leaves them. `docs/install.md` has the move from the named volumes of an older installation.
-- **Start order and health checks** (plan §3.8). `exec` first (its health check is the answer of its socket), then `api`, `svcns` and `kea` (each `depends_on: exec: service_healthy`), `bird` (as before), then `dns`, `tls` and `tls-proxy`
+- **Start order and health checks** (plan §3.8). `exec` first (its health check is the answer of its socket), then `api`, `svcns` and `kea` (each `depends_on: exec: service_healthy`), `bird` (as before), then `dns`, `tls`, `ntp` and `tls-proxy`
   once `svcns` and `api` are healthy (`depends_on` with `restart: true` on the holder). New health checks: `svcns` (its PID file is written: `test -s`), `kea` (its control socket is there: `test -S`). The cross-file dependencies are `required: false`
   in the files, so `compose.dns.yaml` still starts without the executor in the lower-level tests.
 - **The preflight in the executor** (`internal/preflight/host.go`, `internal/executor/hostpreflight.go`). The privileged process checks the host it runs on at its start and writes each check into its log (`docker compose logs exec | grep preflight`):
@@ -7182,7 +7182,7 @@ The review went through `deploy/compose.yaml`, container by container, for the p
 | `kea` | 0:65532 | `NET_RAW`, `NET_BIND_SERVICE`, `CHOWN`, `FOWNER`, `DAC_OVERRIDE`, `no-new-privileges` | read-only | its leases, the service directory (ro) | the container is root and the capabilities are the ones it needs; `no-new-privileges` was added on 2026-10-31 (P7-M29-02, option (b)), and the CI job `deployment` and the nightly level 2 run (Ubuntu 24.04 and 26.04) show that Kea's package starts, hands out leases and posts its hook events with it |
 | `bird` | root | `NET_ADMIN`, `NET_RAW`, `NET_BIND_SERVICE`, `no-new-privileges`, host network | read-only | none | `NET_ADMIN` in the host's network namespace is wide; BIRD needs it to write routes. It runs a configuration that only the executor writes and checks (`bird -p`, `include` refused) |
 | `svcns` | 65532 | none, `network_mode: none`, host PID | read-only | none | sees the host's processes (no capability to signal them); it needs the host PID to tell the executor which namespace is its own |
-| `dns`, `tls` | 65532 | `cap_drop: ALL` (+ `NET_BIND_SERVICE` for `dns`), joined to `svcns` | read-only | the service directory (ro), for `tls` the CAs (ro) | the keys of the test CAs are readable by `tls` and `tls-proxy`: they sign with them |
+| `dns`, `tls`, `ntp` | 65532 | `cap_drop: ALL` (+ `NET_BIND_SERVICE` for `dns` and `ntp`), joined to `svcns` | read-only | the service directory (ro), for `tls` the CAs (ro) | the keys of the test CAs are readable by `tls` and `tls-proxy`: they sign with them; `ntp` has neither `NET_ADMIN` (it reads no conntrack, D36) nor `SYS_TIME` (it only reads the host clock) |
 | `tls-proxy` | 65532 | `cap_drop: ALL`, profile `interception` | read-only; tmpfs 64 MiB for mitmproxy | as `tls` | a Python process that parses what devices send; confined to the service namespace and without a capability |
 | `teardown` | root | as `exec` | read-only | every data directory (rw) | on demand only (`run --rm`) |
 
@@ -7233,7 +7233,7 @@ the capture path (`OpenRoot`, ownership of the files), the protocol (`server.go`
 
 ### Fuzzing
 
-`make fuzz` runs six targets, `FUZZTIME` each (60 s by default, 6 minutes in CI; 45 minutes each in the nightly workflow, which uploads a crashing input as an artifact: it is the reproducer, and belongs in `testdata/fuzz` of its package). M3 gave the decoder alone 5 minutes in CI and an hour nightly; the time is now per target and the total is what is bounded, so the decoder's own time is lower (60 s in CI, 45 minutes nightly: six targets of 45 minutes make 4.5 hours in one job, which fits the default limit of six hours of a job, and a longer time for the decoder alone is a `make fuzz FUZZTIME=...` away). `make fuzz` runs every target even when one finds a crasher and fails at the end, so one nightly crasher does not hide the other five. The nightly job runs `FuzzCaptureOpenFiles` as root (`FUZZ_ROOT_TARGETS` and `FUZZ_ROOT_CMD` of the Makefile, `sudo` on the hosted runner): unprivileged, a capture fails at the raw socket before it makes a file, so only the check of the directory is fuzzed (the last target, because root leaves files in the Go build cache that the user cannot write to); and it keeps the corpus that Go finds (`GOCACHE/fuzz`) from night to night in the cache of the repository, so that a night goes on where the last one stopped.
+`make fuzz` runs seven targets (M29 had six: M34 adds `FuzzPacket` of `internal/ntpserver`), `FUZZTIME` each (60 s by default, 7 minutes in CI; 45 minutes each in the nightly workflow, which uploads a crashing input as an artifact: it is the reproducer, and belongs in `testdata/fuzz` of its package). M3 gave the decoder alone 5 minutes in CI and an hour nightly; the time is now per target and the total is what is bounded, so the decoder's own time is lower (60 s in CI, 45 minutes nightly: seven targets of 45 minutes make 5.25 hours in one job, which fits the limit of GitHub of six hours for a job, and the limit of the nightly job is 345 minutes since M34, 15 more than it was for six targets (observed with six: 271 minutes, so about 317 with seven), and a longer time for the decoder alone is a `make fuzz FUZZTIME=...` away). `make fuzz` runs every target even when one finds a crasher and fails at the end, so one nightly crasher does not hide the other six. The nightly job runs `FuzzCaptureOpenFiles` as root (`FUZZ_ROOT_TARGETS` and `FUZZ_ROOT_CMD` of the Makefile, `sudo` on the hosted runner): unprivileged, a capture fails at the raw socket before it makes a file, so only the check of the directory is fuzzed (the last target, because root leaves files in the Go build cache that the user cannot write to); and it keeps the corpus that Go finds (`GOCACHE/fuzz`) from night to night in the cache of the repository, so that a night goes on where the last one stopped.
 
 | Target | Package | What it feeds | What it asserts |
 |---|---|---|---|
@@ -7243,6 +7243,7 @@ the capture path (`OpenRoot`, ownership of the files), the protocol (`server.go`
 | `FuzzCaptureOpen` | `internal/executor` | a capture request (M29) | a refused request opens nothing; an accepted one names one directory below the root and valid interfaces; an executor with no assigned interface refuses every one |
 | `FuzzCaptureOpenFiles` | `internal/executor` | a capture request on an executor whose interfaces are assigned, with a capture root that holds links out of it (M29) | nothing is created or changed outside the capture root, a link out of it is never followed (`os.OpenRoot`; asserted on the directory step itself, `openCaptureDir`, so it holds without the privilege for a raw socket too), nothing is deeper than one directory below the root |
 | `FuzzFilter` | `internal/capture` | a capture filter and a packet (M29) | no panic; a valid filter builds a program that the BPF VM accepts and that selects what the user-space matcher selects |
+| `FuzzPacket` | `internal/ntpserver` | a datagram to `Parse` and to `Process` with every answer kind in force (M34) | no panic; a datagram that is no client query gets no reply; a reply is 48 bytes and never larger than its request; a reply parses; the packet of a parse writes back to the same 48 bytes |
 
 `TestEveryOperationTypeHasAFuzzSeedThatTheDecoderAccepts` fails when a type of operation has no seed that the decoder accepts: four types had none (`nft_add_map_elements`, `nft_del_map_elements`, `conntrack_delete`, `service_ns`); they have seeds now. A new operation needs a seed in `fuzz_test.go` as before.
 
@@ -7252,7 +7253,7 @@ The external review itself is a human activity. It is not part of V1, and the ma
 
 - this section (threat model, accepted risks, the table of mitigations and the tests that hold them);
 - the source of the interface: `internal/executor/{op,validate,plan,scope,server,proto,runner,exec,capture,probe,dnssets,netlinkset,nftdup,tcgrammar,hostpreflight}.go` (about 6,500 lines without the tests) and the compose file of the container (`deploy/compose.executor.yaml`);
-- `go test ./internal/executor` (the unit and golden tests, no privilege needed), `make fuzz FUZZTIME=10m` (the six targets) and the level 1 tests of the executor on the real kernel (`internal/executor/integration_test.go`, `make test-privileged`), with the corpora in `internal/executor/testdata/fuzz`;
+- `go test ./internal/executor` (the unit and golden tests, no privilege needed), `make fuzz FUZZTIME=10m` (the seven targets) and the level 1 tests of the executor on the real kernel (`internal/executor/integration_test.go`, `make test-privileged`), with the corpora in `internal/executor/testdata/fuzz`;
 - the acceptance map below, the container table above and the list of the operations with their effects (`op.go` has one type per operation; `plan.go` is the only place where a command is built).
 
 ### Decisions
@@ -7300,6 +7301,68 @@ Level 2: the existing deployment tests follow the image's new default user (`--u
 | Audit of Phase 7 (P7-AUDIT-37, -39): the named volumes each container may mount, the paths of the secret search come from the spec | `TestTheContainersMountOnlyTheNamedVolumesTheReviewAllows`, `TestNoSecretIsInAResponseAnEventAnAuditEntryOrALog` |
 | Audit of Phase 7 (P7-AUDIT-32, -60, -61, -62, -67, -68): the wiring of CI and of the release workflow | `TestTheNightlyFuzzJobRunsTheFileTargetAsRootAndKeepsItsCorpus`, `TestTheRegressionTestsOfM4AreInALevel1List`, `TestTheNightlyLevel2JobFailsUnlessEachOfItsTestsPassed`, `TestTheCIRunsOfMainAreNeverCancelled`, `TestEveryJobHasATimeoutAboveTheLimitsInsideIt`, `TestTheActionsOfTheReleaseWorkflowArePinnedToACommit`; the release rules: `TestTheNewestReleaseDecidesWhoGetsLatest`, `TestTheReleaseWorkflowRequiresASuccessfulCIRunOfTheTaggedCommit` |
 
+## NTP server and time faults (M34)
+
+Plan §2.18, decisions D36 and D37, and M34. The gateway runs its own NTP server (`chaosgw ntp`, `internal/ntpserver`) in the service namespace, and the fault family `time`
+shapes its answers per device, group or network. This section holds the level 1 tests of the milestone, which stage 2 (server and wiring) brings; the unit tests of the
+server, the compiler and the engine are named where they are (`internal/ntpserver`, `internal/compiler/ntp_test.go`, `internal/api/ntpservice_test.go`).
+
+### The level 1 tests
+
+Level 1 (the list `M34_LEVEL1` of `.github/level1-tests.env`, written, vetted with `-tags testbed`, run by CI with `$M34_LEVEL1`, not run here: no KVM, no namespaces, and the
+test clients are not installed in this container). The tests are in `internal/api/e2e_ntp_test.go` (the bed and the first two tests), `e2e_ntpfaults_test.go` (the cases of the
+plan) and `e2e_ntpclients_test.go` (the clients), and in `internal/engine/integration_ntp_test.go` (Kea).
+
+- **The bed** (`newNTPBed`, after `newDNSBedOn`): the gateway of `newBedGW` with a random service namespace, the API's HTTP server on the gateway's end of the link, and the NTP server
+  in-process on sockets inside the namespace (`ListenPacketIn` with the kernel's receive time stamps on, the production path), registered with the API through an `APIClient` that dials
+  inside the namespace. The options add the DNS proxy with its upstream (`withDNS`), the devices client-a and client-b by their MAC addresses (`withDevices`) and the NTS-KE listener
+  (`withNTSKE`). The hosts of the testbeds are not synchronized (`STA_UNSYNC`), so the server and the API are told through `ntpserver.SyncState` that the clock is good; a test
+  switches it (`syncSwitch`) to see the stratum 16.
+- **The clients** never set the clock (it is not namespaced, and `busybox ntpd -q` would move the clock of the machine under every other test). `sntp.py` (`internal/api/testdata/ntp`)
+  is a Python SNTP client for exact assertions: it builds and reads the packets with `struct`, shares no code with the server (an error that the encoder and the parser make
+  alike would not cancel out), reads a time stamp in the era nearest to its own clock, reports the offset and the delay of RFC 5905 and says whether a correct client would take the
+  answer (a reply to its own request from the address it asked, not unsynchronized, not a kiss code). `chronyd -Q` measures once and prints the offset; it is the real client for
+  "unsynchronized is rejected", "kiss-of-death DENY", "origin mismatch is discarded" and the shift by a latency fault. `ntpdig` (ntpsec) asks once and prints the offset, the stratum and
+  the leap. A `chronyd` that runs as a daemon (`-x`: it never touches the clock) polls every second, so that the counters of the server show a RATE lengthening its poll interval and a DENY
+  stopping it. `fakentp.py` is "the real server" behind the uplink, or the server in the device's own network, with a label as its reference id and a log of its queries. The image of the
+  development container installs `chrony` and `ntpsec-ntpdig`. The Python client is run against the real server on the loopback by a level 0 test
+  (`ntpclient_test.go`, `TestThePythonSNTPClientReadsTheAnswersOfTheServerAsTheTestbedTestsExpect`), so a mistake of the client shows here and not first in the testbed.
+- **D36 in the tests.** The destination selectors are tests by port: the ports are read from the server's configuration (`Listen`) and from the log (`Port`), never assumed, because the
+  ports are the compiler's allocation (a selector keeps its port while it is in use, `TestASelectorKeepsItsPortWhenAnotherSelectorComesOrGoes`). A fault for one server is checked by asking that server and another one; the "server asked" is checked for an IP selector, where the server knows it from the
+  port, and not for a hostname, where it does not.
+- **Timing.** The assertions on time (50 ms of the host clock, 3 ms of drift in 10 s, the half of a latency within 40 ms, the 5,000 queries per second and the added millisecond) hold where
+  `testbed.Accurate()` is true; under software emulation the tolerances are wide and the test asserts the function. The figures of the load test are written to the measurement record.
+- **The wait and the check of stage 3.** The scenario test runs a *time* step and not the wait *NTP query seen*: the runner of the wait and of the check *NTP queried* is stage 3 of the
+  milestone, and its tests come with it.
+
+### Acceptance map (plan M34 "Tests" and "Acceptance")
+
+| Plan M34 | Test |
+|---|---|
+| level 1: a client gets option 42 from Kea | `TestKeaHandsTheClientTheGatewayAsNTPServerWhereTheTimeServiceIsOnOnTheRealKernel` (the default, a network that names servers, a network without the time service, another network), `TestKeaHandsOutNoNTPServerWithoutAServiceNamespaceOnTheRealKernel` (the real Kea, `udhcpc -O ntpsrv`) |
+| level 1: an answer within 50 ms of the host clock with stratum 2 and leap indicator 0 (chrony and ntpdig take it) | `TestAnSNTPClientIsAnsweredWithinFiftyMillisecondsAtStratum2AndChronyAndNtpdigTakeItOnTheRealKernel`, `TestNTPThroughTheServiceNamespace` |
+| level 1: a hardcoded server in the server namespace gets the gateway's answer from that server's address and port once redirected, the real server's answer otherwise | `TestAClientAskingAHardcodedServerGetsTheGatewaysAnswerFromThatServersAddressOnceRedirectedAndTheRealOneOtherwiseOnTheRealKernel`, `TestNTPForAHardcodedServerFollowsTheFaultAndNamesTheServerAsked` (the redirect of a scope with a fault, Q3) |
+| level 1: `offset +400d` on one device shifts only that device's answers, the device next to it gets the correct time, removing the overlay ends it | `TestAnOffsetShiftsOnlyTheAnswersOfItsDeviceAndEndsWithTheOverlayOnTheRealKernel` |
+| level 1: a device that keeps its socket (one source port, a poll every few seconds) is reached by a time fault and released when it ends: the engine deletes the tracked NTP flows when the redirects change | `TestADeviceThatKeepsItsSocketIsReachedByATimeFaultAndReleasedWhenItEndsOnTheRealKernel` (level 0: `TestAChangeOfTheNTPRedirectsDeletesTheTrackedNTPFlows`) |
+| level 1: `absolute` 2038 and NTP-era-1 presets within 1 s of the instant plus the elapsed time | `TestTheAbsolutePresets2038AndNTPEra1AreServedWithinASecondOfTheirInstantPlusTheElapsedTimeOnTheRealKernel` |
+| level 1: `skew_ppm 1000` adds 10 ms over 10 s | `TestASkewOf1000PPMAddsTenMillisecondsOverTenSecondsOnTheRealKernel` |
+| Scope: `leap` (insert, delete) with the preset before midnight | `TestALeapFaultSetsTheLeapIndicatorAndServesTheMinutesBeforeMidnightOnTheRealKernel` |
+| level 1: `unsynchronized` makes chrony reject the server | `TestAnUnsynchronizedAnswerMakesChronyRejectTheServerOnTheRealKernel` |
+| level 1: `kiss_of_death DENY` makes chrony drop the server, `RATE` lengthens its poll interval (the counters show it) | `TestAKissOfDeathDENYMakesChronyDropTheServerAndRATELengthensItsPollIntervalOnTheRealKernel` |
+| level 1: `silence` leaves the query unanswered and counted while DNS of the same device works | `TestSilenceLeavesTheQueryUnansweredAndCountedWhileDNSOfTheSameDeviceWorksOnTheRealKernel` |
+| level 1: `origin_mismatch` is discarded by chrony and accepted by a careless client (the answer is in the log for the check) | `TestAnOriginMismatchIsDiscardedByChronyAndAcceptedByACarelessClientOnTheRealKernel` |
+| level 1: a destination selector affects only queries to the server it names (a hostname; by port, D36) | `TestADestinationSelectorOnAHostnameAffectsOnlyQueriesToTheAddressesOfThatNameOnTheRealKernel`, `TestEachDestinationSelectorGetsAPortOfItsOwnAndTheServerTellsTheServerAskedFromItOnTheRealKernel` |
+| level 1: a latency fault on `udp/123`, upload only, shifts the measured offset by about half of it; the same for a WireGuard client | `TestALatencyFaultOnUDP123UploadOnlyShiftsTheMeasuredOffsetByHalfOfItOnTheRealKernel`, `TestAWireGuardClientIsServedLikeADeviceAndAnUploadLatencyShiftsItsOffsetByHalfOnTheRealKernel` |
+| level 1: a WireGuard client (no `redirect_hardcoded`) that asks a hardcoded server is redirected by a time fault that names that server, and is answered with the fault from the address and port it asked (Q3) | `TestAWireGuardClientAskingAHardcodedServerIsServedTheFaultFromTheAskedServersAddressOnTheRealKernel` |
+| level 1: modes 6 and 7, and queries from the uplink and the management network, get no answer; no reply is larger than its query | `TestModes6And7AndQueriesFromTheUplinkAndTheManagementNetworkGetNoAnswerAndNoReplyIsLargerThanItsQueryOnTheRealKernel` |
+| level 1: with the service namespace gone, redirected NTP fails closed | `TestRedirectedNTPFailsClosedWithoutTheServiceNamespaceOnTheRealKernel` |
+| level 1: the host clock reported unsynchronized makes the server answer with stratum 16 | `TestTheHostClockReportedUnsynchronizedMakesTheServerAnswerWithStratum16OnTheRealKernel` (and `TestAnUnsynchronizedHostClockMakesTheServerAnswerStratum16` at level 0) |
+| level 1: a scenario with a *time* step (the wait *NTP query seen* is stage 3) | `TestAScenarioWithATimeStepShiftsTheServedTimeUntilTheRunEndsOnTheRealKernel` |
+| Risk 37: NTS-KE connections are reported | `TestAnNTSKeyEstablishmentConnectionIsRefusedAndReportedForTheDeviceOnTheRealKernel`, `TestNTSKeyEstablishmentIsReportedAndRefused` (level 0) |
+| Acceptance: 5,000 queries/s and less than 1 ms added | `TestTheServerAnswersFiveThousandQueriesPerSecondThroughTheRedirectAndAddsLessThanAMillisecondOnTheRealKernel` (level 1, asserted under `Accurate()`, recorded in the measurement record), `TestTheServerAnswers5000QueriesPerSecondOnTheLoopback` and `TestBuildingAnAnswerTakesLessThanAMillisecond` (level 0 floors) |
+| level 0: encoding and parsing of NTP packets (fuzzed) | `FuzzPacket` (`make fuzz`, the seventh target), `TestAPacketIsParsedAndWrittenFieldByField`, `TestADatagramShorterThanTheHeaderIsNoPacket` |
+| level 0: the era boundary and the 2038 overflow | `TestTheTimestampWrapsAtTheEndOfEra0`, `TestTheTimestampSurvivesTheSigned32BitOverflowOf2038`, `TestTheAnswersAcrossTheEraBoundaryAndTheOverflowOf2038`; read by a decoder of its own: `TestThePythonSNTPClientReadsTheAnswersOfTheServerAsTheTestbedTestsExpect` |
+
 ## Generated code
 
 `api/openapi.yaml` is the source of truth (spec first). `make generate` creates:
@@ -7336,10 +7399,10 @@ without the signal the wait is for, so an iperf3 that failed at the end of an up
 queue (`unable to receive results`) kept the test until the 60 minute timeout. The transfers now return
 their error, and a failure of the tool repeats the three transfers once after the queues drained.
 
-Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$M27_LEVEL1,$M29_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
+Both testbed jobs and the nightly kernel matrix pass `-expect-pass $M35A_LEVEL1,$M15_LEVEL1,$M16_LEVEL1,$M17_LEVEL1,$M18_LEVEL1,$M20_LEVEL1,$M21_LEVEL1,$M22_LEVEL1,$M23_LEVEL1,$M24_LEVEL1,$M25_LEVEL1,$M26_LEVEL1,$M27_LEVEL1,$M29_LEVEL1,$M34_LEVEL1,$I64_LEVEL1,$KEA_LEVEL1,$I79_LEVEL1`. The lists are in one file, `.github/level1-tests.env`, which each of these jobs loads into its environment in a step of its own (P4-AUDIT-49: the nightly matrix ran the same tests without the list, so a test that skipped on one kernel stayed green). The level 1
 tests of port forwarding (with those of the Phase 3.1 audit), those of scenario runs (M15), those of checks and zero hits (M16), those of packet captures (M17: the AF_PACKET sockets
 need CAP_NET_RAW, so their tests carry the build tag `testbed`), those of `chaosctl` (M18), those of the DNS faults and hostname selectors (M20, with the executor's netlink connection), those of the TLS responder (M21), those of the interception proxy (M22, with the real mitmproxy, which the level 0 job installs too and requires), those of the DHCP test actions (M23, udhcpc and the real Kea), those of the probes and the calibration (M25, the real Kea, the real executor and the real netem), the one of the metrics (M26), those of Kea's packet socket after a link flap
-(issue #64), the tests against the real Kea (I64-05) and those of the recovery and the stop (M27), those of the observed state of a device (the acceptance of
+(issue #64), the tests against the real Kea (I64-05) and those of the recovery and the stop (M27), those of the NTP server and the time faults (M34, with chrony, ntpdig and a Python SNTP client, and the real Kea for option 42) and those of the observed state of a device (the acceptance of
 issue #79, issue #92) must each pass, so one that is renamed, skips or is no
 longer built fails the job. `tools/ciconfig` checks that every job passes every list of the file and that the list quoted here names them all
 (`TestEveryTestbedRunNamesTheLevel1Lists`, `TestTheDevelopmentGuideQuotesEveryLevel1List`, P5-AUDIT-42).

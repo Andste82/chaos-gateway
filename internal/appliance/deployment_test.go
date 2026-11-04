@@ -110,6 +110,34 @@ if rcode != 0 or answers < 1:
 print(".".join(str(b) for b in a[-4:]))
 `
 
+// ntpQuery sends one SNTP client packet and prints "mode stratum leap seconds nts": the mode and stratum of the reply, its leap indicator,
+// how far its transmit time is from the clock of the machine the client runs on (the VM's clock, which the server reads too), and what
+// TCP 4460 of the same address does (the port of NTS key establishment: the server accepts the connection, says nothing and closes it,
+// which is `closed`).
+const ntpQuery = `import socket, struct, sys, time
+server = sys.argv[1]
+NTP_UNIX = 2208988800
+q = bytearray(48)
+q[0] = (4 << 3) | 3
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(3)
+s.sendto(bytes(q), (server, 123))
+a, _ = s.recvfrom(512)
+if len(a) < 48:
+    print("short reply: %d bytes" % len(a))
+    sys.exit(1)
+sec, frac = struct.unpack(">II", a[40:48])
+served = sec - NTP_UNIX + frac / 2**32
+try:
+    k = socket.create_connection((server, 4460), timeout=3)
+    k.settimeout(3)
+    nts = "closed" if k.recv(16) == b"" else "talks"
+    k.close()
+except OSError as e:
+    nts = "error"
+print("%d %d %d %.3f %s" % (a[0] & 7, a[1], a[0] >> 6, served - time.time(), nts))
+`
+
 // removeLan0 deletes the entry of lan0 from the netplan files, as the hint of the check says.
 const removeLan0 = `import glob, yaml
 for f in glob.glob("/etc/netplan/*.yaml"):
@@ -257,7 +285,7 @@ func deployment(t *testing.T, rel appliance.Release, two bool, imageTar string) 
 	for _, s := range []string{"exec", "api", "svcns", "kea", "bird"} {
 		waitHealthy(t, ctx, vm, compose, s)
 	}
-	for _, s := range []string{"dns", "tls"} {
+	for _, s := range []string{"dns", "tls", "ntp"} {
 		waitRunning(t, ctx, vm, compose, s)
 	}
 	started := func(service string) string {
@@ -277,7 +305,7 @@ func deployment(t *testing.T, rel appliance.Release, two bool, imageTar string) 
 	}
 	for service, want := range map[string]string{
 		"exec": hostBnd[1], "api": "0000000000000000", "svcns": "0000000000000000", "tls": "0000000000000000",
-		"dns": "0000000000000400", "kea": "000000000000240b", "bird": "0000000000003400",
+		"dns": "0000000000000400", "ntp": "0000000000000400", "kea": "000000000000240b", "bird": "0000000000003400",
 	} {
 		id := strings.TrimSpace(must(compose + " ps -a -q " + service))
 		privileged := strings.TrimSpace(must("sudo docker inspect -f '{{.HostConfig.Privileged}} {{.HostConfig.ReadonlyRootfs}}' " + id))
@@ -327,7 +355,7 @@ func deployment(t *testing.T, rel appliance.Release, two bool, imageTar string) 
 			t.Errorf("a check of the preflight fails on a host that was prepared: %v", m)
 		}
 	}
-	for _, id := range []string{"host.tools", "host.modules", "host.netns", "host.proc_sys", "host.ip_forward", "host.firewall", "host.data.captures", "interface.lan0.os_config"} {
+	for _, id := range []string{"host.tools", "host.modules", "host.netns", "host.proc_sys", "host.clock", "host.ip_forward", "host.firewall", "host.data.captures", "interface.lan0.os_config"} {
 		if _, ok := have[id]; !ok {
 			t.Errorf("the preflight of the setup status has no check %s: %v", id, have)
 		}
@@ -423,6 +451,17 @@ func deployment(t *testing.T, rel appliance.Release, two bool, imageTar string) 
 	}
 	if got := lease.dns(appliance.GatewayLAN, "probe.iot.test"); got != "10.10.0.5" {
 		t.Errorf("the gateway's DNS answers %q for the static entry", got)
+	}
+	// the NTP server in the service namespace answers the device's query to the gateway's address (plan §2.18): a server reply (mode 4)
+	// whose time is the host's. The VM may not be synchronized (stratum 16, leap indicator 3), which the server says and does not hide.
+	if mode, stratum, leap, delta, nts, err := lease.ntp(appliance.GatewayLAN); err != nil {
+		t.Errorf("the gateway's NTP server: %v", err)
+	} else if mode != 4 || delta < -5 || delta > 5 || (stratum == 16) != (leap == 3) {
+		t.Errorf("the gateway's NTP server answered mode %d, stratum %d, leap indicator %d, %.3f s from the clock of the host", mode, stratum, leap, delta)
+	} else if nts != "closed" {
+		// the production path of the key-establishment port: the redirect of TCP 4460 of the gateway address to the container, which
+		// accepts and closes (a refusal or a timeout would mean the redirect or the listener is missing)
+		t.Errorf("TCP 4460 of the gateway's address: %q, want a connection that the server accepts and closes", nts)
 	}
 	reaches := func(what string) {
 		t.Helper()
@@ -575,7 +614,7 @@ func deployment(t *testing.T, rel appliance.Release, two bool, imageTar string) 
 	// gateway and its DHCP back (the same lease) and reaches the server
 	settled := func(version, what string) {
 		t.Helper()
-		for _, s := range []string{"exec", "api", "svcns", "kea", "bird", "dns", "tls"} {
+		for _, s := range []string{"exec", "api", "svcns", "kea", "bird", "dns", "tls", "ntp"} {
 			if image(s) != "chaos-gateway:"+version {
 				t.Errorf("%s: %s runs %s", what, s, image(s))
 			}
@@ -713,11 +752,12 @@ func holderPIDFileReusedByAnotherProcess(t *testing.T, ctx context.Context, vm *
 	}
 	// the next holder writes its own PID file and heals the namespace
 	must("sudo docker rm -f chaosgw-pidreuse >/dev/null")
-	must(compose + " up -d --force-recreate svcns dns tls")
+	must(compose + " up -d --force-recreate svcns dns tls ntp")
 	for _, s := range []string{"svcns"} {
 		waitHealthy(t, ctx, vm, compose, s)
 	}
 	waitRunning(t, ctx, vm, compose, "dns")
+	waitRunning(t, ctx, vm, compose, "ntp")
 	waitFor(t, 3*time.Minute, "the service namespace to be attached to the new holder", func() bool {
 		pid := strings.Fields(output("sudo docker run --rm --user 0:0 --entrypoint cat -v chaosgw_chaosgw-svcns:/p:ro " + tag + " /p/pid"))
 		return len(pid) == 2 && nsInode("/run/netns/cgsvc") == pid[1] && strings.Contains(output("sudo ip -o link show svc0"), "svc0")
@@ -784,6 +824,9 @@ func newDevice(t *testing.T, ctx context.Context, h appliance.Host, names applia
 	if err := os.WriteFile(filepath.Join(dir, "dnsq.py"), []byte(dnsQuery), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "ntpq.py"), []byte(ntpQuery), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	return d
 }
 
@@ -825,6 +868,26 @@ func (d *device) dns(server, name string) string {
 		time.Sleep(2 * time.Second)
 	}
 	return "no answer: " + strings.TrimSpace(last)
+}
+
+// ntp sends an SNTP query to a server from the device and returns the mode, stratum and leap indicator of the reply, how far the
+// time it carries is from the clock of the machine, and what TCP 4460 did, or what went wrong. The server answers nothing before its first configuration, so
+// the call tries for a while.
+func (d *device) ntp(server string) (mode, stratum, leap int, delta float64, nts string, err error) {
+	d.t.Helper()
+	python := filepath.Join(filepath.Dir(d.script), "ntpq.py")
+	var last string
+	for i := 0; i < 10; i++ {
+		out, rerr := d.client("python3", python, server)
+		if rerr == nil {
+			if n, _ := fmt.Sscanf(strings.TrimSpace(out), "%d %d %d %f %s", &mode, &stratum, &leap, &delta, &nts); n == 5 {
+				return mode, stratum, leap, delta, nts, nil
+			}
+		}
+		last = out
+		time.Sleep(2 * time.Second)
+	}
+	return 0, 0, 0, 0, "", fmt.Errorf("no answer: %s", strings.TrimSpace(last))
 }
 
 // waitFor polls a condition.

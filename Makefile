@@ -100,14 +100,14 @@ test: test-web ## level 0: Go unit tests (no root) and the web unit tests
 # Fuzz targets, one `go test -fuzz` run each (Go runs one target per invocation), as package:target. The executor's interface is
 # the boundary between the unprivileged API and the privileged container (docs/development.md, "Security hardening (M29)"): the
 # decoder, the request handling, the connection with its handshake, the capture request and the capture filter. FUZZTIME is per target:
-# the default 60s makes the six targets 6 minutes in CI; the nightly workflow uses a longer time. Every target runs even when one
+# the default 60s makes the seven targets 7 minutes in CI; the nightly workflow uses a longer time. Every target runs even when one
 # fails (a crasher in the first must not hide the others); the exit status is 1 if any failed.
 # The targets of FUZZ_ROOT_TARGETS need CAP_NET_RAW to reach what they test (FuzzCaptureOpenFiles: without it a capture fails at the raw
 # socket before it makes a file, so only the check of the directory is fuzzed): they run behind FUZZ_ROOT_CMD, a command that starts
 # its arguments as root, e.g. `sudo -E env PATH=$PATH HOME=$HOME`. It is empty by default, then they run like the others. They come
 # last: root makes files in the Go build cache that the user cannot write to, and a later unprivileged target would meet them.
 FUZZTIME ?= 60s
-FUZZ_TARGETS := ./internal/executor:FuzzDecode ./internal/executor:FuzzFrame ./internal/executor:FuzzConn ./internal/executor:FuzzCaptureOpen ./internal/capture:FuzzFilter ./internal/executor:FuzzCaptureOpenFiles
+FUZZ_TARGETS := ./internal/executor:FuzzDecode ./internal/executor:FuzzFrame ./internal/executor:FuzzConn ./internal/executor:FuzzCaptureOpen ./internal/capture:FuzzFilter ./internal/ntpserver:FuzzPacket ./internal/executor:FuzzCaptureOpenFiles
 FUZZ_ROOT_TARGETS := ./internal/executor:FuzzCaptureOpenFiles
 FUZZ_ROOT_CMD ?=
 

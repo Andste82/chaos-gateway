@@ -130,6 +130,10 @@ type Kernel struct {
 	// docker
 	neighbors []linux.Neighbor
 	conntrack string
+	// conntrackRows are the lines of conntrack, parsed once, while a `conntrack -D` works on them (a table of thousands of
+	// flows is deleted one by one, and parsing it for each deletion is quadratic); conntrackDirty says the text is older.
+	conntrackRows  []conntrackRow
+	conntrackDirty bool
 	// conntrackReads counts the listings (ConntrackReads)
 	conntrackReads int
 	// conntrackEvents is the open conntrack watch's channel, if any (M6a-04); nil when none is open.

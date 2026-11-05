@@ -258,6 +258,7 @@ func TestEveryKernelProtocolNamesItsTable(t *testing.T) {
 		ok   bool
 	}{
 		"own table":                    {"protocol kernel k { kernel table 100; ipv4 { export all; }; }", true},
+		"table number with a suffix":   {"protocol kernel 00{ kernel table 100A}", false}, // found by FuzzDecode: the digits are no table number when a letter follows
 		"unnamed protocol":             {"protocol kernel { kernel table 100; ipv4; }", true},
 		"table after the ipv4 block":   {"protocol kernel k { ipv4 { export all; }; kernel table 100; }", true},
 		"no table":                     {"protocol kernel k { ipv4 { export all; }; }", false},

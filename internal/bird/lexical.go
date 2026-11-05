@@ -10,7 +10,7 @@ import (
 
 const maxConfigBytes = 1 << 20
 
-var kernelTableRE = regexp.MustCompile(`\bkernel\s+table\s+(\d+)`)
+var kernelTableRE = regexp.MustCompile(`\bkernel\s+table\s+(\d+)\b`)
 
 // kernelBlockRE finds the head of a kernel protocol or template; its block starts at the next brace.
 var kernelBlockRE = regexp.MustCompile(`\b(protocol|template)\s+kernel\b`)

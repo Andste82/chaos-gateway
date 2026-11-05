@@ -4,7 +4,7 @@
 // server is not to be trusted, no answer at all, or an invalid one) and the server the device asked (none: every server).
 // The "Add fault" dialog and the `time` step of the step dialog share them. Each message stands under its field (`errors` by
 // field name).
-import { computed, useId } from 'vue';
+import { computed, ref, useId } from 'vue';
 import { applyTimePreset, timeAnswerGroups, timeAnswers, timeKissCodes, timePresets, type TimeForm } from '../../lib/timeForm';
 import TrafficFields from './TrafficFields.vue';
 
@@ -14,6 +14,15 @@ const uid = useId();
 const hint = computed(() => timeAnswers.find((a) => a.value === form.value.answer)?.hint);
 const fid = (f: string) => `${uid}-${f}`;
 const eid = (f: string) => `${uid}-${f}-error`;
+/** The ids of the elements that describe a control: the ones that exist, as a list. */
+const describedBy = (...ids: (string | false | undefined)[]) => ids.filter(Boolean).join(' ') || undefined;
+/** The preset the last click applied: it changed several fields at once, so its hint stands in plain text and is announced. */
+const appliedPreset = ref<string>();
+const appliedHint = computed(() => timePresets.find((p) => p.id === appliedPreset.value));
+function applyPreset(id: string) {
+  form.value = applyTimePreset(form.value, id);
+  appliedPreset.value = id;
+}
 </script>
 
 <template>
@@ -27,12 +36,17 @@ const eid = (f: string) => `${uid}-${f}-error`;
           type="button"
           class="btn btn-sm"
           :title="p.hint"
+          :aria-describedby="fid(`preset-${p.id}`)"
           :data-testid="`time-preset-${p.id}`"
-          @click="form = applyTimePreset(form, p.id)"
+          @click="applyPreset(p.id)"
         >
           {{ p.label }}
         </button>
       </div>
+      <span v-for="p in timePresets" :id="fid(`preset-${p.id}`)" :key="p.id" class="sr-only">{{ p.hint }}</span>
+      <p class="m-0 mt-1 min-h-[1.25rem] text-[13px] text-text-2" role="status" data-testid="time-preset-hint">
+        <template v-if="appliedHint">{{ appliedHint.label }}: {{ appliedHint.hint }}</template>
+      </p>
     </div>
 
     <div>
@@ -70,7 +84,13 @@ const eid = (f: string) => `${uid}-${f}-error`;
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="label" :for="fid('shift')">Served time</label>
-          <select :id="fid('shift')" v-model="form.shift" class="input">
+          <select
+            :id="fid('shift')"
+            v-model="form.shift"
+            class="input"
+            :aria-invalid="!!errors.timeChange"
+            :aria-describedby="describedBy(errors.timeChange && eid('change'))"
+          >
             <option value="offset">The correct time plus an offset</option>
             <option value="absolute">A fixed instant, running on</option>
             <option value="none">The correct time (drift or leap only)</option>
@@ -114,7 +134,7 @@ const eid = (f: string) => `${uid}-${f}-error`;
             inputmode="decimal"
             placeholder="none"
             :aria-invalid="!!errors.timeSkew"
-            :aria-describedby="errors.timeSkew ? eid('skew') : fid('skew-hint')"
+            :aria-describedby="describedBy(errors.timeSkew ? eid('skew') : fid('skew-hint'), errors.timeChange && eid('change'))"
           />
           <p v-if="errors.timeSkew" :id="eid('skew')" class="field-error">{{ errors.timeSkew }}</p>
           <p v-else :id="fid('skew-hint')" class="m-0 mt-1 text-[13px] text-text-2">Positive runs fast, negative slow: 1000 ppm adds 10 ms after 10 s.</p>
@@ -126,7 +146,7 @@ const eid = (f: string) => `${uid}-${f}-error`;
             v-model="form.leap"
             class="input"
             :aria-invalid="!!errors.timeLeap"
-            :aria-describedby="errors.timeLeap ? eid('leap') : undefined"
+            :aria-describedby="describedBy(errors.timeLeap && eid('leap'), errors.timeChange && eid('change'))"
           >
             <option value="">None</option>
             <option value="insert">Insert a second at the end of the day</option>
@@ -135,7 +155,7 @@ const eid = (f: string) => `${uid}-${f}-error`;
           <p v-if="errors.timeLeap" :id="eid('leap')" class="field-error">{{ errors.timeLeap }}</p>
         </div>
       </div>
-      <p v-if="errors.timeChange" class="field-error m-0" data-testid="time-change-error">{{ errors.timeChange }}</p>
+      <p v-if="errors.timeChange" :id="eid('change')" class="field-error m-0" role="alert" data-testid="time-change-error">{{ errors.timeChange }}</p>
     </template>
 
     <div>

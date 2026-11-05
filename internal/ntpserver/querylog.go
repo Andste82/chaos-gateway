@@ -19,6 +19,8 @@ const (
 	logBatch    = 200
 	logInterval = 500 * time.Millisecond
 	logBuffer   = 10000
+	// logBackoffMax bounds the wait after posts that failed: it doubles from logInterval with each failure
+	logBackoffMax = 10 * time.Second
 )
 
 // queryLog collects entries and hands them to the sink in batches. The buffer is bounded: while the
@@ -74,6 +76,9 @@ func (q *queryLog) run(ctx context.Context) {
 	}
 	tick := q.clock.NewTicker(logInterval)
 	defer tick.Stop()
+	// after a failed post neither a tick nor a wake (one comes with every entry once a batch is pending) starts a post
+	// before retryAt, so that an API that is away is not tried once per query; the delay doubles up to logBackoffMax
+	var retryAt, delay time.Duration
 	for {
 		select {
 		case <-ctx.Done():
@@ -82,17 +87,26 @@ func (q *queryLog) run(ctx context.Context) {
 		case <-tick.C():
 		case <-q.wake:
 		}
-		q.flush(ctx)
+		if delay > 0 && q.clock.Monotonic() < retryAt {
+			continue
+		}
+		if q.flush(ctx) {
+			delay = 0
+			continue
+		}
+		delay = min(max(delay*2, logInterval), logBackoffMax)
+		retryAt = q.clock.Monotonic() + delay
 	}
 }
 
-func (q *queryLog) flush(ctx context.Context) {
+// flush posts the pending entries in batches until none are left; it reports false when the sink did not take a batch.
+func (q *queryLog) flush(ctx context.Context) bool {
 	for {
 		q.mu.Lock()
 		n := len(q.pending)
 		if n == 0 {
 			q.mu.Unlock()
-			return
+			return true
 		}
 		if n > logBatch*5 {
 			n = logBatch * 5
@@ -105,7 +119,7 @@ func (q *queryLog) flush(ctx context.Context) {
 		cancel()
 		if err != nil {
 			q.log.Debug("the query log was not accepted", "error", err)
-			return // the entries stay; the next tick tries again
+			return false // the entries stay; run tries again after its back-off
 		}
 		q.mu.Lock()
 		// entries dropped from the head while the batch was on its way were part of it

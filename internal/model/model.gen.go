@@ -4067,7 +4067,9 @@ type DeviceNtp struct {
 	} `json:"answers"`
 	Device Uuid `json:"device"`
 
-	// Dropped The queries over the device's rate limit that the server did not answer.
+	// Dropped The log entries `dropped`: queries over the device's rate limit that the server did not answer. The server writes
+	// at most one such entry per device per second, whatever the number of queries it dropped, so this is a sample and
+	// not the number of dropped queries.
 	Dropped int64 `json:"dropped"`
 
 	// LastQuery The last query of the device that was answered or deliberately not (the *Time* panel of the device detail).
@@ -5774,11 +5776,11 @@ type NtpQueriedCheck = map[string]interface{}
 
 // NtpQueryLogEntry defines model for NtpQueryLogEntry.
 type NtpQueryLogEntry struct {
-	// Answer How the server answered; `dropped` - not answered because the device's rate limit (16 per second) was exceeded.
+	// Answer How the server answered; `dropped` - not answered because the device's rate limit (16 per second) was exceeded (the server logs at most one such entry a second per device, so an entry stands for one or more dropped queries).
 	Answer *NtpQueryLogEntryAnswer `json:"answer,omitempty"`
 	Client Ipv4                    `json:"client"`
 
-	// Device Filled in by the API from the observed state.
+	// Device Filled in by the API from the observed state; a query that arrived before the gateway had observed the device gets it when it is observed.
 	Device *Uuid `json:"device,omitempty"`
 
 	// Fault The time fault overlay that shaped the answer.
@@ -5806,7 +5808,7 @@ type NtpQueryLogEntry struct {
 	Version *int `json:"version,omitempty"`
 }
 
-// NtpQueryLogEntryAnswer How the server answered; `dropped` - not answered because the device's rate limit (16 per second) was exceeded.
+// NtpQueryLogEntryAnswer How the server answered; `dropped` - not answered because the device's rate limit (16 per second) was exceeded (the server logs at most one such entry a second per device, so an entry stands for one or more dropped queries).
 type NtpQueryLogEntryAnswer string
 
 // NtpQueryLogEntryKind `nts_ke` - a connection to the server's NTS key-establishment port (TCP 4460), or a query with NTS extension fields on a UDP port, that the server cannot answer (plan §2.18); `port` is the port it arrived on, and the fields below are absent.
@@ -5886,7 +5888,7 @@ type NtpServiceConfig struct {
 	// Listen The UDP ports the server listens on (123 and the redirect ports of the faults, at most 32 of them, decision D36), in the service namespace.
 	Listen []int `json:"listen"`
 
-	// Networks The networks whose devices the server serves; the server's reference id in an answer is the gateway address of the client's network.
+	// Networks The networks whose devices the server serves; the server's reference id in an answer is the gateway address of the client's network. A network has an entry for its own range and one for each network behind it (the downstream routes of a bridge, the routes of the peers of a tunnel). The server answers only a source address inside the `clients` of one of the entries and ignores any other.
 	Networks []struct {
 		// Clients Source range of the network's clients.
 		Clients *Ipv4Cidr `json:"clients,omitempty"`
@@ -6091,7 +6093,10 @@ type Overlay struct {
 	//   above), `unsynchronized` (leap indicator 3 and stratum 16), `kiss_of_death` (stratum 0 with `kiss_code` as the
 	//   reference id), `silence` (no answer, the query is counted) and the invalid answers `origin_mismatch` (the origin
 	//   timestamp is not the client's transmit timestamp), `zero_transmit` (a transmit timestamp of zero) and
-	//   `wrong_mode` (the mode of the answer is not 4).
+	//   `wrong_mode` (the mode of the answer is not 4). While the host's clock is not synchronized, the server claims no
+	//   synchronization in any answer that carries a time: the invalid answers are leap indicator 3 and stratum 16 as well
+	//   (their one broken part applies on top), as is a normal answer, unless the fault sets the time itself with
+	//   `absolute`; a kiss-of-death and `silence` are as they are.
 	//
 	// A fault must change something: at least one of `offset`, `absolute`, `skew_ppm`, `leap` or an `answer` other than
 	// `normal`. `offset` and `absolute` exclude each other. An `answer` other than `normal` is the whole fault: it
@@ -6110,6 +6115,15 @@ type Overlay struct {
 	// destination selector of an active time fault gets a port of its own, at most 32 distinct destinations, and the
 	// rest is served like the scope without a selector with a warning. A fault without a destination selector applies
 	// to every server the scope's devices ask, the gateway's own address included.
+	//
+	// The fault reaches the servers outside the segments of the device's network, and the gateway's own address of the
+	// network. It does not reach a server inside the segments (the network and the networks behind its routers): the
+	// packets to it are switched or routed back out of the interface and never meet the redirect (the same limit as the
+	// redirect of hardcoded DNS), so the device keeps getting the correct time from it, and the overlay still shows
+	// `effective`. The compiler warns with the problem code `ntp_server_inside` when the `destination` of a fault lies
+	// inside the segments of a network it applies to, and when a fault without a destination applies to a network whose
+	// DHCP hands out an NTP server inside them (`dhcp.options.ntp_servers`). `GET /explain` reports no time fault for such
+	// a destination.
 	Time *TimeFault `json:"time,omitempty"`
 
 	// Tls TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
@@ -6320,7 +6334,10 @@ type OverlayRequest struct {
 	//   above), `unsynchronized` (leap indicator 3 and stratum 16), `kiss_of_death` (stratum 0 with `kiss_code` as the
 	//   reference id), `silence` (no answer, the query is counted) and the invalid answers `origin_mismatch` (the origin
 	//   timestamp is not the client's transmit timestamp), `zero_transmit` (a transmit timestamp of zero) and
-	//   `wrong_mode` (the mode of the answer is not 4).
+	//   `wrong_mode` (the mode of the answer is not 4). While the host's clock is not synchronized, the server claims no
+	//   synchronization in any answer that carries a time: the invalid answers are leap indicator 3 and stratum 16 as well
+	//   (their one broken part applies on top), as is a normal answer, unless the fault sets the time itself with
+	//   `absolute`; a kiss-of-death and `silence` are as they are.
 	//
 	// A fault must change something: at least one of `offset`, `absolute`, `skew_ppm`, `leap` or an `answer` other than
 	// `normal`. `offset` and `absolute` exclude each other. An `answer` other than `normal` is the whole fault: it
@@ -6339,6 +6356,15 @@ type OverlayRequest struct {
 	// destination selector of an active time fault gets a port of its own, at most 32 distinct destinations, and the
 	// rest is served like the scope without a selector with a warning. A fault without a destination selector applies
 	// to every server the scope's devices ask, the gateway's own address included.
+	//
+	// The fault reaches the servers outside the segments of the device's network, and the gateway's own address of the
+	// network. It does not reach a server inside the segments (the network and the networks behind its routers): the
+	// packets to it are switched or routed back out of the interface and never meet the redirect (the same limit as the
+	// redirect of hardcoded DNS), so the device keeps getting the correct time from it, and the overlay still shows
+	// `effective`. The compiler warns with the problem code `ntp_server_inside` when the `destination` of a fault lies
+	// inside the segments of a network it applies to, and when a fault without a destination applies to a network whose
+	// DHCP hands out an NTP server inside them (`dhcp.options.ntp_servers`). `GET /explain` reports no time fault for such
+	// a destination.
 	Time *TimeFault `json:"time,omitempty"`
 
 	// Tls TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
@@ -6879,8 +6905,8 @@ type ProfileParts struct {
 	Mtu        *MtuParams        `json:"mtu,omitempty"`
 
 	// Time A part competes like a time fault of its own, so a profile with this part is activated on a device, a group or
-	// a network, never on the global scope or a remote network: the activation is refused with `target_kind` as a
-	// whole (a profile with a time part has no partial activation). If a profile that is already active gains the
+	// a network, never on the global scope or a remote network: the activation is refused as a whole (`422 validation_failed`
+	// with the error code `invalid_target` at `/target`; a profile with a time part has no partial activation). If a profile that is already active gains the
 	// part later, the part does not apply on such a target and the other parts do.
 	Time *TimeFault `json:"time,omitempty"`
 
@@ -7657,7 +7683,10 @@ type Step struct {
 	//   above), `unsynchronized` (leap indicator 3 and stratum 16), `kiss_of_death` (stratum 0 with `kiss_code` as the
 	//   reference id), `silence` (no answer, the query is counted) and the invalid answers `origin_mismatch` (the origin
 	//   timestamp is not the client's transmit timestamp), `zero_transmit` (a transmit timestamp of zero) and
-	//   `wrong_mode` (the mode of the answer is not 4).
+	//   `wrong_mode` (the mode of the answer is not 4). While the host's clock is not synchronized, the server claims no
+	//   synchronization in any answer that carries a time: the invalid answers are leap indicator 3 and stratum 16 as well
+	//   (their one broken part applies on top), as is a normal answer, unless the fault sets the time itself with
+	//   `absolute`; a kiss-of-death and `silence` are as they are.
 	//
 	// A fault must change something: at least one of `offset`, `absolute`, `skew_ppm`, `leap` or an `answer` other than
 	// `normal`. `offset` and `absolute` exclude each other. An `answer` other than `normal` is the whole fault: it
@@ -7676,6 +7705,15 @@ type Step struct {
 	// destination selector of an active time fault gets a port of its own, at most 32 distinct destinations, and the
 	// rest is served like the scope without a selector with a warning. A fault without a destination selector applies
 	// to every server the scope's devices ask, the gateway's own address included.
+	//
+	// The fault reaches the servers outside the segments of the device's network, and the gateway's own address of the
+	// network. It does not reach a server inside the segments (the network and the networks behind its routers): the
+	// packets to it are switched or routed back out of the interface and never meet the redirect (the same limit as the
+	// redirect of hardcoded DNS), so the device keeps getting the correct time from it, and the overlay still shows
+	// `effective`. The compiler warns with the problem code `ntp_server_inside` when the `destination` of a fault lies
+	// inside the segments of a network it applies to, and when a fault without a destination applies to a network whose
+	// DHCP hands out an NTP server inside them (`dhcp.options.ntp_servers`). `GET /explain` reports no time fault for such
+	// a destination.
 	Time *TimeFault `json:"time,omitempty"`
 
 	// Tls TLS family (plan §2.8). Selected new connections are redirected to the TLS responder
@@ -7774,7 +7812,10 @@ type SystemInfoArch string
 //     above), `unsynchronized` (leap indicator 3 and stratum 16), `kiss_of_death` (stratum 0 with `kiss_code` as the
 //     reference id), `silence` (no answer, the query is counted) and the invalid answers `origin_mismatch` (the origin
 //     timestamp is not the client's transmit timestamp), `zero_transmit` (a transmit timestamp of zero) and
-//     `wrong_mode` (the mode of the answer is not 4).
+//     `wrong_mode` (the mode of the answer is not 4). While the host's clock is not synchronized, the server claims no
+//     synchronization in any answer that carries a time: the invalid answers are leap indicator 3 and stratum 16 as well
+//     (their one broken part applies on top), as is a normal answer, unless the fault sets the time itself with
+//     `absolute`; a kiss-of-death and `silence` are as they are.
 //
 // A fault must change something: at least one of `offset`, `absolute`, `skew_ppm`, `leap` or an `answer` other than
 // `normal`. `offset` and `absolute` exclude each other. An `answer` other than `normal` is the whole fault: it
@@ -7793,6 +7834,15 @@ type SystemInfoArch string
 // destination selector of an active time fault gets a port of its own, at most 32 distinct destinations, and the
 // rest is served like the scope without a selector with a warning. A fault without a destination selector applies
 // to every server the scope's devices ask, the gateway's own address included.
+//
+// The fault reaches the servers outside the segments of the device's network, and the gateway's own address of the
+// network. It does not reach a server inside the segments (the network and the networks behind its routers): the
+// packets to it are switched or routed back out of the interface and never meet the redirect (the same limit as the
+// redirect of hardcoded DNS), so the device keeps getting the correct time from it, and the overlay still shows
+// `effective`. The compiler warns with the problem code `ntp_server_inside` when the `destination` of a fault lies
+// inside the segments of a network it applies to, and when a fault without a destination applies to a network whose
+// DHCP hands out an NTP server inside them (`dhcp.options.ntp_servers`). `GET /explain` reports no time fault for such
+// a destination.
 type TimeFault struct {
 	// Absolute RFC 3339 with time zone. The instant the served time shows when the fault takes effect.
 	Absolute *time.Time       `json:"absolute,omitempty"`

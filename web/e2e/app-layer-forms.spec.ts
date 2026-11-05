@@ -434,7 +434,7 @@ test('the gateway\'s refusal of a DHCP action stands under the field it names', 
   await d.getByLabel('New address').fill('10.99.0.5');
   await d.getByRole('button', { name: 'Apply action' }).click();
   await expect(d.getByLabel('New address')).toHaveAccessibleDescription('10.99.0.5 is not in the network of ESP32-42');
-  gw.rejectOverlay = [{ path: '/target', code: 'target_kind', message: 'a DHCP action targets a device or a network' }];
+  gw.rejectOverlay = [{ path: '/target', code: 'invalid_target', message: 'a DHCP action targets a device or a network' }];
   await d.getByLabel('New address').fill('');
   await d.getByRole('button', { name: 'Apply action' }).click();
   await expect(d.getByRole('alert')).toContainText('a DHCP action targets a device or a network');

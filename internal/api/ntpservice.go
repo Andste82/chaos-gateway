@@ -28,6 +28,10 @@ import (
 // ntpLogSize is how many query-log entries the API keeps in memory: what the wait and the check of a run look at.
 const ntpLogSize = 20000
 
+// ntpUnownedLogSize is how many of those entries may be of clients that no device owns (yet): a client in a test network that
+// sends from many source addresses must not push the queries of the devices out of the log. The oldest of them go first.
+const ntpUnownedLogSize = 2000
+
 // ntpPoll are the long poll's wait and the interval at which it looks for a new configuration.
 var ntpPoll = struct{ wait, tick time.Duration }{30 * time.Second, 100 * time.Millisecond}
 
@@ -73,11 +77,15 @@ type ntpState struct {
 	logMu   sync.Mutex
 	seq     int64
 	entries []loggedNTP // oldest first, bounded
+	// unowned is set when entries are in the log for clients that no device owns; adoptOf is the snapshot the owners of the
+	// log were last looked up in (ntpAdopt)
+	unowned bool
+	adoptOf *engine.Snapshot
 	// hits counts the queries each time fault shaped (by overlay id): the counter of a time overlay and of the time part
 	// of a profile. It lives in memory, like the log; epoch changes with every start of the API.
 	hits  map[string]int64
 	epoch int64
-	// hitsOf is the snapshot hits was last pruned to (pruneHits)
+	// hitsOf is the snapshot hits and the answers per fault of the devices were last pruned to
 	hitsOf *engine.Snapshot
 	// sent is when an event of a kind was last sent for a device (and fault), for the limit of ntpEventEvery; nts is the
 	// devices that announced NTS key establishment, which is sent once
@@ -112,7 +120,8 @@ type askedServer struct {
 // ntpDevice is the use a device made of the NTP server since the API started (the per-device counters of plan §2.18).
 type ntpDevice struct {
 	// Queries counts the client queries of the device; Answers those shaped by each time fault (by overlay id); Silenced
-	// those a fault left unanswered, Dropped those over the rate limit.
+	// those a fault left unanswered, Dropped the entries over the rate limit: the server logs them sampled to one per second per
+	// device, so this is not the number of queries it dropped.
 	Queries, Silenced, Dropped int64
 	Answers                    map[string]int64
 	// NTSKE counts the connections to the key-establishment port (TCP 4460) that the server cannot answer.
@@ -322,12 +331,10 @@ func (s *Server) PostNtpQueries(c *gin.Context) {
 		l := &logged[i]
 		l.e.Device = nil
 		if dev, ok := snap.Identity.OwnerOf(l.client); ok {
-			l.device = strings.ToLower(dev)
-			if u, err := uuid.Parse(dev); err == nil {
-				l.e.Device = &u
-			}
+			l.setDevice(dev)
 		}
 	}
+	logged = ntpOurs(snap, logged)
 	s.ntpServersAsked(contextOf(c), snap, logged)
 
 	var events []ntpEvent
@@ -338,16 +345,149 @@ func (s *Server) PostNtpQueries(c *gin.Context) {
 		s.ntp.seq++
 		l.seq = s.ntp.seq
 		s.ntp.entries = append(s.ntp.entries, *l)
+		if l.device == "" {
+			s.ntp.unowned = true
+		}
 		events = append(events, s.noteNTP(snap, l, now)...)
 	}
-	if over := len(s.ntp.entries) - ntpLogSize; over > 0 {
-		s.ntp.entries = append([]loggedNTP(nil), s.ntp.entries[over:]...)
-	}
+	s.trimNTPLog()
 	s.ntp.logMu.Unlock()
 	for _, ev := range events {
 		s.cfg.Engine.Emit(ev.typ, ev.data)
 	}
 	c.Status(204)
+}
+
+// setDevice makes a device the owner of the query.
+func (l *loggedNTP) setDevice(dev string) {
+	l.device = strings.ToLower(dev)
+	l.e.Device = nil
+	if u, err := uuid.Parse(dev); err == nil {
+		l.e.Device = &u
+	}
+}
+
+// ntpOurs keeps the queries of the devices and of the clients in the range of a test network: the server answers no other
+// client, and an entry for any other address (the log takes what it is sent) is neither logged nor counted nor announced.
+func ntpOurs(snap *engine.Snapshot, batch []loggedNTP) []loggedNTP {
+	var nets []netip.Prefix
+	for _, n := range ntpNetworks(snap) {
+		if p, err := netip.ParsePrefix(n.Clients); err == nil {
+			nets = append(nets, p)
+		}
+	}
+	return slices.DeleteFunc(batch, func(l loggedNTP) bool {
+		return l.device == "" && !slices.ContainsFunc(nets, func(p netip.Prefix) bool { return p.Contains(l.client) })
+	})
+}
+
+// trimNTPLog keeps the log to ntpLogSize entries, of which at most ntpUnownedLogSize are of clients that no device owns:
+// the oldest go first. Called with logMu held.
+func (s *Server) trimNTPLog() {
+	e := s.ntp.entries
+	skip := -ntpUnownedLogSize // the unowned entries to leave out, the oldest
+	for i := range e {
+		if e[i].device == "" {
+			skip++
+		}
+	}
+	skip = max(skip, 0)
+	over := len(e) - skip - ntpLogSize
+	if skip == 0 && over <= 0 {
+		return
+	}
+	out := make([]loggedNTP, 0, len(e)-skip)
+	for _, l := range e {
+		if l.device == "" && skip > 0 {
+			skip--
+			continue
+		}
+		out = append(out, l)
+	}
+	if over > 0 {
+		out = out[over:]
+	}
+	s.ntp.entries = slices.Clone(out)
+}
+
+// ntpAdopt gives the owner to the queries of a client that no device owned when they arrived: the gateway may observe a
+// device after its first packet, and that query must still be the device's for the wait, the check and the reads. It moves
+// the counters kept for the address to the device and puts the entries into its recent ones. It looks again only for a new
+// snapshot or new unowned entries. Called with logMu held.
+func (s *Server) ntpAdopt(snap *engine.Snapshot) {
+	if snap == nil || (s.ntp.adoptOf == snap && !s.ntp.unowned) {
+		return
+	}
+	s.ntp.adoptOf, s.ntp.unowned = snap, false
+	owners := map[netip.Addr]string{} // empty: none
+	ownerOf := func(a netip.Addr) string {
+		dev, ok := owners[a]
+		if !ok {
+			dev, _ = snap.Identity.OwnerOf(a)
+			owners[a] = dev
+		}
+		return dev
+	}
+	adopted := map[string][]model.NtpQueryLogEntry{}
+	for i := range s.ntp.entries {
+		l := &s.ntp.entries[i]
+		if l.device != "" {
+			continue
+		}
+		if dev := ownerOf(l.client); dev != "" {
+			l.setDevice(dev)
+			adopted[l.device] = append(adopted[l.device], l.e)
+		} else {
+			s.ntp.unowned = true
+		}
+	}
+	now := s.clk.Now()
+	var moved []netip.Addr
+	for key := range s.ntp.devices {
+		if a, err := netip.ParseAddr(key); err == nil && ownerOf(a) != "" {
+			moved = append(moved, a)
+		}
+	}
+	for _, a := range moved {
+		d := s.ntp.devices[a.String()]
+		key := strings.ToLower(ownerOf(a))
+		delete(s.ntp.devices, a.String())
+		s.ntpDeviceOf(key, now).absorb(d)
+		if s.ntp.nts[a.String()] {
+			delete(s.ntp.nts, a.String())
+			if s.ntp.nts[key] || len(s.ntp.nts) < ntpMaxDevices {
+				s.ntp.nts[key] = true
+			}
+		}
+	}
+	for key, es := range adopted {
+		s.ntpDeviceOf(key, now).addRecentOlder(es)
+	}
+}
+
+// absorb adds the counters of another state (the one kept for the address of the device before it was known) to the device's.
+func (d *ntpDevice) absorb(o *ntpDevice) {
+	d.Queries, d.Silenced, d.Dropped, d.NTSKE = d.Queries+o.Queries, d.Silenced+o.Silenced, d.Dropped+o.Dropped, d.NTSKE+o.NTSKE
+	for k, v := range o.Answers {
+		if d.Answers == nil {
+			d.Answers = map[string]int64{}
+		}
+		d.Answers[k] += v
+	}
+	if o.LastQuery.After(d.LastQuery) {
+		d.LastQuery, d.LastAnswer, d.LastServed, d.LastOffsetMs = o.LastQuery, o.LastAnswer, o.LastServed, o.LastOffsetMs
+		d.LastFault, d.LastServer = o.LastFault, o.LastServer
+	}
+}
+
+// addRecentOlder puts entries that arrived before the ones in the ring among them, by time, and keeps the newest.
+func (d *ntpDevice) addRecentOlder(es []model.NtpQueryLogEntry) {
+	all := append(d.recentOldestFirst(), es...)
+	sort.SliceStable(all, func(i, j int) bool { return all[i].Time.Before(all[j].Time) })
+	if len(all) > ntpRecentPerDevice {
+		all = all[len(all)-ntpRecentPerDevice:]
+	}
+	d.recent, d.next = all, 0
 }
 
 // ntpEvent is an event to send once the lock is released.
@@ -530,10 +670,7 @@ func (s *Server) ntpHitsSnapshot(snap *engine.Snapshot) (map[string]int64, int64
 	if snap == nil {
 		return nil, s.ntp.epoch
 	}
-	if s.ntp.hitsOf != snap {
-		pruneHits(s.ntp.hits, snap.Overlays)
-		s.ntp.hitsOf = snap
-	}
+	s.pruneToSnapshot(snap)
 	out := make(map[string]int64, len(snap.NTPFaults))
 	for _, f := range snap.NTPFaults {
 		id := strings.ToLower(f.Overlay)
@@ -542,6 +679,27 @@ func (s *Server) ntpHitsSnapshot(snap *engine.Snapshot) (map[string]int64, int64
 		}
 	}
 	return out, s.ntp.epoch
+}
+
+// pruneToSnapshot forgets the counters of the overlays that are not in the snapshot any more, and the answers per fault of the
+// devices for them (P5-AUDIT-15), once for each snapshot. Called with logMu held.
+func (s *Server) pruneToSnapshot(snap *engine.Snapshot) {
+	if s.ntp.hitsOf == snap {
+		return
+	}
+	s.ntp.hitsOf = snap
+	pruneHits(s.ntp.hits, snap.Overlays)
+	in := make(map[string]bool, len(snap.Overlays))
+	for _, o := range snap.Overlays {
+		in[strings.ToLower(o.Id.String())] = true
+	}
+	for _, d := range s.ntp.devices {
+		for id := range d.Answers {
+			if !in[id] {
+				delete(d.Answers, id)
+			}
+		}
+	}
 }
 
 // ntpQueries returns the queries of the devices (UUIDs) at or after the time, oldest first: what the wait and the check
@@ -554,6 +712,7 @@ func (s *Server) ntpQueries(devices []string, since time.Time) []loggedNTP {
 	var out []loggedNTP
 	s.ntp.logMu.Lock()
 	defer s.ntp.logMu.Unlock()
+	s.ntpAdopt(s.cfg.Engine.Snapshot())
 	for _, l := range s.ntp.entries {
 		if l.device == "" || !want[l.device] || l.e.Time.Before(since) || isNTSKE(l.e) {
 			continue
@@ -572,6 +731,11 @@ func (s *Server) ntpQueries(devices []string, since time.Time) []loggedNTP {
 func (s *Server) ntpDeviceState(device string) (ntpDevice, bool) {
 	s.ntp.logMu.Lock()
 	defer s.ntp.logMu.Unlock()
+	snap := s.cfg.Engine.Snapshot()
+	s.ntpAdopt(snap)
+	if snap != nil {
+		s.pruneToSnapshot(snap)
+	}
 	d, ok := s.ntp.devices[strings.ToLower(device)]
 	if !ok {
 		return ntpDevice{}, false
@@ -589,25 +753,15 @@ func (s *Server) ntpDeviceState(device string) (ntpDevice, bool) {
 // names, or names with a prefix or a host name): from the observed flows, which hold every connection redirected to the
 // NTP server with the address it was sent to. It is best effort (decision D36): a client with one such flow asked that
 // server, with several or none the server stays unknown. The flows are one read of the conntrack table for the clients of a
-// batch, and a client's answer is kept for ntpAskedFor.
+// batch, and a client's answer is kept for ntpAskedFor. The batch holds only the clients of the test networks (ntpOurs): the
+// flows of any other address say nothing the log needs.
 func (s *Server) ntpServersAsked(ctx context.Context, snap *engine.Snapshot, batch []loggedNTP) {
 	now := s.clk.Now()
-	// only the clients of the test networks are looked up: the log accepts an entry for any address, and the flows of an
-	// address that is no device of the gateway say nothing the log needs
-	var nets []netip.Prefix
-	for _, n := range ntpNetworks(snap) {
-		if p, err := netip.ParsePrefix(n.Clients); err == nil {
-			nets = append(nets, p)
-		}
-	}
-	ours := func(l *loggedNTP) bool {
-		return l.device != "" || slices.ContainsFunc(nets, func(p netip.Prefix) bool { return p.Contains(l.client) })
-	}
 	need := map[netip.Addr]bool{}
 	s.ntp.logMu.Lock()
 	for i := range batch {
 		l := &batch[i]
-		if isNTSKE(l.e) || (l.e.Server != nil && *l.e.Server != "") || (l.e.Answer != nil && *l.e.Answer == model.NtpQueryLogEntryAnswerDropped) || !ours(l) {
+		if isNTSKE(l.e) || (l.e.Server != nil && *l.e.Server != "") || (l.e.Answer != nil && *l.e.Answer == model.NtpQueryLogEntryAnswerDropped) {
 			continue
 		}
 		if a, ok := s.ntp.asked[l.client]; ok && now.Sub(a.at) < ntpAskedFor {

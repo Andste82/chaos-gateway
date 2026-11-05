@@ -16,7 +16,7 @@ import LoadError from '../components/ui/LoadError.vue';
 import SectionCard from '../components/ui/SectionCard.vue';
 import { ApiError } from '../api/fetcher';
 import { useNames, useRun, useScenarios } from '../composables/gateway';
-import { formatCount } from '../lib/format';
+import { counterText } from '../lib/faults';
 import { isActive } from '../lib/runs';
 import { useApiPanelStore, useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
@@ -51,6 +51,8 @@ const report = useQuery({
   retry: false,
 });
 const counters = computed(() => report.data.value?.counters ?? []);
+/** A step of the type `time` makes a time fault, whose counter counts the answers it shaped (not packets). */
+const timeSteps = computed(() => new Set((data.value?.steps ?? []).filter((s) => s.type === 'time').map((s) => s.id)));
 
 const aborting = ref(false);
 async function abort() {
@@ -98,7 +100,7 @@ async function abort() {
         <ul class="m-0 flex list-none flex-col gap-1.5 p-0 text-[13px]" data-testid="run-counters">
           <li v-for="c in counters" :key="c.overlay ?? c.step" class="flex justify-between gap-3" data-testid="run-counter">
             <span class="mono">{{ c.step }}</span>
-            <span :class="c.counters?.packets ? '' : 'text-fault-text'">{{ formatCount(c.counters?.packets ?? 0) }} packets</span>
+            <span :class="c.counters?.packets ? '' : 'text-fault-text'">{{ counterText(timeSteps.has(c.step ?? '') ? 'time' : undefined, c.counters?.packets ?? 0, 'packets') }}</span>
           </li>
         </ul>
       </SectionCard>

@@ -11,6 +11,7 @@ import (
 	"github.com/Andste82/chaos-gateway/internal/clock"
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/engine"
+	"github.com/Andste82/chaos-gateway/internal/linux"
 	"github.com/Andste82/chaos-gateway/internal/ntpserver"
 )
 
@@ -680,8 +681,8 @@ func TestTheQueryLogInMemoryKeepsTheNewestEntries(t *testing.T) {
 }
 
 // The conntrack table is read for the servers devices asked at most once a second whatever the number of clients that need a
-// lookup, and not at all for an address that is no client of a test network: the log takes an entry for any address, and a
-// sender of many source addresses must not keep the executor busy with dumps of the table.
+// lookup, and not at all for an address that is no client of a test network (which is not logged at all): the log takes an entry
+// for any address, and a sender of many source addresses must not keep the executor busy with dumps of the table.
 func TestManyNewClientsCauseOneReadOfTheFlowsAndAForeignAddressNone(t *testing.T) {
 	clk := clock.NewFake(time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC))
 	g, _ := tlsGateway(t, func(o *options) { o.apiClock = clk })
@@ -698,18 +699,18 @@ func TestManyNewClientsCauseOneReadOfTheFlowsAndAForeignAddressNone(t *testing.T
 	if n := g.k.ConntrackReads() - reads; n != 1 {
 		t.Errorf("ten batches of new clients within a second caused %d reads, want 1", n)
 	}
-	if s := g.srv.NTPLog()[1].Server; s == nil || *s != "203.0.113.9:123" {
+	if s := g.srv.NTPLog()[0].Server; s == nil || *s != "203.0.113.9:123" {
 		t.Errorf("the client of the flow: %v", s)
 	}
 	// a client whose flow was not in the shared read is not settled for 10 s: the next batch after the interval asks again
 	g.k.SetConntrack(ntpFlow("10.10.0.31", 40001, "203.0.113.9", 123) + ntpFlow("10.10.0.50", 40050, "198.51.100.8", 123))
 	g.mustPostNTP(ntpEntry("10.10.0.50", 123, now, map[string]any{"answer": "normal"}))
-	if s := g.srv.NTPLog()[11].Server; s != nil {
+	if s := g.srv.NTPLog()[10].Server; s != nil {
 		t.Errorf("the shared read cannot know a newer flow: %v", *s)
 	}
 	clk.Advance(2 * time.Second)
 	g.mustPostNTP(ntpEntry("10.10.0.50", 123, clk.Now(), map[string]any{"answer": "normal"}))
-	if s := g.srv.NTPLog()[12].Server; s == nil || *s != "198.51.100.8:123" {
+	if s := g.srv.NTPLog()[11].Server; s == nil || *s != "198.51.100.8:123" {
 		t.Errorf("after the interval the table is read again: %v", s)
 	}
 }
@@ -753,11 +754,117 @@ func TestAClientNoDeviceOwnsKeepsNoRecentQueries(t *testing.T) {
 	now := time.Now().UTC()
 	var entries []map[string]any
 	entries = append(entries, ntpEntry("10.10.0.31", 123, now, nil))
-	for i := 1; i <= 300; i++ {
-		entries = append(entries, ntpEntry(fmt.Sprintf("10.20.%d.%d", i/200, i%200+1), 123, now, nil))
+	for i := 100; i < 250; i++ {
+		entries = append(entries, ntpEntry(fmt.Sprintf("10.10.0.%d", i), 123, now, nil))
 	}
 	g.mustPostNTP(entries...)
-	if states, recent := g.srv.NTPRetained(); states != 301 || recent != 1 {
-		t.Errorf("%d states and %d recent entries, want 301 and the one of the device", states, recent)
+	if states, recent := g.srv.NTPRetained(); states != 151 || recent != 1 {
+		t.Errorf("%d states and %d recent entries, want 151 and the one of the device", states, recent)
 	}
+}
+
+// A query from an address in a test network that no device owned when it arrived (the gateway had not observed the device yet) is
+// the device's once it is observed: the wait and the check (the observer), the log of the device, its counters and its recent
+// entries see it, and the state kept for the address is gone.
+func TestAQueryLoggedBeforeTheGatewayKnowsTheDeviceIsTheDevicesOnceItIsObserved(t *testing.T) {
+	g, admin := tlsGateway(t)
+	var ov map[string]any
+	g.asAdmin(admin, func() {
+		ov = g.mustCreateOverlay(`{"target":{"device":"esp32-42"},"time":{"offset":"+400d"}}`)
+	})
+	now := time.Now().UTC().Truncate(time.Second)
+	// esp32-42 comes up at 10.10.0.33; its first packets are NTP queries and reach the API before the neighbor table has it
+	g.mustPostNTP(
+		ntpEntry("10.10.0.33", 123, now, map[string]any{"answer": "normal", "fault": ov["id"], "offset_ms": 1}),
+		ntpEntry("10.10.0.33", 123, now.Add(time.Second), map[string]any{"answer": "silence"}),
+		ntpEntry("10.10.0.33", 123, now.Add(2*time.Second), map[string]any{"answer": "dropped"}),
+		ntpEntry("10.10.0.33", 4460, now.Add(3*time.Second), map[string]any{"kind": "nts_ke"}),
+	)
+	if q := g.srv.NTPQueriesOf([]string{espID}, now); len(q) != 0 {
+		t.Fatalf("a client nobody owns is no query of the device: %+v", q)
+	}
+	if states, _ := g.srv.NTPRetained(); states != 1 {
+		t.Fatalf("%d states, want the one of the address", states)
+	}
+
+	g.k.SetNeighbors([]linux.Neighbor{nb("10.10.0.31", "02:00:00:00:00:31"), nb("10.10.0.33", "02:00:00:00:00:31"), nb("10.10.0.32", "02:00:00:00:00:32")})
+	g.observe()
+
+	q := g.srv.NTPObserverQueries([]string{espID}, now)
+	if len(q) != 2 || q[0].Device != espID || q[0].Fault != ov["id"] || q[1].Answer != "silence" {
+		t.Fatalf("the wait and the check see the queries of the device: %+v", q)
+	}
+	if got := g.srv.NTPQueriesOf([]string{espID}, now.Add(time.Second)); len(got) != 1 {
+		t.Errorf("since: %d queries", len(got))
+	}
+	g.asAdmin(admin, func() {
+		got := g.do("GET", "/devices/"+espID+"/ntp", nil, nil, nil).json(t)
+		if got["queries"] != float64(2) || got["silenced"] != float64(1) || got["dropped"] != float64(1) || got["nts_ke"] != float64(1) {
+			t.Errorf("the counters: %v", got)
+		}
+		if a, _ := got["answers"].([]any); len(a) != 1 || a[0].(map[string]any)["fault"] != ov["id"] {
+			t.Errorf("the answers: %v", got["answers"])
+		}
+		if r, _ := got["recent"].([]any); len(r) != 4 || r[0].(map[string]any)["kind"] != "nts_ke" || r[3].(map[string]any)["device"] != espID {
+			t.Errorf("recent: %v", got["recent"])
+		}
+		if last, _ := got["last_query"].(map[string]any); last == nil || last["answer"] != "silence" {
+			t.Errorf("the last query: %v", got["last_query"])
+		}
+		page := g.do("GET", "/ntp/queries?device="+espID, nil, nil, nil).json(t)["items"].([]any)
+		if len(page) != 4 {
+			t.Errorf("the log of the device: %d entries", len(page))
+		}
+	})
+	if states, _ := g.srv.NTPRetained(); states != 1 {
+		t.Errorf("%d states after the address became the device's, want 1", states)
+	}
+	if _, ok := g.srv.NTPDeviceState("10.10.0.33"); ok {
+		t.Error("the state of the address is still there")
+	}
+}
+
+// A client in a test network that no device owns cannot push the queries of the devices out of the log, and an address in no test
+// network is not logged, counted or announced.
+func TestUnownedClientsAreBoundedInTheLogAndForeignAddressesAreNotLogged(t *testing.T) {
+	g, admin := tlsGateway(t)
+	ch, cancel := g.e.Subscribe()
+	defer cancel()
+	now := time.Now().UTC()
+	g.mustPostNTP(ntpEntry("10.10.0.31", 123, now, map[string]any{"answer": "normal"}), ntpEntry("172.31.9.9", 123, now, map[string]any{"answer": "normal"}))
+	for from := 0; from < 25000; from += 2500 {
+		var entries []map[string]any
+		for i := from; i < from+2500; i++ {
+			entries = append(entries, ntpEntry("10.10.0.99", i+1, now, map[string]any{"answer": "normal"}))
+		}
+		g.mustPostNTP(entries...)
+	}
+	log := g.srv.NTPLog()
+	if len(log) != 1+2000 {
+		t.Fatalf("%d entries, want the one of the device and 2000 of the clients nobody owns", len(log))
+	}
+	if log[0].Device == nil || log[0].Port != 123 {
+		t.Errorf("the query of the device was pushed out: %+v", log[0])
+	}
+	if log[1].Port != 25000-2000+1 || log[len(log)-1].Port != 25000 {
+		t.Errorf("the newest of the unowned clients are kept: ports %d to %d", log[1].Port, log[len(log)-1].Port)
+	}
+	for _, e := range log {
+		if e.Client == "172.31.9.9" {
+			t.Fatal("an address outside the test networks was logged")
+		}
+	}
+	if _, ok := g.srv.NTPDeviceState("172.31.9.9"); ok {
+		t.Error("an address outside the test networks was counted")
+	}
+	for _, ev := range drainEvents(ch, "ntp_answered", "ntp_query_seen") {
+		if ev.Data["client"] == "172.31.9.9" {
+			t.Errorf("an address outside the test networks was announced: %v", ev.Data)
+		}
+	}
+	g.asAdmin(admin, func() {
+		if got := g.do("GET", "/devices/"+espID+"/ntp", nil, nil, nil).json(t)["queries"]; got != float64(1) {
+			t.Errorf("queries of the device: %v", got)
+		}
+	})
 }

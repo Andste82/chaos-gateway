@@ -273,14 +273,14 @@ against the schema `OverlayRequest`:
 
 ## DNS faults, TLS cases and DHCP actions
 
-The other overlay kinds have their own body, in the same call:
+The other overlay kinds (the DNS, TLS, DHCP, time and WireGuard ones, whatever the heading says) have their own body, in the same call:
 
 | Kind | Body | What it does |
 |---|---|---|
 | `dns` | `names`, `action` (`nxdomain`, `servfail`, `timeout`, `delay`, `wrong_answer`, `truncate`, `short_ttl`) | the gateway's DNS proxy answers the device's queries for these names wrongly |
 | `tls` | `case` (`untrusted_ca`, `self_signed`, `expired`, `not_yet_valid`, `hostname_mismatch`, `handshake_reset`, `handshake_close`, `handshake_stall`, `intercept`), `ports`, `sni`, `cut_existing` | the connection is redirected to the gateway's TLS responder, which shows the device the broken certificate or handshake |
 | `dhcp` | `action` (`short_lease`, `delete_lease`, `force_new_ip`, `set_options`, `silence`) | the gateway's DHCP server behaves differently towards a device or a network |
-| `time` | `offset`, `absolute`, `skew_ppm`, `leap`, `answer` (`normal`, `unsynchronized`, `kiss_of_death`, `silence`, `origin_mismatch`, `zero_transmit`, `wrong_mode`), `kiss_code`, and the server asked (`destination`, `ports`) | the gateway's NTP server answers the device's queries with a wrong time or in a wrong way ([below](#time-faults-and-the-ntp-server)) |
+| `time` | `offset`, `absolute`, `skew_ppm`, `leap`, `answer` (`normal`, `unsynchronized`, `kiss_of_death`, `silence`, `origin_mismatch`, `zero_transmit`, `wrong_mode`), `kiss_code`, and the server asked (the traffic selector: `destination`, `protocol` (`udp` or omitted), `ports`, `port_ranges`) | the gateway's NTP server answers the device's queries with a wrong time or in a wrong way ([below](#time-faults-and-the-ntp-server)) |
 | `wireguard` | `client` or `link`, `action` (`disable`, `key_mismatch`, `block_endpoint`) | a tunnel peer goes away or breaks |
 
 ```sh run
@@ -308,16 +308,23 @@ test networks instead of the real server, so a `time` overlay can make it answer
 (never `global`). The body is the schema `TimeFault`: at least one of `offset` (signed, `+400d`, `-90s`, `-1y2d`; a year is 365 days),
 `absolute` (an instant, RFC 3339 with a zone), `skew_ppm` and `leap` (`insert` or `delete`), or an `answer` other than `normal`, which is the
 whole fault (`kiss_of_death` also needs `kiss_code`: `RATE`, `DENY` or `RSTR`). `offset` and `absolute` exclude each other, and a fault that
-has both, or that changes nothing, is refused with `422 invalid_time_fault` and a pointer to the field. `destination` (an address, a prefix or a host name) and
-`ports` (default 123) narrow the fault to the server the device asked; the ports 53, 67 and 68 are refused. A time fault redirects the
-UDP 123 traffic of its target to the server, so it reaches a device with a hardcoded server too; it competes only with other time faults.
+has both, or that changes nothing, is refused with `422 validation_failed` whose `errors[]` entry has the code `invalid_time_fault` and the pointer of the field. `destination` (an address, a prefix or a host name) and
+`ports` (default 123) narrow the fault to the server the device asked; the selector is a `TrafficMatch` limited to `protocol: udp` (or omitted: `tcp` is refused, NTP runs over UDP),
+and neither `ports` nor `port_ranges` may cover 53, 67 or 68. A time fault redirects the
+UDP 123 traffic of its target to the server, so it reaches a device with a hardcoded server too; it competes only with other time faults. It does not reach a server inside the segments of the
+device's own network (the network and the networks behind its routers): those packets are switched or routed directly and never meet the redirect, so the device
+keeps the correct time from such a server and the overlay is still `effective`. The compiler warns (problem code `ntp_server_inside`, shown in the preview) for a
+`destination` inside the segments and for a fault without a destination on a network whose DHCP hands out an NTP server inside them; `GET /explain` reports no time fault for a destination there. The gateway's own address of the network is served.
+While the host clock is not synchronized the answers claim no synchronization (leap indicator 3, stratum 16), the invalid answers included, unless the fault has `absolute`.
 
 ```json schema=OverlayRequest
 {"target": {"device": "esp32-42"}, "time": {"absolute": "2038-01-19T03:09:07Z", "skew_ppm": 500, "destination": {"hostname": "time.google.com"}}, "ttl": "10m"}
 ```
 
 The eight presets of the plan are the built-in profiles `time-plus-1y`, `time-minus-1d`, `time-1970`, `time-2038`, `time-ntp-era-1`,
-`time-leap-second`, `time-unsynchronized` and `time-kiss-of-death` (a `time` part each), activated like any profile:
+`time-leap-second`, `time-unsynchronized` and `time-kiss-of-death` (a `time` part each), activated like any profile. The rules of profiles hold: a profile has one slot per scope (the overlay key has no traffic
+selector), so activating a time preset on a device replaces the profile that is active there, an LTE profile say; to keep both, post the fault as a `time` overlay, which has its own key. A profile with
+a time part is refused as a whole on a target without client addresses (`global`, a remote network) with `422 validation_failed`, error code `invalid_target` at `/target`:
 
 ```sh run
 auth="Authorization: Bearer $CHAOSGW_TOKEN"
@@ -335,14 +342,17 @@ curl -sS -o /dev/null -w '%{http_code}\n' -H "$auth" -H "Content-Type: applicati
 ```
 
 What the server did is read in two places (scope `read`; both are memory only and empty after a restart of the gateway).
-`GET /devices/{deviceId}/ntp` is the state of one device: the counters `queries`, `silenced`, `dropped` (over the rate limit of 16 queries a
-second) and `nts_ke` (connections to the key-establishment port of NTS, which the server cannot answer), the answers per fault, the
+`GET /devices/{deviceId}/ntp` is the state of one device: the counters `queries`, `silenced`, `dropped` (the log entries for queries over the rate limit of 16 queries a
+second, at most one per device and second: a sample, not the number of dropped queries) and `nts_ke` (connections to the key-establishment port of NTS, which the server cannot answer), the answers per fault, the
 `last_query` (the time, the answer, the time served and its `offset_ms` from the correct time, the overlay that shaped it and the `server`
 the device asked as `ip:port`, or `an external server (redirected)` where nothing says which) and `recent`, the device's newest 50
 queries. `GET /ntp/queries` is the log of the server, newest first, filtered by `device`, `since` and the cursor. A query counts when
 the server received it, whatever it answered (`silence` and a kiss-of-death are queries). The list also holds the connections to the NTS
 key-establishment port (`kind: nts_ke`) and, at most once a second per device, a query that the rate limit dropped (`answer: dropped`);
-they do not count in `queries`, in the wait or in the check.
+they do not count in `queries`, in the wait or in the check. A query that reached the server before the gateway had observed the device (its address was
+not known yet) belongs to the device, with its `device` field, as soon as the gateway observes it, and the wait, the check, the counters and `recent` then include it. The server answers only a
+source address inside the client range of a test network (the networks behind its routers and the routes of WireGuard peers included) and ignores any other: such a datagram is not answered
+and not in the log. The log keeps at most 20000 entries, and at most 2000 of them from addresses no device owns; the oldest of those go first. `answers` lists the faults that still exist.
 
 ```sh run
 auth="Authorization: Bearer $CHAOSGW_TOKEN"

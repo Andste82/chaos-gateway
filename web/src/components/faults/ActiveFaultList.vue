@@ -11,7 +11,8 @@ import { deleteOverlay } from '../../api/generated/hooks/overlays/overlays';
 import type { Overlay } from '../../api/generated/model';
 import type { ActiveFault } from '../../composables/gateway';
 import { useNow } from '../../composables/useNow';
-import { formatCount, formatRemaining } from '../../lib/format';
+import { counterText } from '../../lib/faults';
+import { formatRemaining } from '../../lib/format';
 import { useApiPanelStore } from '../../stores/apiPanel';
 import { useToastStore } from '../../stores/toasts';
 import AppIcon from '../ui/AppIcon.vue';
@@ -102,7 +103,7 @@ const cols = props.showTarget
         <span class="text-xs text-text-3">{{ f.layer === 'overlay' ? 'overlay' : 'configuration' }}</span>
         <span v-if="f.state === 'overridden' || f.state === 'partially_overridden'" class="text-xs text-text-3">· {{ f.state.replace('_', ' ') }}</span>
       </span>
-      <span role="cell" class="mono text-[13px] text-text-2">{{ f.packets !== undefined ? `${formatCount(f.packets)} pkts` : '—' }}</span>
+      <span role="cell" class="mono text-[13px] text-text-2">{{ f.packets !== undefined ? counterText(f.kind, f.packets) : '—' }}</span>
       <span role="cell" class="mono text-[13px]" :class="f.expiresAt ? 'text-fault-text' : 'text-text-2'" data-testid="fault-expiry">{{ expiry(f) }}</span>
       <span role="cell" class="flex justify-end gap-1.5">
         <button v-if="canEdit(f)" type="button" class="btn btn-sm px-2" :aria-label="`Edit ${f.chips.join(', ')}`" :disabled="removeDisabled" @click="emit('edit', f.overlay!)">

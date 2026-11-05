@@ -36,12 +36,13 @@ func fault(overlay string, port int, since time.Time, sources []string, body str
 	return fmt.Sprintf(`{"overlay":%q,"port":%d,"since":%q,"sources":%s%s}`, overlay, port, since.Format(time.RFC3339Nano), src, body)
 }
 
-// config makes a configuration of generation 1 with one network (gateway 10.20.0.1) and the given faults.
+// config makes a configuration of generation 1 with one network (gateway 10.20.0.1, clients 10.20.0.0/24; the loopback is
+// a client range of it too, for the tests that ask through a socket) and the given faults.
 func config(t testing.TB, listen []int, faults ...string) *model.NtpServiceConfig {
 	t.Helper()
 	l, _ := json.Marshal(listen)
-	raw := fmt.Sprintf(`{"generation":1,"listen":%s,"networks":[{"network":%q,"gateway":"10.20.0.1","clients":"10.20.0.0/24"}],"faults":[%s]}`,
-		l, ovB, strings.Join(faults, ","))
+	raw := fmt.Sprintf(`{"generation":1,"listen":%s,"networks":[{"network":%q,"gateway":"10.20.0.1","clients":"10.20.0.0/24"},{"network":%q,"gateway":"10.20.0.1","clients":"127.0.0.0/8"}],"faults":[%s]}`,
+		l, ovB, ovB, strings.Join(faults, ","))
 	var c model.NtpServiceConfig
 	if err := json.Unmarshal([]byte(raw), &c); err != nil {
 		t.Fatalf("%v\n%s", err, raw)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -248,9 +249,30 @@ func (e *Engine) Explain(ctx context.Context, q ExplainQuery) (*Explanation, err
 		return out, nil
 	}
 
+	// the faults that apply; a time fault only where the kernel redirects the query to the NTP server: the gateway's own
+	// address and what lies outside the segments of the source's network (compiler.NTPFaultRedirects). A server inside them
+	// is switched directly and the fault does not reach it (the compiler warns). A destination that is a name is not judged.
+	results := world.Resolve(query)
+	if dstIP.IsValid() && !compiler.NTPFaultRedirects(snap.Bridges, snap.WireGuardInterfaces, sub.Network, dstIP) {
+		kept := make([]domain.FamilyResult, 0, len(results))
+		for _, r := range results {
+			if r.Family != domain.FamilyTime {
+				kept = append(kept, r)
+			}
+		}
+		results = kept
+	}
+
 	// access: the control plane, the access rules, then the gateway's protection or the matrix
 	if sub.IP.IsValid() && dstIP.IsValid() {
-		a := world.AccessDecision(query, e.accessFacts(snap))
+		facts := e.accessFacts(snap)
+		// a time fault redirects UDP 123 to the gateway's own address of a network whose time service is off, too (Q3): the
+		// redirect stands in front of the input chain, so the gateway's protection does not drop it
+		if snap.Service != nil && q.Port == compiler.ServiceNTPPort && (query.Protocol == "" || query.Protocol == "udp") &&
+			domain.Winner(results, domain.FamilyTime) != nil && !slices.Contains(facts.NTP, dstIP) {
+			facts.NTP = append(facts.NTP, dstIP)
+		}
+		a := world.AccessDecision(query, facts)
 		out.Access = ExplainAccess{Verdict: a.Verdict, Layer: a.Layer, Rule: a.Rule, Reason: a.Reason}
 	} else {
 		// without a source address or an address to go to there is nothing to judge: say what holds
@@ -259,7 +281,6 @@ func (e *Engine) Explain(ctx context.Context, q ExplainQuery) (*Explanation, err
 	}
 
 	// faults: one entry per family that has candidates
-	results := world.Resolve(query)
 	for _, r := range results {
 		fam := ExplainFamily{Family: r.Family}
 		if r.Winner != nil {

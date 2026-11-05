@@ -51,7 +51,7 @@ type Counters struct {
 	Answered   int64 // replies sent
 	Silenced   int64 // queries a fault left unanswered
 	Dropped    int64 // queries over the device's rate limit
-	Ignored    int64 // datagrams that are no client query: modes 6 and 7, short, other modes, version 0
+	Ignored    int64 // datagrams that are no client query (modes 6 and 7, short, other modes, version 0) or come from outside every network
 	Unserved   int64 // client queries that arrived before the server had a configuration
 	NTSKE      int64 // connections to the NTS key-establishment port
 	LogDropped int64 // log entries lost because the API did not take them
@@ -133,6 +133,9 @@ func (s *Server) RunLog(ctx context.Context) { s.log.run(ctx) }
 // the zero time takes the clock's now). It returns the reply (nil for none) and the log entry of the query (nil for a
 // datagram that is no client query). It does no I/O, so every answer kind is a table test.
 //
+// A datagram from a source that lies in no network's client range gets no answer either (counted as ignored, not logged),
+// the health probe from the host aside.
+//
 // A datagram that is not a client query of NTP version 1 to 7 gets no answer: modes 6 and 7 (the control and private
 // modes, which `monlist` abuses to amplify) among them, a datagram of less than the 48 bytes of a request, and
 // anything but mode 3. A reply is 48 bytes and so never larger than the request it answers.
@@ -153,6 +156,12 @@ func (s *Server) Process(req []byte, client netip.Addr, port int, rx time.Time) 
 	cfg := s.parsed.Load()
 	if cfg == nil {
 		s.unserved.Add(1)
+		return nil, nil
+	}
+	// a source in no network's client range is no device of the gateway (a spoofed address, say of the management network):
+	// the reply to it would leave the gateway as an established flow past the guards, so it gets none, and no log entry
+	if !cfg.servesClient(client) {
+		s.ignored.Add(1)
 		return nil, nil
 	}
 	e := model.NtpQueryLogEntry{Time: rx, Client: client.String(), Port: port}

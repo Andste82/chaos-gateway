@@ -3,6 +3,7 @@ package api_test
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -236,27 +237,47 @@ func TestThePagesOfAFilteredNTPQueryLogHoldEveryEntryOnce(t *testing.T) {
 	})
 }
 
-// The answers of a device are listed by fault, in the order of the faults' ids, whatever the order they were shaped in.
-func TestTheAnswersOfADeviceAreListedByFaultInOrder(t *testing.T) {
+// The answers of a device are listed by fault, in the order of the faults' ids, whatever the order they were shaped in, and only for
+// the faults that are still there: the answers for an overlay that was deleted go with it.
+func TestTheAnswersOfADeviceAreListedByFaultInOrderAndForgottenWithTheirOverlay(t *testing.T) {
 	g, admin := tlsGateway(t)
+	var ids []string
+	g.asAdmin(admin, func() {
+		// three time faults with their own ids (one time fault of a target is replaced by the next)
+		for _, target := range []string{`{"device":"esp32-42"}`, `{"device":"esp32-43"}`, `{"network":"IoT"}`} {
+			ids = append(ids, g.mustCreateOverlay(`{"target":` + target + `,"time":{"offset":"+400d"}}`)["id"].(string))
+		}
+	})
+	slices.Sort(ids)
+	f1, f2, f3 := ids[0], ids[1], ids[2]
 	now := time.Now().UTC().Truncate(time.Second)
-	f1, f2, f3 := "0194f4f0-0000-7000-8000-000000000001", "0194f4f0-0000-7000-8000-000000000002", "0194f4f0-0000-7000-8000-000000000003"
 	g.mustPostNTP(
 		ntpEntry("10.10.0.31", 1, now, map[string]any{"answer": "normal", "fault": f3}),
 		ntpEntry("10.10.0.31", 2, now, map[string]any{"answer": "normal", "fault": f1}),
 		ntpEntry("10.10.0.31", 3, now, map[string]any{"answer": "normal", "fault": f2}),
 		ntpEntry("10.10.0.31", 4, now, map[string]any{"answer": "normal", "fault": f3}),
 	)
-	g.asAdmin(admin, func() {
-		answers, _ := g.do("GET", "/devices/"+espID+"/ntp", nil, nil, nil).json(t)["answers"].([]any)
+	answers := func() string {
 		var got []string
-		for _, a := range answers {
+		list, _ := g.do("GET", "/devices/"+espID+"/ntp", nil, nil, nil).json(t)["answers"].([]any)
+		for _, a := range list {
 			m := a.(map[string]any)
 			got = append(got, fmt.Sprintf("%v=%v", m["fault"], m["count"]))
 		}
-		want := []string{f1 + "=1", f2 + "=1", f3 + "=2"}
-		if strings.Join(got, ",") != strings.Join(want, ",") {
+		return strings.Join(got, ",")
+	}
+	g.asAdmin(admin, func() {
+		if got, want := answers(), strings.Join([]string{f1 + "=1", f2 + "=1", f3 + "=2"}, ","); got != want {
 			t.Errorf("answers %v, want %v", got, want)
+		}
+		if r := g.do("DELETE", "/overlays/"+f2, nil, nil, nil); r.Status != 204 {
+			t.Fatalf("%d %s", r.Status, r.Body)
+		}
+		if got, want := answers(), strings.Join([]string{f1 + "=1", f3 + "=2"}, ","); got != want {
+			t.Errorf("after the delete: answers %v, want %v", got, want)
+		}
+		if d, _ := g.srv.NTPDeviceState(espID); len(d.Answers) != 2 {
+			t.Errorf("the state keeps the answers of a deleted overlay: %v", d.Answers)
 		}
 	})
 }

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { LanNetwork, Overlay, ProfileView, Scenario } from '../src/api/generated/model';
 import { CreateOverlayBody } from '../src/api/generated/zod/overlays/overlays';
-import { ESP32, IOT, MockGateway, SCN_MQTT, toast, withNetworks, withScenarios } from './mock';
+import { ESP32, IOT, MockGateway, runOf, SCN_MQTT, toast, withNetworks, withScenarios } from './mock';
 
 // M34 (plan §2.17 "Add fault", "Device detail", "Profiles", "Networks", "Scenarios", §2.18): the time faults of the gateway's NTP
 // server against the mocked API — the kind "Time (NTP)" of the Add fault dialog with its presets and checks, the Time panel of the
@@ -65,6 +65,9 @@ test('a time fault: made in the Add fault dialog of a device with a preset, its 
   await d.getByTestId('time-preset-1970').click();
   await expect(d.getByLabel('Served time')).toHaveValue('absolute');
   await expect(d.getByLabel('Instant')).toHaveValue('1970-01-01T00:00:00Z');
+  // a preset explains itself to a keyboard and a screen reader user, and says what it did
+  await expect(d.getByTestId('time-preset-1970')).toHaveAccessibleDescription('A device that lost its clock.');
+  await expect(d.getByTestId('time-preset-hint')).toHaveText('1970: A device that lost its clock.');
   await d.getByLabel('Instant').fill('1899-12-31T23:59:59Z');
   await expect(d.getByLabel('Instant')).toHaveAccessibleDescription(/starts at 1900-01-01/);
   await d.getByTestId('time-preset-leap-second').click();
@@ -208,6 +211,12 @@ test('a fault that changes nothing is refused before it is sent; a zero offset i
   await kind(page, 'Time (NTP)').click();
   await d.getByLabel('Served time').selectOption('none');
   await expect(d.getByTestId('time-change-error')).toContainText('Give the fault an offset');
+  // the message is an alert, and the fields it is about point at it
+  await expect(d.getByTestId('time-change-error')).toHaveAttribute('role', 'alert');
+  for (const label of ['Served time', 'Drift (ppm)', 'Leap indicator']) {
+    await expect(d.getByLabel(label)).toHaveAccessibleDescription(/Give the fault an offset/);
+  }
+  await expect(d.getByLabel('Served time')).toHaveAttribute('aria-invalid', 'true');
   await expect(d.getByRole('button', { name: 'Apply fault' })).toBeDisabled();
   await d.getByLabel('Leap indicator').selectOption('delete');
   await expect(d.getByTestId('time-change-error')).toHaveCount(0);
@@ -268,7 +277,7 @@ test('the Time panel: the last query, the server asked, the time served and the 
   await expect(active).toContainText('profile Time 1970');
   await expect(active).not.toContainText('+9y');
   await expect(active.getByTestId('device-ntp-active-none')).toHaveCount(0);
-  await expect(panel.getByTestId('device-ntp-counters')).toContainText('12 queries · 2 left unanswered by a fault · 1 over the rate limit');
+  await expect(panel.getByTestId('device-ntp-counters')).toContainText('12 queries · 2 left unanswered by a fault · 1 dropped (sampled, at most one a second)');
   await expect(panel.getByTestId('device-ntp-time')).toHaveText(/^\d\d:\d\d:\d\d$/);
   await expect(panel.getByTestId('device-ntp-recent').getByRole('listitem')).toHaveCount(2);
   await expect(panel.getByTestId('device-ntp-recent')).toContainText('no answer (silence)');
@@ -296,7 +305,7 @@ test('the Time panel: a fault that is gone, a silence in red, one query without 
 
   // queries over the rate limit are not in `queries`: a device that only has those still shows them
   gw.ntp[ESP] = { queries: 0, dropped: 3 };
-  await expect(panel.getByTestId('device-ntp-counters')).toHaveText('0 queries · 3 over the rate limit', { timeout: 15_000 });
+  await expect(panel.getByTestId('device-ntp-counters')).toHaveText('0 queries · 3 dropped (sampled, at most one a second)', { timeout: 15_000 });
 });
 
 test('the Time panel: no query yet, no time fault; a device that uses NTS gets a note; the server asked is "not known" where the API does not say', async ({ page }) => {
@@ -324,6 +333,90 @@ test('the Time panel: a read that fails says so and can be tried again', async (
   delete gw.failing[`/devices/${ESP}/ntp`];
   await panel.getByRole('button', { name: /Try again/ }).click();
   await expect(panel.getByTestId('device-ntp-empty')).toBeVisible();
+});
+
+test('the Time panel does not claim "none" while the profiles are not known: loading, then failed, then known', async ({ page }) => {
+  const gw = labWithTimeProfile();
+  // the activation of a built-in time profile is a time fault only once its profile is found in the list of profiles
+  gw.overlays = [...gw.overlays, overlay('f0000000-0000-4000-8000-0000000000a3', { kind: 'profile', target: { device: ESP }, profile: TIME_1970 })];
+  gw.failing['/profiles'] = 500;
+  await gw.install(page);
+  await page.goto(`/devices/${ESP}`);
+  const panel = page.getByRole('region', { name: 'Time', exact: true });
+  const active = panel.getByTestId('device-ntp-active');
+  await expect(active.getByTestId('device-ntp-active-unknown')).toContainText('not known: the profiles are not loaded');
+  await expect(active.getByTestId('device-ntp-active-none')).toHaveCount(0);
+  // the list loads: the activation is the time fault it is
+  delete gw.failing['/profiles'];
+  await page.reload();
+  await expect(active).toContainText('profile Time 1970');
+  await expect(active.getByTestId('device-ntp-active-unknown')).toHaveCount(0);
+  await expect(active.getByTestId('device-ntp-active-none')).toHaveCount(0);
+});
+
+test('the Time panel of a device with only NTS or dropped queries does not say that the server has seen no query', async ({ page }) => {
+  const gw = MockGateway.sample();
+  gw.ntp[ESP] = { queries: 0, nts_ke: 3, recent: [{ time: new Date().toISOString(), client: '10.10.0.42', port: 4460, kind: 'nts_ke' }] };
+  await gw.install(page);
+  await page.goto(`/devices/${ESP}`);
+  const panel = page.getByRole('region', { name: 'Time', exact: true });
+  await expect(panel.getByTestId('device-ntp-empty')).toContainText('has answered no query of ESP32-42 yet');
+  await expect(panel.getByTestId('device-ntp-empty')).not.toContainText('seen no query');
+  await expect(panel.getByTestId('device-ntp-nts')).toContainText('3 NTS key-establishment connections or queries');
+
+  gw.ntp[ESP] = { queries: 0, dropped: 2 };
+  await expect(panel.getByTestId('device-ntp-empty')).toContainText('has answered no query of ESP32-42 yet', { timeout: 15_000 });
+  await expect(panel.getByTestId('device-ntp-counters')).toHaveText('0 queries · 2 dropped (sampled, at most one a second)');
+});
+
+test('the counter of a time fault counts answers, that of another fault packets', async ({ page }) => {
+  const gw = MockGateway.sample();
+  const fault = overlay('f0000000-0000-4000-8000-0000000000a1', { target: { device: ESP }, time: { offset: '+400d' }, counters: { packets: 9, bytes: 0, epoch: 1 } });
+  gw.overlays = [...gw.overlays, fault];
+  await gw.install(page);
+  await page.goto(`/devices/${ESP}`);
+  const row = page.getByTestId('active-fault').filter({ hasText: 'Time +400d' });
+  await expect(row).toContainText('9 answers');
+  await expect(row).not.toContainText('pkts');
+  // the impairment of the same device keeps its unit
+  await expect(page.getByTestId('active-fault').first()).toContainText('18 342 pkts');
+  await page.goto('/faults');
+  await expect(page.getByRole('row').filter({ hasText: 'Time +400d' })).toContainText('9 answers');
+});
+
+test('the counters of a run name the answers of a time step and the packets of the others', async ({ page }) => {
+  const gw = withScenarios(MockGateway.sample());
+  const run = runOf(SCN_MQTT, { id: 'r-time', status: 'passed', ended_at: new Date().toISOString() });
+  run.steps = [
+    { id: 'late', type: 'time', status: 'applied', scheduled_offset: '0s' },
+    { id: 'slow', type: 'fault', status: 'applied', scheduled_offset: '10s' },
+  ];
+  gw.runs = [run];
+  gw.reports['r-time'] = {
+    counters: [
+      { step: 'late', overlay: 'f0000000-0000-4000-8000-0000000000e1', counters: { packets: 3, bytes: 0, epoch: 1 } },
+      { step: 'slow', overlay: 'f0000000-0000-4000-8000-0000000000e2', counters: { packets: 118, bytes: 9000, epoch: 1 } },
+    ],
+  };
+  await gw.install(page);
+  await page.goto('/runs/r-time');
+  await expect(page.getByTestId('run-counter')).toHaveText([/late3 answers/, /slow118 packets/]);
+});
+
+test('an NTP query seen is no line of the Recent events, an answer shaped by a time fault is', async ({ page }) => {
+  const gw = MockGateway.sample();
+  await gw.install(page);
+  await page.goto('/');
+  await page.waitForFunction(() =>
+    (window as unknown as { __sse: { instances: { closed: boolean; listeners: Record<string, unknown[]> }[] } }).__sse.instances.some((es) => !es.closed && (es.listeners.ntp_query_seen?.length ?? 0) > 0),
+  );
+  const events = page.getByTestId('recent-events');
+  await gw.emit(page, { type: 'ntp_query_seen', message: 'ESP32-42 asked the NTP server for the time', data: { device: ESP } });
+  await gw.emit(page, { type: 'nts_seen', message: 'ESP32-42 made an NTS connection', data: { device: ESP } });
+  await gw.emit(page, { type: 'ntp_answered', message: 'ESP32-42 got a time fault answer: offset +400d', data: { device: ESP, answer: 'normal' } });
+  await expect(events.getByRole('link', { name: 'ESP32-42 got a time fault answer: offset +400d' })).toBeVisible();
+  await expect(events).not.toContainText('asked the NTP server');
+  await expect(events).not.toContainText('made an NTS connection');
 });
 
 test('an answer shaped by a time fault is an event of the overview that leads to the device', async ({ page }) => {

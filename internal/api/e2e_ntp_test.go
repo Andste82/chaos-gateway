@@ -398,6 +398,10 @@ func TestNTPThroughTheServiceNamespace(t *testing.T) {
 	g.token = b.admin
 	g.observe()
 	waitFor(t, 20*time.Second, "the query is in the log with its device", func() bool {
+		// the API names the device when the entry arrives, from what the gateway has observed by then: a query that came in
+		// before it knew the device stays without one (seen on the 7.0 kernel), so the client asks again
+		_, _ = ask(top.A, testbed.LAN0Gateway+":123", time.Second)
+		g.observe()
 		for _, e := range g.srv.NTPLog() {
 			if e.Client == testbed.ClientAAddr && e.Device != nil && e.Fault == nil && e.Port == 123 {
 				return true

@@ -765,7 +765,7 @@ func holderPIDFileReusedByAnotherProcess(t *testing.T, ctx context.Context, vm *
 	// "running" is also what a container is between two restarts of a loop (`chaosgw ntp` exits with code 3 when its namespace is
 	// not the holder's), and one that kept serving in the old namespace is running, too: the server in the new namespace answers
 	// the device's query, and says what the VM's own clock says (the kernel's state that systemd reports, which the server reads
-	// through adjtimex): a synchronized clock at stratum 2, one that is not at stratum 16 with leap indicator 3
+	// through adjtimex): a clock that is not synchronized at stratum 16 with leap indicator 3, one that is at stratum 2 (or 16 while its error is large)
 	synced := func() string { return strings.TrimSpace(output("timedatectl show -p NTPSynchronized --value")) }
 	var mode, stratum, leap int
 	var delta float64
@@ -788,8 +788,11 @@ func holderPIDFileReusedByAnotherProcess(t *testing.T, ctx context.Context, vm *
 			t.Errorf("the VM's clock is not synchronized and the NTP server answered stratum %d, leap indicator %d, want 16 and 3", stratum, leap)
 		}
 	case "yes":
-		if stratum == 16 || leap == 3 {
-			t.Errorf("the VM's clock is synchronized and the NTP server answered stratum %d, leap indicator %d", stratum, leap)
+		// systemd reports the kernel's flag, and the server also answers stratum 16 while the maximum error of the clock is above
+		// one second, which a clock that has just been set still has (Ubuntu 26.04, a minute after the boot): either answer is
+		// right, as long as the two fields agree
+		if (stratum == 16) != (leap == 3) {
+			t.Errorf("the VM's clock is synchronized and the NTP server answered stratum %d, leap indicator %d, which do not agree", stratum, leap)
 		}
 	default:
 		t.Errorf("timedatectl reports NTPSynchronized %q", before)

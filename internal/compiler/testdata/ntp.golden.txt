@@ -20,12 +20,12 @@ meta iifname br-iot ip saddr 10.10.0.43/32 ip daddr != { 10.10.0.0/24, 10.30.0.0
 meta iifname br-lab ip saddr 10.20.0.50/32 ip daddr != 10.20.0.0/24 udp dport 123 dnat ip to 169.254.100.2:123
 meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr 10.10.0.1 udp dport { 123, 5123 } dnat ip to 169.254.100.2:12301
 meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr != { 10.10.0.0/24, 10.30.0.0/24 } udp dport { 123, 5123 } dnat ip to 169.254.100.2:12301
-meta iifname br-iot ip daddr 10.10.0.1 udp dport 123 dnat ip to 169.254.100.2:123
-meta iifname br-iot ip daddr 10.10.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460
-meta iifname br-lab ip daddr 10.20.0.1 udp dport 123 dnat ip to 169.254.100.2:123
-meta iifname br-lab ip daddr 10.20.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460
-meta iifname br-lab ip daddr != 10.20.0.0/24 udp dport 123 dnat ip to 169.254.100.2:123
-meta iifname br-lab ip daddr != 10.20.0.0/24 tcp dport 4460 dnat ip to 169.254.100.2:4460
+meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr 10.10.0.1 udp dport 123 dnat ip to 169.254.100.2:123
+meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr 10.10.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460
+meta iifname br-lab ip saddr 10.20.0.0/24 ip daddr 10.20.0.1 udp dport 123 dnat ip to 169.254.100.2:123
+meta iifname br-lab ip saddr 10.20.0.0/24 ip daddr 10.20.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460
+meta iifname br-lab ip saddr 10.20.0.0/24 ip daddr != 10.20.0.0/24 udp dport 123 dnat ip to 169.254.100.2:123
+meta iifname br-lab ip saddr 10.20.0.0/24 ip daddr != 10.20.0.0/24 tcp dport 4460 dnat ip to 169.254.100.2:4460
 # forward (the accepts towards the namespace)
-meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 udp dport { 123, 12301, 12302, 12303 } accept
-meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 tcp dport 4460 accept
+meta iifname @ifs_cg_bf4feb meta oifname svc0 ip saddr { 10.10.0.0/24, 10.20.0.0/24, 10.30.0.0/24 } ip daddr 169.254.100.2 udp dport { 123, 12301, 12302, 12303 } accept
+meta iifname @ifs_cg_bf4feb meta oifname svc0 ip saddr { 10.10.0.0/24, 10.20.0.0/24, 10.30.0.0/24 } ip daddr 169.254.100.2 tcp dport 4460 accept

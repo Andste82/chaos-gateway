@@ -2566,7 +2566,7 @@
       "add": {
         "rule": {
           "chain": "forward",
-          "comment": "9064ec6d1059",
+          "comment": "092b232c5c33",
           "expr": [
             {
               "match": {
@@ -2588,6 +2588,39 @@
                 },
                 "op": "==",
                 "right": "svc0"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "saddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "set": [
+                    {
+                      "prefix": {
+                        "addr": "10.10.0.0",
+                        "len": 24
+                      }
+                    },
+                    {
+                      "prefix": {
+                        "addr": "10.20.0.0",
+                        "len": 24
+                      }
+                    },
+                    {
+                      "prefix": {
+                        "addr": "10.30.0.0",
+                        "len": 24
+                      }
+                    }
+                  ]
+                }
               }
             },
             {
@@ -2627,7 +2660,7 @@
       "add": {
         "rule": {
           "chain": "forward",
-          "comment": "adcf63081209",
+          "comment": "401c42fab870",
           "expr": [
             {
               "match": {
@@ -2649,6 +2682,39 @@
                 },
                 "op": "==",
                 "right": "svc0"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "saddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "set": [
+                    {
+                      "prefix": {
+                        "addr": "10.10.0.0",
+                        "len": 24
+                      }
+                    },
+                    {
+                      "prefix": {
+                        "addr": "10.20.0.0",
+                        "len": 24
+                      }
+                    },
+                    {
+                      "prefix": {
+                        "addr": "10.30.0.0",
+                        "len": 24
+                      }
+                    }
+                  ]
+                }
               }
             },
             {
@@ -3807,7 +3873,7 @@
       "add": {
         "rule": {
           "chain": "prerouting",
-          "comment": "dc4c148d00c6",
+          "comment": "9a53877655b3",
           "expr": [
             {
               "match": {
@@ -3818,6 +3884,33 @@
                 },
                 "op": "==",
                 "right": "br-iot"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "saddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "set": [
+                    {
+                      "prefix": {
+                        "addr": "10.10.0.0",
+                        "len": 24
+                      }
+                    },
+                    {
+                      "prefix": {
+                        "addr": "10.30.0.0",
+                        "len": 24
+                      }
+                    }
+                  ]
+                }
               }
             },
             {
@@ -3861,7 +3954,7 @@
       "add": {
         "rule": {
           "chain": "prerouting",
-          "comment": "eb965975c1e4",
+          "comment": "fd9535848f34",
           "expr": [
             {
               "match": {
@@ -3872,6 +3965,33 @@
                 },
                 "op": "==",
                 "right": "br-iot"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "saddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "set": [
+                    {
+                      "prefix": {
+                        "addr": "10.10.0.0",
+                        "len": 24
+                      }
+                    },
+                    {
+                      "prefix": {
+                        "addr": "10.30.0.0",
+                        "len": 24
+                      }
+                    }
+                  ]
+                }
               }
             },
             {
@@ -3915,7 +4035,7 @@
       "add": {
         "rule": {
           "chain": "prerouting",
-          "comment": "9b4db34d9e2a",
+          "comment": "bb9332580d77",
           "expr": [
             {
               "match": {
@@ -3926,6 +4046,23 @@
                 },
                 "op": "==",
                 "right": "br-lab"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "saddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "prefix": {
+                    "addr": "10.20.0.0",
+                    "len": 24
+                  }
+                }
               }
             },
             {
@@ -3969,7 +4106,7 @@
       "add": {
         "rule": {
           "chain": "prerouting",
-          "comment": "96ae9b3e2786",
+          "comment": "6499473b8d72",
           "expr": [
             {
               "match": {
@@ -3980,6 +4117,23 @@
                 },
                 "op": "==",
                 "right": "br-lab"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "saddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "prefix": {
+                    "addr": "10.20.0.0",
+                    "len": 24
+                  }
+                }
               }
             },
             {

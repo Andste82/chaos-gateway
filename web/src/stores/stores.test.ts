@@ -141,6 +141,15 @@ describe('event store', () => {
     e.add({ id: '1', type: 'applied', time: '' }); // replayed after a reconnect
     expect(e.recent.map((x) => x.id)).toEqual(['2', '1']);
   });
+
+  // M34: a device that polls fills the list with the lines of its queries; they serve the wait of a scenario, not the overview
+  it('does not keep the NTP queries and NTS connections that devices make, but the answers a time fault shaped', () => {
+    const e = useEventStore();
+    e.add({ id: '1', type: 'applied', time: '' });
+    for (let i = 0; i < 60; i++) e.add({ id: `q${i}`, type: i % 2 ? 'ntp_query_seen' : 'nts_seen', time: '' });
+    e.add({ id: 'a', type: 'ntp_answered', time: '' });
+    expect(e.recent.map((x) => x.id)).toEqual(['a', '1']);
+  });
 });
 
 describe('traffic chart range', () => {

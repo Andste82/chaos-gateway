@@ -136,17 +136,22 @@ device talking to that destination and port during the step? Use `zero_hit: erro
 1. A device is served a fault only when it **polls**: SNTP clients ask every few minutes to hours, and the served time jumps back when
    the fault ends, again at the next poll. Wait for it with `chaosctl wait ntp <device>` or the wait `ntp_query_seen` of a scenario.
 2. The device must reach the server through the gateway. Kea hands out the gateway as NTP server (option 42) unless the network names
-   others or its time service is off (Networks, *Time (NTP)*); a hardcoded server is redirected by the network setting *Redirect NTP to other
-   servers* or by the time fault itself. `chaosctl explain --device <name> --dst <server> --protocol udp --port 123` lists the fault as the
+   others, its time service is off (Networks, *Time (NTP)*) or the gateway has no service namespace (the health component `ntp` is `disabled`); a
+   hardcoded server is redirected by the network setting *Redirect NTP to other
+   servers* or by the time fault itself. A WireGuard client has no DHCP and no such setting (the group *Time (NTP)* is for LAN networks): point it at
+   the gateway's tunnel address; a time fault redirects its UDP 123 traffic. A server in the device's own segments (a lab server in the same network or behind
+   its router) is never redirected, so no time fault reaches it: the preview warns with `ntp_server_inside`, and `explain` shows no time fault for it. The server
+   answers only sources inside the address range of a test network; a query from another source address is ignored and not logged. `chaosctl explain --device <name> --dst <server> --protocol udp --port 123` lists the fault as the
    winner of the family `time` for that traffic. A fault for one server (`--to`) does not touch queries to another.
 3. A device that uses **NTS** (authenticated NTP, key establishment on TCP 4460) gets no time from the gateway: the *Time* panel and the
    counter `nts_ke` of the device say that connections arrived. Block TCP 4460 with an access rule if the device should fall back to plain NTP.
    A device that sets its clock from an HTTP `Date` header, a cellular network, GPS or its own RTC is not affected by a time fault.
-4. The counter `dropped` counts queries over the rate limit (16 a second per device), which are not answered: a client that polls faster
+4. The counter `dropped` counts the log entries for queries over the rate limit (16 a second per device), which are not answered. The server
+   records at most one such entry a second per device, so the number is a sample and not the number of dropped queries: a client that polls faster
    than that is polling too fast.
 5. The detail of the health component `ntp` and the preflight check `host.clock` say when the host clock is not synchronized: the server
-   then answers stratum 16, which a correct client ignores, also with an `offset`, `skew` or `leap` fault; an `absolute` time, a kiss-of-death,
-   `silence` and the invalid answers are served as they are.
+   then answers stratum 16, which a correct client ignores, also with an `offset`, `skew` or `leap` fault and with the invalid answers (their broken
+   part applies on top); an `absolute` time, a kiss-of-death and `silence` are served as they are.
 
 **A capture is refused or stops.** The volume has less than 10 % free space, or the quota of the captures is used up
 (`GET /captures/storage`: `quota_bytes`, `used_bytes`, `free_percent`, `disk_low`), or eight captures already run. Delete old captures; the

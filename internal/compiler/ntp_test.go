@@ -112,21 +112,21 @@ func TestNoTimeFaultNoEntryAndNoRedirectBeyondTheGatewayAddress(t *testing.T) {
 	// the gateway address of every network is the server's (the time service is on by default), over UDP, and its NTS key
 	// establishment port which the server refuses and reports; the latency fault of the device does not add to it
 	eqLines(t, "NAT rules", ntpNAT(t, tg), []string{
-		"meta iifname br-iot ip daddr 10.10.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
-		"meta iifname br-iot ip daddr 10.10.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460",
-		"meta iifname br-lab ip daddr 10.20.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
-		"meta iifname br-lab ip daddr 10.20.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460",
+		"meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr 10.10.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
+		"meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr 10.10.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460",
+		"meta iifname br-lab ip saddr 10.20.0.0/24 ip daddr 10.20.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
+		"meta iifname br-lab ip saddr 10.20.0.0/24 ip daddr 10.20.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460",
 	})
 	// and the accepts towards the namespace, next to the DNS ones
 	var accepts []string
 	for _, r := range renderRules(chainOf(t, tg, "forward")) {
-		if strings.Contains(r, "oifname svc0 ip daddr 169.254.100.2") && !strings.Contains(r, "dport 53") {
+		if strings.Contains(r, "oifname svc0 ip saddr { 10.10.0.0/24, 10.20.0.0/24, 10.30.0.0/24 } ip daddr 169.254.100.2") && !strings.Contains(r, "dport 53") {
 			accepts = append(accepts, r)
 		}
 	}
 	eqLines(t, "forward accepts", accepts, []string{
-		"meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 udp dport 123 accept",
-		"meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 tcp dport 4460 accept",
+		"meta iifname @ifs_cg_bf4feb meta oifname svc0 ip saddr { 10.10.0.0/24, 10.20.0.0/24, 10.30.0.0/24 } ip daddr 169.254.100.2 udp dport 123 accept",
+		"meta iifname @ifs_cg_bf4feb meta oifname svc0 ip saddr { 10.10.0.0/24, 10.20.0.0/24, 10.30.0.0/24 } ip daddr 169.254.100.2 tcp dport 4460 accept",
 	})
 }
 
@@ -143,8 +143,8 @@ func TestAScopeWithATimeFaultIsRedirectedWhetherOrNotItsNetworkRedirects(t *test
 		"meta iifname br-iot ip saddr 10.10.0.42/32 ip daddr 10.10.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
 		"meta iifname br-iot ip saddr 10.10.0.42/32 ip daddr != { 10.10.0.0/24, 10.30.0.0/24 } udp dport 123 dnat ip to 169.254.100.2:123",
 		// the other network keeps its gateway rules, the network without the time service has none
-		"meta iifname br-lab ip daddr 10.20.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
-		"meta iifname br-lab ip daddr 10.20.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460",
+		"meta iifname br-lab ip saddr 10.20.0.0/24 ip daddr 10.20.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
+		"meta iifname br-lab ip saddr 10.20.0.0/24 ip daddr 10.20.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460",
 	})
 	for _, b := range tg.Bridges {
 		if b.NetworkID == iotNet && (b.NTP || b.RedirectNTP) {
@@ -168,13 +168,13 @@ func TestRedirectHardcodedRedirectsEveryServerOfTheNetworksThatAsk(t *testing.T)
 	withNetworkNTP(iotNet, &model.NetworkNtp{RedirectHardcoded: ptr(true)})(w.cfg)
 	tg := compileTime(t, w, true)
 	eqLines(t, "NAT rules", ntpNAT(t, tg), []string{
-		"meta iifname br-iot ip daddr 10.10.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
-		"meta iifname br-iot ip daddr 10.10.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460",
-		"meta iifname br-lab ip daddr 10.20.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
-		"meta iifname br-lab ip daddr 10.20.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460",
+		"meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr 10.10.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
+		"meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr 10.10.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460",
+		"meta iifname br-lab ip saddr 10.20.0.0/24 ip daddr 10.20.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
+		"meta iifname br-lab ip saddr 10.20.0.0/24 ip daddr 10.20.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460",
 		// what stays inside the network and the network behind its router is not redirected (plan §2.2)
-		"meta iifname br-iot ip daddr != { 10.10.0.0/24, 10.30.0.0/24 } udp dport 123 dnat ip to 169.254.100.2:123",
-		"meta iifname br-iot ip daddr != { 10.10.0.0/24, 10.30.0.0/24 } tcp dport 4460 dnat ip to 169.254.100.2:4460",
+		"meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr != { 10.10.0.0/24, 10.30.0.0/24 } udp dport 123 dnat ip to 169.254.100.2:123",
+		"meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr != { 10.10.0.0/24, 10.30.0.0/24 } tcp dport 4460 dnat ip to 169.254.100.2:4460",
 	})
 	var iot Bridge
 	for _, b := range tg.Bridges {
@@ -217,8 +217,8 @@ func TestEachDistinctDestinationSelectorGetsAPortOfItsOwn(t *testing.T) {
 		"meta iifname br-iot ip saddr 10.10.0.42/32 ip daddr 203.0.113.5/32 udp dport 123 dnat ip to 169.254.100.2:12302",
 		"meta iifname br-iot ip saddr 10.10.0.43/32 ip daddr 198.51.100.0/24 udp dport { 123, 5123 } dnat ip to 169.254.100.2:12301",
 		"meta iifname br-iot ip saddr 10.10.0.43/32 ip daddr 203.0.113.5/32 udp dport 123 dnat ip to 169.254.100.2:12302",
-		"meta iifname br-iot ip daddr 10.10.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
-		"meta iifname br-iot ip daddr 10.10.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460",
+		"meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr 10.10.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
+		"meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr 10.10.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460",
 	})
 	if got := fmt.Sprint(tg.NTPListenPorts()); got != "[123 12301 12302]" {
 		t.Errorf("listen %s", got)
@@ -226,7 +226,7 @@ func TestEachDistinctDestinationSelectorGetsAPortOfItsOwn(t *testing.T) {
 	// the accept towards the namespace lists the ports the server listens on
 	var found bool
 	for _, r := range renderRules(chainOf(t, tg, "forward")) {
-		found = found || strings.Contains(r, "oifname svc0 ip daddr 169.254.100.2 udp dport { 123, 12301, 12302 } accept")
+		found = found || strings.Contains(r, "oifname svc0 ip saddr { 10.10.0.0/24, 10.20.0.0/24, 10.30.0.0/24 } ip daddr 169.254.100.2 udp dport { 123, 12301, 12302 } accept")
 	}
 	if !found {
 		t.Errorf("no accept for the ports: %v", renderRules(chainOf(t, tg, "forward")))
@@ -369,7 +369,7 @@ func TestASelectorInsideTheNetworkIsRedirectedForTheGatewayAddressOnly(t *testin
 	tg := compileTime(t, w, true)
 	var forDevice []string
 	for _, r := range ntpNAT(t, tg) {
-		if strings.Contains(r, "ip saddr") {
+		if strings.Contains(r, "ip saddr 10.10.0.4") {
 			forDevice = append(forDevice, r)
 		}
 	}
@@ -415,9 +415,9 @@ func TestAWireGuardNetworkIsRedirectedFromItsTunnelInterface(t *testing.T) {
 	nat := ntpNAT(t, tg)
 	for _, want := range []string{
 		"meta iifname wg-lab-hub ip saddr { 10.50.0.0/24, 10.99.0.0/24 } ip daddr != { 10.50.0.0/24, 10.99.0.0/24 } udp dport 123 dnat ip to 169.254.100.2:123",
-		"meta iifname wg-lab-hub ip daddr 10.99.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
-		"meta iifname wg-admin ip daddr 10.98.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
-		"meta iifname wg-site-b ip daddr 10.255.0.0 tcp dport 4460 dnat ip to 169.254.100.2:4460",
+		"meta iifname wg-lab-hub ip saddr { 10.50.0.0/24, 10.99.0.0/24 } ip daddr 10.99.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
+		"meta iifname wg-admin ip saddr 10.98.0.0/24 ip daddr 10.98.0.1 udp dport 123 dnat ip to 169.254.100.2:123",
+		"meta iifname wg-site-b ip saddr { 10.60.0.0/24, 10.255.0.0/31 } ip daddr 10.255.0.0 tcp dport 4460 dnat ip to 169.254.100.2:4460",
 	} {
 		if !contains(nat, want) {
 			t.Errorf("no rule %q in\n%s", want, strings.Join(nat, "\n"))
@@ -425,7 +425,7 @@ func TestAWireGuardNetworkIsRedirectedFromItsTunnelInterface(t *testing.T) {
 	}
 	// the faults of other networks do not leak into the link: only the hub's sources have a redirect from the hub
 	for _, r := range nat {
-		if strings.Contains(r, "ip saddr") && !strings.Contains(r, "iifname wg-lab-hub") {
+		if strings.Contains(r, "ip daddr !=") && !strings.Contains(r, "iifname wg-lab-hub") {
 			t.Errorf("a fault redirect from another interface: %s", r)
 		}
 	}
@@ -639,7 +639,7 @@ func describeNTP(tg *Target) string {
 	}
 	fmt.Fprintf(&b, "# forward (the accepts towards the namespace)\n")
 	for _, r := range renderRules(chainOfName(tg, "forward")) {
-		if strings.Contains(r, "oifname svc0 ip daddr 169.254.100.2") && !strings.Contains(r, "dport 53 ") {
+		if strings.Contains(r, "oifname svc0 ip saddr { 10.10.0.0/24, 10.20.0.0/24, 10.30.0.0/24 } ip daddr 169.254.100.2") && !strings.Contains(r, "dport 53 ") {
 			fmt.Fprintf(&b, "%s\n", r)
 		}
 	}

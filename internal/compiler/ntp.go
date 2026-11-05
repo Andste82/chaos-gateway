@@ -1,9 +1,11 @@
 package compiler
 
 import (
+	"fmt"
 	"net/netip"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Andste82/chaos-gateway/internal/domain"
@@ -39,6 +41,9 @@ const (
 	NTSKEPort = domain.NTSKEPort
 	// CodeNTPDestinations is the problem code of more distinct destination selectors than MaxNTPDestinations.
 	CodeNTPDestinations = "ntp_destinations"
+	// CodeNTPInside is the problem code of a time fault that cannot reach a server inside the segments of the device's own
+	// network: the traffic is switched or routed back out of the interface and never meets the redirect.
+	CodeNTPInside = "ntp_server_inside"
 )
 
 // NTPFault is one entry of the server's list of resolved faults: the fault that decides for the clients of its Sources when
@@ -69,8 +74,10 @@ func (t *Target) NTPListenPorts() []int {
 
 // ntpIface is an interface the clients of the test networks come in on: a bridge or a WireGuard interface.
 type ntpIface struct {
-	dev     string
-	gateway netip.Addr
+	dev       string
+	networkID string
+	network   string // the name of the network, for messages
+	gateway   netip.Addr
 	// covers are the addresses of the sources that arrive here and of what stays inside: the network and the networks
 	// behind it
 	covers []netip.Prefix
@@ -81,16 +88,40 @@ type ntpIface struct {
 }
 
 // ntpIfaces lists the interfaces of the test networks, the bridges first.
-func (t *Target) ntpIfaces() []ntpIface {
+func (t *Target) ntpIfaces() []ntpIface { return ntpIfacesOf(t.Bridges, t.WireGuard) }
+
+// NTPFaultRedirects reports whether the kernel sends the NTP queries of a source of the network to the server for the
+// address under a time fault: the gateway's own address of the network (a rule of its own where the network's time service
+// is off), and every address outside the segments of the network, which are switched or routed back out of the interface and
+// never redirected (plan §2.2). It is the rule of ntpFaultRules, for the explanation of a query.
+func NTPFaultRedirects(bridges []Bridge, wg []WGInterface, networkID string, dst netip.Addr) bool {
+	for _, ifc := range ntpIfacesOf(bridges, wg) {
+		if !strings.EqualFold(ifc.networkID, networkID) {
+			continue
+		}
+		if ifc.gateway == dst {
+			return true
+		}
+		for _, cv := range ifc.covers {
+			if cv.Contains(dst) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func ntpIfacesOf(bridges []Bridge, wireGuard []WGInterface) []ntpIface {
 	var out []ntpIface
-	for _, b := range t.Bridges {
+	for _, b := range bridges {
 		covers := []netip.Prefix{b.Address.Masked()}
 		for _, r := range b.Routes {
 			covers = append(covers, parseAddrOrPrefix(r)...)
 		}
-		out = append(out, ntpIface{dev: b.Name, gateway: b.Address.Addr(), covers: domain.CollapsePrefixes(covers), service: b.NTP, hardcoded: b.RedirectNTP})
+		out = append(out, ntpIface{dev: b.Name, networkID: b.NetworkID, network: b.NetworkName, gateway: b.Address.Addr(), covers: domain.CollapsePrefixes(covers), service: b.NTP, hardcoded: b.RedirectNTP})
 	}
-	for _, w := range t.WireGuard {
+	for _, w := range wireGuard {
 		covers := []netip.Prefix{w.Address.Masked()}
 		for _, p := range w.Peers {
 			// the routes and not the allowed addresses: a link may allow 0.0.0.0/0, which is no network behind it
@@ -99,9 +130,23 @@ func (t *Target) ntpIfaces() []ntpIface {
 			}
 		}
 		// a WireGuard client has no DHCP, but it reaches the server on the tunnel address like a device of a bridge
-		out = append(out, ntpIface{dev: w.Name, gateway: w.Address.Addr(), covers: domain.CollapsePrefixes(covers), service: true})
+		out = append(out, ntpIface{dev: w.Name, networkID: w.NetworkID, network: w.NetworkName, gateway: w.Address.Addr(), covers: domain.CollapsePrefixes(covers), service: true})
 	}
 	return out
+}
+
+// sourcesOf are the clients that arrive on the interface: those that overlap what it covers.
+func (ifc ntpIface) sourcesOf(clients []netip.Prefix) []netip.Prefix {
+	var mine []netip.Prefix
+	for _, p := range clients {
+		for _, cv := range ifc.covers {
+			if p.Overlaps(cv) {
+				mine = append(mine, p)
+				break
+			}
+		}
+	}
+	return mine
 }
 
 func parseAddrOrPrefix(s string) []netip.Prefix {
@@ -194,6 +239,75 @@ func (t *Target) compileNTP(in Input, w *domain.World, sources []domain.Source, 
 	ifaces := t.ntpIfaces()
 	for _, g := range groups {
 		t.ntpFaultRules(ifaces, g, ports)
+	}
+	t.warnNTPInside(ifaces, groups, ports)
+}
+
+// warnNTPInside warns about the servers a time fault cannot reach because they lie inside the segments of the device's
+// network: a CIDR destination inside them (the gateway's own address apart) and, for a fault that applies to every server,
+// the NTP servers that DHCP hands out inside them. The packets are switched or routed back out of the interface, so no
+// redirect can catch them (plan §2.2), and the overlay still shows as effective.
+func (t *Target) warnNTPInside(ifaces []ntpIface, groups []*candGroup, ports ntpPorts) {
+	said := map[string]bool{}
+	say := func(ifc ntpIface, msg string) {
+		if !said[ifc.dev+"|"+msg] {
+			said[ifc.dev+"|"+msg] = true
+			t.warn(CodeNTPInside, ifc.network, "%s", msg)
+		}
+	}
+	for _, g := range groups {
+		clients := domain.CollapsePrefixes(g.prefixes)
+		for _, ifc := range ifaces {
+			if len(ifc.sourcesOf(clients)) == 0 {
+				continue
+			}
+			var anyServer bool
+			for _, c := range g.cands {
+				if k := domain.TimeSelectorKey(*c.Time); k == "" || ports.overflow[k] {
+					anyServer = true
+				}
+				d := c.Match.Destination
+				if d == nil || d.Cidr == nil {
+					continue
+				}
+				var dst netip.Prefix
+				if a, err := netip.ParseAddr(*d.Cidr); err == nil {
+					dst = netip.PrefixFrom(a, a.BitLen())
+				} else if p, err := netip.ParsePrefix(*d.Cidr); err == nil {
+					dst = p.Masked()
+				} else {
+					continue
+				}
+				if dst == netip.PrefixFrom(ifc.gateway, ifc.gateway.BitLen()) {
+					continue // the gateway's own address has a rule of its own
+				}
+				for _, cv := range ifc.covers {
+					if cv.Bits() <= dst.Bits() && cv.Contains(dst.Addr()) {
+						say(ifc, fmt.Sprintf("a time fault names the destination %s, which lies inside the segments of network %q: traffic to it is switched directly, so the fault does not reach it", dst, ifc.network))
+						break
+					}
+				}
+			}
+			if !anyServer || t.Kea == nil {
+				continue
+			}
+			for _, sub := range t.Kea.Config.Subnets {
+				if sub.Interface != ifc.dev {
+					continue
+				}
+				for _, a := range sub.NTP {
+					if a == ifc.gateway {
+						continue
+					}
+					for _, cv := range ifc.covers {
+						if cv.Contains(a) {
+							say(ifc, fmt.Sprintf("DHCP hands out the NTP server %s in network %q, which lies inside its segments: traffic to it is switched directly, so a time fault does not reach a device that asks it", a, ifc.network))
+							break
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -338,15 +452,7 @@ func (t *Target) ntpFaultRules(ifaces []ntpIface, g *candGroup, ports ntpPorts) 
 	}
 	clients := domain.CollapsePrefixes(g.prefixes)
 	for _, ifc := range ifaces {
-		var mine []netip.Prefix
-		for _, p := range clients {
-			for _, cv := range ifc.covers {
-				if p.Overlaps(cv) {
-					mine = append(mine, p)
-					break
-				}
-			}
-		}
+		mine := ifc.sourcesOf(clients)
 		if len(mine) == 0 {
 			continue
 		}
@@ -416,7 +522,9 @@ func (t *Target) ntpSelectorRules(ifc ntpIface, from []any, clients []netip.Pref
 
 // ntpGatewayRedirect sends the queries to a network's gateway address (UDP 123, and TCP 4460 of NTS) to the server in the
 // namespace, for the networks whose time service is on (and the WireGuard networks). The packets keep the client's source
-// address, so the server sees the device.
+// address, so the server sees the device. Only sources the network covers are redirected: a packet that comes in with the
+// source address of another network would be answered, and its reply would pass the forward chain as an established flow,
+// before the management guard and the access rules.
 func (t *Target) ntpGatewayRedirect() []Rule {
 	var rules []Rule
 	for _, ifc := range t.ntpIfaces() {
@@ -425,8 +533,8 @@ func (t *Target) ntpGatewayRedirect() []Rule {
 		}
 		gw := eq(payload("ip", "daddr"), ifc.gateway.String())
 		rules = append(rules,
-			newRule(iifname(ifc.dev), gw, eq(payload("udp", "dport"), ServiceNTPPort), t.ntpDnat(ServiceNTPPort)),
-			newRule(iifname(ifc.dev), gw, eq(payload("tcp", "dport"), NTSKEPort), t.ntpDnat(NTSKEPort)))
+			newRule(iifname(ifc.dev), ifc.fromCovers(), gw, eq(payload("udp", "dport"), ServiceNTPPort), t.ntpDnat(ServiceNTPPort)),
+			newRule(iifname(ifc.dev), ifc.fromCovers(), gw, eq(payload("tcp", "dport"), NTSKEPort), t.ntpDnat(NTSKEPort)))
 	}
 	return rules
 }
@@ -442,10 +550,15 @@ func (t *Target) ntpHardcodedRedirect() []Rule {
 		}
 		other := match(payload("ip", "daddr"), "!=", prefixes(ifc.covers))
 		rules = append(rules,
-			newRule(iifname(ifc.dev), other, eq(payload("udp", "dport"), ServiceNTPPort), t.ntpDnat(ServiceNTPPort)),
-			newRule(iifname(ifc.dev), other, eq(payload("tcp", "dport"), NTSKEPort), t.ntpDnat(NTSKEPort)))
+			newRule(iifname(ifc.dev), ifc.fromCovers(), other, eq(payload("udp", "dport"), ServiceNTPPort), t.ntpDnat(ServiceNTPPort)),
+			newRule(iifname(ifc.dev), ifc.fromCovers(), other, eq(payload("tcp", "dport"), NTSKEPort), t.ntpDnat(NTSKEPort)))
 	}
 	return rules
+}
+
+// fromCovers matches the source address of the packets of the interface: what the network covers.
+func (ifc ntpIface) fromCovers() any {
+	return eq(payload("ip", "saddr"), prefixes(ifc.covers))
 }
 
 // ntpRedirect is the NAT rules that lead NTP into the namespace: the redirects of the faults (the ports of the selectors
@@ -478,8 +591,17 @@ func (t *Target) ntpForward(ifsCG string) []Rule {
 	for _, p := range t.NTPListenPorts() {
 		udp = append(udp, PortRange{p, p})
 	}
+	// only the sources of the networks, like the redirects: a packet with another source was not redirected and is not ours
+	var covers []netip.Prefix
+	for _, ifc := range t.ntpIfaces() {
+		covers = append(covers, ifc.covers...)
+	}
+	if len(covers) == 0 {
+		return nil
+	}
+	from := eq(payload("ip", "saddr"), prefixes(domain.CollapsePrefixes(covers)))
 	return []Rule{
-		newRule(iifSet(ifsCG), oifname(t.Service.HostIf), peer, eq(payload("udp", "dport"), portValue(udp)), verdict("accept")),
-		newRule(iifSet(ifsCG), oifname(t.Service.HostIf), peer, eq(payload("tcp", "dport"), NTSKEPort), verdict("accept")),
+		newRule(iifSet(ifsCG), oifname(t.Service.HostIf), from, peer, eq(payload("udp", "dport"), portValue(udp)), verdict("accept")),
+		newRule(iifSet(ifsCG), oifname(t.Service.HostIf), from, peer, eq(payload("tcp", "dport"), NTSKEPort), verdict("accept")),
 	}
 }

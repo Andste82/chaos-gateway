@@ -264,6 +264,23 @@ func TestASkewOf1000PPMAddsTenMillisecondsOverTenSecondsOnTheRealKernel(t *testi
 	if d := r.shift() - wantShift; abs(d) > tol {
 		t.Errorf("-1d and -1000 ppm %v after the fault took effect: the served time is %v from the client's clock, want %v within %v", client.Sub(since), r.shift(), wantShift, tol)
 	}
+	b.remove(t, id)
+
+	// Under emulation the tolerance of 100 ms is ten times the drift of 1000 ppm, so the checks above cannot tell a skew from none
+	// (a server that ignores skew_ppm drifts 0 and passes). A skew of 10 % drifts 500 ms in 5 s, which the noise of an emulated
+	// clock and path does not hide: the same measurement with the tolerance of that run must still see the drift.
+	if !testbed.Accurate() {
+		b.overlay(t, `{"target":{"network":"IoT"},"time":{"skew_ppm":100000}}`)
+		b.until(t, "the large skew is served", a, ntpGateway, func(r sntpReply) bool { return r.Replied && r.Transmit != nil })
+		first := b.best(t, a, ntpGateway, 5)
+		time.Sleep(5 * time.Second)
+		second := b.best(t, a, ntpGateway, 5)
+		elapsed := secs((second.T1+second.T4)/2 - (first.T1+first.T4)/2)
+		want := time.Duration(float64(elapsed) * 100000 / 1e6)
+		if drift := second.measured() - first.measured(); drift < want/2 || abs(drift-want) > tol {
+			t.Errorf("under emulation a skew of 100000 ppm drifted the served time %v in %v, want %v within %v (and at least half of it)", drift, elapsed, want, tol)
+		}
+	}
 }
 
 // M34 level 1: a leap fault sets leap indicator 1 (insert) or 2 (delete) in the answer, and with the preset the time a few
@@ -346,6 +363,12 @@ func TestAKissOfDeathRATELengthensThePollIntervalOfChronyAndDENYIsNotTakenOnTheR
 		t.Fatalf("chrony asked %d times in %v without a fault, so a smaller number below would prove nothing", normal, window)
 	}
 
+	// the positive control of the "chrony does not take it" checks below: chronyd -Q yields no offset for many reasons (a start
+	// failure, the timeout on a loaded runner), and only a run that takes the server before the fault shows that it can
+	if res := b.chronyQ(t, a, testbed.LAN0Gateway); !res.Took {
+		t.Fatalf("chrony does not take the server before the fault, so not taking it under DENY would prove nothing:\n%s", res.Output)
+	}
+
 	// RATE: the answer is stratum 0 with the code, and chrony asks less often than without it
 	rate := b.overlay(t, `{"target":{"device":"`+clientA+`"},"time":{"answer":"kiss_of_death","kiss_code":"RATE"}}`)
 	r := b.until(t, "the RATE answer", a, ntpGateway, func(r sntpReply) bool { return r.Replied && r.Stratum == 0 && r.RefIDASCII == "RATE" })
@@ -376,6 +399,12 @@ func TestAKissOfDeathRATELengthensThePollIntervalOfChronyAndDENYIsNotTakenOnTheR
 	if denied == 0 {
 		t.Errorf("the server received no query in %v under DENY", window)
 	}
+	// what the server did with the queries, as the API counts it: every query chrony sent under DENY was answered with the
+	// fault (chrony asked on, and the server did not stop answering after the first reply)
+	waitFor(t, 20*time.Second, "the API counts the DENY answers", func() bool {
+		_, answers, ok := b.deviceState(t, espID)
+		return ok && answers[deny] >= denied
+	})
 	b.remove(t, deny)
 
 	// RSTR is a kiss code, too
@@ -392,6 +421,9 @@ func TestAKissOfDeathRATELengthensThePollIntervalOfChronyAndDENYIsNotTakenOnTheR
 func TestAnOriginMismatchIsDiscardedByChronyAndAcceptedByACarelessClientOnTheRealKernel(t *testing.T) {
 	b := newNTPBed(t)
 	a := b.top.A
+	if res := b.chronyQ(t, a, testbed.LAN0Gateway); !res.Took {
+		t.Fatalf("chrony does not take the server before the fault, so its discarding of the answer below would prove nothing:\n%s", res.Output)
+	}
 	id := b.overlay(t, `{"target":{"network":"IoT"},"time":{"answer":"origin_mismatch"}}`)
 	r := b.until(t, "the answer with the wrong origin", a, ntpGateway, func(r sntpReply) bool { return r.Replied && !r.OriginOK })
 	if r.StrictOK || !r.CarelessOK || r.Mode != 4 || r.Stratum != 2 || r.Size != 48 {
@@ -603,9 +635,15 @@ func TestALatencyFaultOnUDP123UploadOnlyShiftsTheMeasuredOffsetByHalfOfItOnTheRe
 	if d := shifted - base; abs(d-delay/2) > tol {
 		t.Errorf("a latency of %v on the upload moved the offset by %v (%v to %v), want about %v within %v", delay, d, base, shifted, delay/2, tol)
 	}
+	// chrony's offset is compared with its own offset before the fault; under emulation the tolerance is the one of the client above,
+	// which is smaller than the shift (twice that would be wider than the effect, and a missing shift would pass)
+	chronyTol := 2 * tol
+	if !testbed.Accurate() {
+		chronyTol = tol
+	}
 	res := b.chronyQ(t, a, testbed.LAN0Gateway)
-	if !res.Took || abs(abs(res.Offset)-delay/2) > 2*tol {
-		t.Errorf("chrony measured %v (took %v) under an upload latency of %v, want about %v:\n%s", res.Offset, res.Took, delay, delay/2, res.Output)
+	if !res.Took || abs(abs(res.Offset-chronyBase.Offset)-delay/2) > chronyTol {
+		t.Errorf("chrony measured %v (took %v) under an upload latency of %v, against %v without it, want a shift of about %v within %v:\n%s", res.Offset, res.Took, delay, chronyBase.Offset, delay/2, chronyTol, res.Output)
 	}
 	// other traffic is not slowed by a selector on NTP
 	if ping := testbed.MustPing(t, a, testbed.ServerAddr, 3, 200*time.Millisecond); ping.Median() > 100*time.Millisecond {
@@ -852,6 +890,10 @@ func TestTheHostClockReportedUnsynchronizedMakesTheServerAnswerWithStratum16OnTh
 		t.Errorf("the health report of a synchronized host: %q", d)
 	}
 
+	if res := b.chronyQ(t, a, testbed.LAN0Gateway); !res.Took {
+		t.Fatalf("chrony does not take the server while the host clock is synchronized, so not taking it below would prove nothing:\n%s", res.Output)
+	}
+
 	b.sync.set(ntpserver.Sync{})
 	r := b.until(t, "the unsynchronized answer", a, ntpGateway, func(r sntpReply) bool { return r.Replied && r.Stratum == 16 })
 	if r.Leap != 3 || r.Mode != 4 || r.StrictOK {
@@ -954,10 +996,23 @@ func TestAScenarioWithATimeStepAWaitForTheQueryAndTheCheckSeesTheQueryOfARealCli
 	id := r.json(t)["id"].(string)
 	overlay := g.waitStep(id, "shift", "applied")["overlay"].(string)
 
-	// the server takes the configuration of the step a moment after the step is applied (3 s at most in the runs seen), and a
-	// query it answers before that is answered without the fault; the check shows the first query of the window, so the client
-	// asks nothing until the server has the fault, and the wait begins after that, at 10 s
-	time.Sleep(6 * time.Second)
+	// the server takes the configuration of the step a moment after the step is applied, and a query it answers before that is
+	// answered without the fault; the check shows the first query of the window, so the client asks nothing until the server has
+	// the fault. The test reads that off the server it runs (no query is sent, so none is attributed to the device), and the wait
+	// begins after that, at 10 s; the configuration is stored after it is parsed, so a configuration with the fault is a server
+	// that answers with it
+	waitFor(t, 60*time.Second, "the server has the fault of the step", func() bool {
+		c := b.srv.Config()
+		if c == nil {
+			return false
+		}
+		for _, f := range c.Faults {
+			if f.Overlay.String() == overlay {
+				return true
+			}
+		}
+		return false
+	})
 	// the client polls until the wait has ended; its first query after the wait began is the one the wait takes
 	var last sntpReply
 	waitFor(t, 90*time.Second, "the wait for the NTP query ends", func() bool {
@@ -1068,7 +1123,7 @@ func (l ntpLoad) lost() float64 { return 1 - float64(l.answered)/float64(l.sent)
 // percentile 2 to 3 milliseconds on a loaded CI runner and on an idle workstation alike, while the server's own work from the
 // read to the reply is about 2 microseconds at the median and below 60 at the 99th percentile), so the asserted figure is the
 // median, and the 99th percentile is recorded for the trend (open item P34-10). Where the timing is meaningful (native or KVM)
-// the figures are asserted and recorded in the measurement record; under software emulation they are only recorded and the test
+// the figures are asserted and recorded in the measurement record (the steady run has to reach 90 % of 5,000 answers per second, or its median says nothing about that load); under software emulation they are only recorded and the test
 // asserts that the load is answered at all.
 func TestTheServerAnswersFiveThousandQueriesPerSecondThroughTheRedirectAndAddsLessThanAMillisecondOnTheRealKernel(t *testing.T) {
 	b := newNTPBed(t)
@@ -1079,6 +1134,8 @@ func TestTheServerAnswersFiveThousandQueriesPerSecondThroughTheRedirectAndAddsLe
 		workers = 16
 		length  = 5 * time.Second
 		target  = 5000 // queries per second
+		// the share of the target that the steady run has to reach for its median to count as measured at 5,000 per second
+		steadyShare = 0.9
 	)
 	flood := ntpLoadFrom(a.Name, workers, length, 0)
 	steady := ntpLoadFrom(a.Name, workers, length, workers*time.Second/target)
@@ -1107,6 +1164,9 @@ func TestTheServerAnswersFiveThousandQueriesPerSecondThroughTheRedirectAndAddsLe
 		err = nil
 		if steadyLost := steady.lost(); steadyLost > 0.01 {
 			err = fmt.Errorf("%.2f %% of the queries at the steady load of 5,000 per second were not answered, want less than 1 %%", steadyLost*100)
+		} else if steady.rate() < steadyShare*target {
+			// a generator that ran slow (a stalled worker costs up to a second of its window) would show the median of a lighter load
+			err = fmt.Errorf("the steady load answered %.0f queries per second, want about 5,000 (at least %.0f), so the median below was not measured at the load of the acceptance", steady.rate(), steadyShare*target)
 		} else if median >= time.Millisecond {
 			err = fmt.Errorf("the server added %v at the median at the steady load of 5,000 per second, want less than 1 ms", median)
 		}

@@ -11,7 +11,7 @@ Where the built milestone differs from the map:
   panel and `chaosctl wait ntp` use.
 - **The presets** are eight built-in profiles with a `time` part (`time-plus-1y` and so on, `internal/domain/builtin.go`), as well as the presets of the form
   (`web/src/lib/timeForm.ts`); both name the same faults.
-- **The profile editor** of the web app does not create or edit a `time` part (it keeps one that comes from a built-in profile or the API), as it does not for `dns` and `tls` (the question whether it should is P34-09 in `docs/open-items.md`).
+- **The profile editor** of the web app does not create or edit a `time` part (it keeps one that comes from a built-in profile or the API), as it does not for `dns` and `tls` (decided 2026-11-05, P34-09 in `docs/open-items.md`: the editor keeps, shows and activates the part but does not edit it).
 - **The release notes** of the next release are written with that release; `docs/release-notes/v1.0.0.md` says that the NTP server is not in it, which is true.
 - **The `Supported*` lists** (`SupportedOverlayKinds`, `SupportedFaultFamilies`, `SupportedStepTypes`, `SupportedCheckTypes`) now include `time` and `ntp_queried` (stage 2 and 3), and the `422 unsupported_feature` stub and its tests of stage 1 are gone; the text of stage 1 below says what the stub did at the time.
 

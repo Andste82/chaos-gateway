@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"slices"
 
 	"github.com/Andste82/chaos-gateway/internal/compiler"
 	"github.com/Andste82/chaos-gateway/internal/domain"
@@ -22,15 +23,15 @@ import (
 // is a consequence of the apply, not part of it: a failure is logged and the rules hold either way, and the first apply of a
 // process, which does not know what the kernel ran before, deletes nothing.
 
-// ntpStaleFlows lists the tracked UDP flows a change of the NTP redirects from old to next may have decided wrongly: the
+// ntpStaleFlows lists the tracked UDP flows a change of the NTP redirects from one of the olds to next may have decided wrongly: the
 // flows to an NTP port (123 and the ports a time fault names) and the flows that were redirected into the server (the reply
 // comes from the service address and one of the ports it listens on).
-func ntpStaleFlows(old, next *compiler.Target, raw []linux.Conntrack) []executor.ConntrackFlow {
+func ntpStaleFlows(olds []*compiler.Target, next *compiler.Target, raw []linux.Conntrack) []executor.ConntrackFlow {
 	ports := map[int]bool{compiler.ServiceNTPPort: true}
 	var ranges []model.PortRange
 	listen := map[int]bool{}
 	peers := map[netip.Addr]bool{}
-	for _, t := range []*compiler.Target{old, next} {
+	for _, t := range append(slices.Clone(olds), next) {
 		if t == nil {
 			continue
 		}
@@ -79,9 +80,21 @@ func ntpStaleFlows(old, next *compiler.Target, raw []linux.Conntrack) []executor
 	return out
 }
 
-// dropNTPFlows deletes the tracked NTP flows when the redirects changed (see above) and reports how many it deleted.
-func (e *Engine) dropNTPFlows(ctx context.Context, old, next *compiler.Target) (int, error) {
-	if old == nil || next == nil || !compiler.NTPRedirectChanged(old, next) {
+// dropNTPFlows deletes the tracked NTP flows when the redirects changed (see above) and reports how many it deleted. old is the
+// last target the kernel was brought to, failed the targets of the applies that failed since: one may have got as far as the
+// NAT rules, and a flow a device made in that window was redirected by them. A failed apply is no change of the verified
+// target, so without them the restore of the committed revision would find nothing to delete.
+func (e *Engine) dropNTPFlows(ctx context.Context, old *compiler.Target, failed []*compiler.Target, next *compiler.Target) (int, error) {
+	if next == nil {
+		return 0, nil
+	}
+	var olds []*compiler.Target
+	for _, o := range append([]*compiler.Target{old}, failed...) {
+		if o != nil && compiler.NTPRedirectChanged(o, next) {
+			olds = append(olds, o)
+		}
+	}
+	if len(olds) == 0 {
 		return 0, nil
 	}
 	ns := executor.Target{NS: e.cfg.Namespace}
@@ -95,7 +108,7 @@ func (e *Engine) dropNTPFlows(ctx context.Context, old, next *compiler.Target) (
 			return 0, fmt.Errorf("read the tracked connections: %w", err)
 		}
 	}
-	flows := ntpStaleFlows(old, next, raw)
+	flows := ntpStaleFlows(olds, next, raw)
 	deleted := 0
 	var first error
 	for start := 0; start < len(flows); start += executor.MaxConntrackFlows {

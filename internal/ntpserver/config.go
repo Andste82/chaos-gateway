@@ -155,11 +155,22 @@ func (p *parsedConfig) faultFor(client netip.Addr, port int) *parsedFault {
 	return best
 }
 
+// servesClient says whether client lies in the client range of a network: the server answers no other source. A
+// configuration without networks (or with none whose range is known) serves nobody.
+func (p *parsedConfig) servesClient(client netip.Addr) bool {
+	for _, n := range p.networks {
+		if n.clients.IsValid() && n.clients.Contains(client) {
+			return true
+		}
+	}
+	return false
+}
+
 // gatewayOf is the reference id of an answer: the gateway address of the client's network, which is where the client
 // believes it got the time from. A network has an entry for its own range and one for each network behind it, so the entry
 // with the longest prefix that contains the client decides (a network behind a router may lie inside a wider route of
-// another). A client outside every network (it should not reach the server) gets the gateway of the only network, and zero when
-// there are several networks or none.
+// another). Process serves no client outside every network (servesClient), so the fallback for one, the gateway of the only
+// network and zero when there are several or none, is only for a caller that does not go through it.
 func (p *parsedConfig) gatewayOf(client netip.Addr) [4]byte {
 	best, bits := [4]byte{}, -1
 	for _, n := range p.networks {

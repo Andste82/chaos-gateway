@@ -50,6 +50,7 @@ func (s *Server) ListNtpQueries(c *gin.Context, params model.ListNtpQueriesParam
 	key := func(l loggedNTP) string { return fmt.Sprintf("%020d", int64(1<<62)-l.seq) }
 	sel := make([]loggedNTP, 0, n+1)
 	s.ntp.logMu.Lock()
+	s.ntpAdopt(s.cfg.Engine.Snapshot())
 	for i := len(s.ntp.entries) - 1; i >= 0 && len(sel) <= n; i-- {
 		l := s.ntp.entries[i]
 		if (wantDevice != "" && l.device != wantDevice) || (params.Since != nil && l.e.Time.Before(*params.Since)) {
@@ -79,6 +80,8 @@ func (s *Server) ListNtpQueries(c *gin.Context, params model.ListNtpQueriesParam
 }
 
 // GetDeviceNtp implements GET /devices/{deviceId}/ntp: a device that never asked has zeros, an unknown one is a 404.
+// `dropped` counts the log entries over the rate limit, and the server writes at most one of them per second for a device
+// (sampled to one per second per device): it is not the number of queries the limit dropped.
 func (s *Server) GetDeviceNtp(c *gin.Context, deviceId model.DeviceId) {
 	id, ok := s.deviceIDOf(c, deviceId)
 	if !ok {

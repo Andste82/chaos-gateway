@@ -1120,7 +1120,10 @@ paths:
         unanswered on purpose (`silence`) or dropped over the rate limit, the answers each time fault shaped, the last query
         with the time served and the server asked, and the newest entries of its log (at most 50, newest first). The numbers
         count since the API started and are gone after a restart, as the query log. A device that never asked has zeros and
-        no `last_query`; an unknown device is `404`.
+        no `last_query`; an unknown device is `404`. A query that reached the server before the gateway had observed the
+        device (its address was not known yet) belongs to the device as soon as it is observed, and is counted here then.
+        `dropped` counts the log entries of that kind, which the server writes at most once a second per device: it is
+        a sample of the rate limit, not the number of dropped queries. `answers` lists the faults that still exist.
       x-milestone: M34
       x-required-scope: read
       parameters:
@@ -2077,7 +2080,11 @@ paths:
       description: |
         The queries the gateway's NTP server answered (or left unanswered on purpose) and the connections to its NTS
         key-establishment port, newest first (M34). The gateway keeps the newest 20000 in memory; the log is empty after a
-        restart.
+        restart. The entries of clients that no device owns (an address in a network that no device has been observed at)
+        are kept up to 2000; the older ones go first. A query is shown with its device once the gateway has observed it,
+        also when it arrived earlier. The server answers only addresses inside the client range of a network, so a query
+        from another address is neither answered nor logged. An entry `dropped` is written at most once a second per
+        device, however many queries were dropped.
       x-milestone: M34
       x-required-scope: read
       parameters:
@@ -4137,7 +4144,10 @@ components:
           above), `unsynchronized` (leap indicator 3 and stratum 16), `kiss_of_death` (stratum 0 with `kiss_code` as the
           reference id), `silence` (no answer, the query is counted) and the invalid answers `origin_mismatch` (the origin
           timestamp is not the client's transmit timestamp), `zero_transmit` (a transmit timestamp of zero) and
-          `wrong_mode` (the mode of the answer is not 4).
+          `wrong_mode` (the mode of the answer is not 4). While the host's clock is not synchronized, the server claims no
+          synchronization in any answer that carries a time: the invalid answers are leap indicator 3 and stratum 16 as well
+          (their one broken part applies on top), as is a normal answer, unless the fault sets the time itself with
+          `absolute`; a kiss-of-death and `silence` are as they are.
 
         A fault must change something: at least one of `offset`, `absolute`, `skew_ppm`, `leap` or an `answer` other than
         `normal`. `offset` and `absolute` exclude each other. An `answer` other than `normal` is the whole fault: it
@@ -4156,6 +4166,15 @@ components:
         destination selector of an active time fault gets a port of its own, at most 32 distinct destinations, and the
         rest is served like the scope without a selector with a warning. A fault without a destination selector applies
         to every server the scope's devices ask, the gateway's own address included.
+
+        The fault reaches the servers outside the segments of the device's network, and the gateway's own address of the
+        network. It does not reach a server inside the segments (the network and the networks behind its routers): the
+        packets to it are switched or routed back out of the interface and never meet the redirect (the same limit as the
+        redirect of hardcoded DNS), so the device keeps getting the correct time from it, and the overlay still shows
+        `effective`. The compiler warns with the problem code `ntp_server_inside` when the `destination` of a fault lies
+        inside the segments of a network it applies to, and when a fault without a destination applies to a network whose
+        DHCP hands out an NTP server inside them (`dhcp.options.ntp_servers`). `GET /explain` reports no time fault for such
+        a destination.
       allOf:
         - $ref: '#/components/schemas/TrafficMatch'
         - type: object
@@ -4252,8 +4271,8 @@ components:
           allOf: [{$ref: '#/components/schemas/TimeFault'}]
           description: |
             A part competes like a time fault of its own, so a profile with this part is activated on a device, a group or
-            a network, never on the global scope or a remote network: the activation is refused with `target_kind` as a
-            whole (a profile with a time part has no partial activation). If a profile that is already active gains the
+            a network, never on the global scope or a remote network: the activation is refused as a whole (`422 validation_failed`
+            with the error code `invalid_target` at `/target`; a profile with a time part has no partial activation). If a profile that is already active gains the
             part later, the part does not apply on such a target and the other parts do.
 
     # ============================================================ scenarios (plan §2.10)
@@ -6756,7 +6775,10 @@ components:
         dropped:
           type: integer
           format: int64
-          description: The queries over the device's rate limit that the server did not answer.
+          description: |
+            The log entries `dropped`: queries over the device's rate limit that the server did not answer. The server writes
+            at most one such entry per device per second, whatever the number of queries it dropped, so this is a sample and
+            not the number of dropped queries.
         nts_ke:
           type: integer
           format: int64
@@ -6807,7 +6829,7 @@ components:
         generation: {type: integer, format: int64}
         networks:
           type: array
-          description: The networks whose devices the server serves; the server's reference id in an answer is the gateway address of the client's network.
+          description: The networks whose devices the server serves; the server's reference id in an answer is the gateway address of the client's network. A network has an entry for its own range and one for each network behind it (the downstream routes of a bridge, the routes of the peers of a tunnel). The server answers only a source address inside the `clients` of one of the entries and ignores any other.
           items:
             type: object
             required: [network, gateway]
@@ -6883,7 +6905,7 @@ components:
         client: {$ref: '#/components/schemas/Ipv4'}
         device:
           allOf: [{$ref: '#/components/schemas/Uuid'}]
-          description: Filled in by the API from the observed state.
+          description: Filled in by the API from the observed state; a query that arrived before the gateway had observed the device gets it when it is observed.
         port:
           type: integer
           minimum: 1
@@ -6902,7 +6924,7 @@ components:
         answer:
           type: string
           enum: [normal, unsynchronized, kiss_of_death, silence, origin_mismatch, zero_transmit, wrong_mode, dropped]
-          description: How the server answered; `dropped` - not answered because the device's rate limit (16 per second) was exceeded.
+          description: How the server answered; `dropped` - not answered because the device's rate limit (16 per second) was exceeded (the server logs at most one such entry a second per device, so an entry stands for one or more dropped queries).
         served_time:
           type: string
           format: date-time

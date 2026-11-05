@@ -10,7 +10,7 @@ jump access_forward
 meta iifname @ifs_cg_bf4feb meta oifname svc0 meta mark & 0x100000 0x100000 accept
 meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 udp dport 53 accept
 meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 tcp dport 53 accept
-meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 udp dport 123 accept
-meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 tcp dport 4460 accept
+meta iifname @ifs_cg_bf4feb meta oifname svc0 ip saddr { 10.10.0.0/24, 10.20.0.0/24, 10.30.0.0/24 } ip daddr 169.254.100.2 udp dport 123 accept
+meta iifname @ifs_cg_bf4feb meta oifname svc0 ip saddr { 10.10.0.0/24, 10.20.0.0/24, 10.30.0.0/24 } ip daddr 169.254.100.2 tcp dport 4460 accept
 # access_forward
 ct original ip saddr @asrc_bd595b570adb51b350ea4de6_8743d6 meta l4proto tcp ct original proto-dst 8883 counter "rule_8e9ca98e27" last drop

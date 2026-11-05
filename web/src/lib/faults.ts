@@ -1,8 +1,17 @@
 // The words and chips for faults, overlays and their targets (plan §2.17: fault chips are mono,
 // orange, and say what happens to the traffic: "↑↓ 200 ms ±50", "5 % loss", "↓ 64 kbit/s").
 import type { DhcpAction, DnsFault, FaultBody, ImpairmentParams, NetemParams, Overlay, Owner, Scope, TimeFault, TlsCase, TrafficMatch, TunnelRef } from '../api/generated/model';
-import { durationMs, formatDuration, instantText } from './format';
+import { durationMs, formatCount, formatDuration, instantText } from './format';
 import { profileTitle } from './profileNames';
+
+/**
+ * A fault's counter in the unit it counts: a time fault counts the answers of the NTP server it shaped, every other fault the
+ * packets it affected (`counters.packets` holds both; the kind of a profile or a configured fault is not `time`).
+ */
+export function counterText(kind: string | undefined, n: number, packets = 'pkts'): string {
+  if (kind === 'time') return `${formatCount(n)} ${n === 1 ? 'answer' : 'answers'}`;
+  return `${formatCount(n)} ${packets}`;
+}
 
 function pct(p: string | undefined): string {
   return p ? p.replace('%', ' %') : '';

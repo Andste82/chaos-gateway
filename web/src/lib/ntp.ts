@@ -11,7 +11,7 @@ const answerLabels: Record<string, string> = {
   origin_mismatch: 'wrong origin timestamp',
   zero_transmit: 'transmit timestamp zero',
   wrong_mode: 'wrong mode',
-  dropped: 'dropped (over the rate limit of 16 per second)',
+  dropped: 'dropped (over the rate limit of 16 per second, logged at most once a second)',
 };
 
 /** How the server answered, in words; a connection or query with NTS has no answer to name. */

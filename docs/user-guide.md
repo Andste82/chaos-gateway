@@ -119,7 +119,10 @@ overlays. A fault that matched no packet shows 0 affected packets: that is how y
 
 **Profiles** has a card per profile (built in: Normal, LTE, Bad LTE, Satellite, Congested WiFi, Offline, Intermittent, DNS broken, TLS
 broken, and the eight time presets) with its parameters and where it is active. Activate one on a scope with a duration, or make your own (name, description,
-impairment and MTU parts) through the draft and preview. One profile can be active per scope. **Measure with probe** on a card checks on a
+impairment and MTU parts; through the API a profile can also carry a DNS, TLS or time part, which the profile editor keeps but does not edit).
+The names of the built-in profiles are reserved. One profile can be active per scope, so activating a profile replaces the one that is active there (a time
+preset on a device replaces an LTE profile of that device: for both, add a time fault of its own next to the profile, see *Time faults* below).
+A profile with a time part is activated on a device, a group or a network only: on *Everything* or a remote network the activation is refused. **Measure with probe** on a card checks on a
 probe that the link really behaves like the profile says ([Diagnostics and probes](#diagnostics-and-probes)). The built-in values are
 starting points, not measurements of a particular network.
 
@@ -155,16 +158,28 @@ server** (`chaosgw ntp`, in the service namespace like the DNS proxy) and answer
 **Normal operation.** The server serves the clock of the gateway's host: stratum 2, leap indicator 0, receive time from the kernel's
 time stamp of the packet. While the host clock is not synchronized (the preflight check `host.clock` warns, and the health component
 `ntp` says so) the server honestly answers stratum 16 with leap indicator 3, which a correct client ignores (a fault with an absolute
-time does not use the host clock and is served as it is): start `chrony` or
+time does not use the host clock and is served as it is; the invalid answers, which carry a time too, claim no synchronization either while the host clock is wrong): start `chrony` or
 `systemd-timesyncd` on the host. A test network has the time service on by default, and DHCP hands out the gateway's address as the
-NTP server (option 42) unless the network names other servers. Control and private modes (6 and 7) get no answer, no reply is larger
-than its query, and a device that asks more than 16 times a second is not answered beyond that.
+NTP server (option 42) unless the network names other servers, its time service is off, or the gateway has no service namespace (the health component `ntp`
+says `disabled`). Control and private modes (6 and 7) get no answer, no reply is larger
+than its query, and a device that asks more than 16 times a second is not answered beyond that. The server answers only sources inside the
+address range of a test network (the networks behind its routers and the routes of WireGuard peers included): a datagram with another source address
+gets no answer and no entry in the log. A WireGuard client gets no DHCP, and the group *Time (NTP)* of the network edit form exists for LAN networks only: point the
+client at the gateway's tunnel address, or activate a time fault for it, which redirects its UDP 123 traffic to the server.
 
 **Hardcoded servers.** Most firmware has its NTP server compiled in. A network setting **Redirect NTP to other servers to the gateway's
 NTP server** (Networks, Edit, group *Time (NTP)*) sends such queries to the gateway's server, and the reply leaves with the address
 and port of the server the device asked. A time fault redirects the NTP traffic of its target by itself, whether or not the network
 setting is on, because a fault that silently misses the device would let a test pass that should fail. Where the redirect cannot work
 (the service namespace is gone) the traffic fails closed: the real server is not reached.
+
+**A server inside the device's own network is out of reach.** The gateway redirects the queries that pass through it. A query to a server in the
+same segment as the device (the network and the networks behind its routers: a lab NTP server at 10.10.0.5 for a device in 10.10.0.0/24) is
+switched or routed directly and never meets the redirect, as with the hardcoded DNS redirect. A time fault for that server, or a time fault for every server
+of a device that gets such a server from DHCP, does not change what the device sees; the fault still shows as in force. The preview warns
+(`ntp_server_inside`) when a fault names a destination inside the network's segments or applies to a network whose DHCP hands out an NTP server inside them,
+and `explain` reports no time fault for such a destination. Put the lab server in another network, or point the device at the gateway. The gateway's own address of the
+network is not affected: it is served, with the fault.
 
 **Time faults.** **Add fault**, kind *Time (NTP)*, target a device, group or network (not *Everything*, not a remote network).
 Choose what the server answers:
@@ -175,13 +190,15 @@ Choose what the server answers:
 | unsynchronized | leap indicator 3, stratum 16 | a correct client ignores the server; a careless one takes its time |
 | kiss-of-death | stratum 0 with the code `RATE` (poll less often), `DENY` or `RSTR` (stop using the server, as RFC 5905 says) | the back-off of the client; chrony reacts to `RATE` only and treats the other codes as an unsynchronized answer |
 | silence | no answer; the query is counted | no time at boot, fallback servers, retry back-off (a drop rule would not count the queries and would hit more than NTP) |
-| an invalid answer | the origin timestamp is wrong, the transmit timestamp is zero, or the mode is not 4 | a correct client discards it; a careless one is open to spoofing |
+| an invalid answer | the origin timestamp is wrong, the transmit timestamp is zero, or the mode is not 4 (on a host whose clock is not synchronized: leap indicator 3 and stratum 16 as well, unless the fault has an absolute time) | a correct client discards it; a careless one is open to spoofing |
 
 The **presets** are +1 year, -1 day, 1970, 2038 (five minutes before a signed 32-bit `time_t` overflows), NTP era 1 (five minutes before
 the 32-bit seconds of NTP roll over), leap second (five minutes before the end of 2016-12-31 with a second inserted), unsynchronized and
 kiss-of-death; the same eight are the built-in profiles `time-plus-1y`, `time-minus-1d`, `time-1970`, `time-2038`, `time-ntp-era-1`,
 `time-leap-second`, `time-unsynchronized` and `time-kiss-of-death` (the profile editor of the web app keeps a time part but does not edit one: a
-profile of your own with a time part is made with the API). A preview sentence under the form says what it will do. The traffic
+profile of your own with a time part is made with the API). A preset activated as a profile follows the rules of profiles: it takes the profile slot of its
+scope (an active LTE profile of that device is replaced; to keep both, use the time fault form or `chaosctl time set`, which add a time overlay next to the
+profile) and it is activated on a device, a group or a network, not on *Everything* or a remote network. A preview sentence under the form says what it will do. The traffic
 fields name the **server the device asked** (an address, a prefix or a host name; ports default to 123): then only queries to that server get
 the wrong time ("only `time.google.com` is wrong"), and the other servers of the device are answered correctly. Without it the fault applies
 to every server the device asks. The ports 53, 67 and 68 are refused.
@@ -201,7 +218,8 @@ Things to know:
 - **The Time panel** of the device page shows the last query (when, how it was answered), the server asked where the gateway knows it (an
   address when a fault names one or the gateway sees the flow; "an external server (redirected)" for a hardcoded server nothing settles), the time served and its
   difference from the correct one, the time faults in force for the device, the counters (queries, left unanswered by a fault, over the
-  rate limit), a note when the device tried NTS, and the last queries. It reads the state every five seconds. The event *NTP answered* (orange on the Overview) marks an answer that a time fault
+  rate limit), a note when the device tried NTS, and the last queries. The count over the rate limit is a sample: the server records at most one dropped query a second per device, so the number is not
+that of the dropped queries. While the list of profiles is not loaded the panel says that the active time faults are not known, as an activated profile is a time fault only if it has a time part. It reads the state every five seconds. The event *NTP answered* (orange on the Overview) marks an answer that a time fault
   shaped; the server reports at most one per device and fault every ten seconds.
 - **A scenario** has the step type *time* (the same fields as the dialog), the wait *NTP query seen* and the check *NTP queried*: the
   device asked the server in the window, whatever the answer was. Whether the device took the time is not visible on the network;

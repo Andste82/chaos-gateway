@@ -93,11 +93,16 @@ func TestTheReferenceIdIsTheGatewayOfTheNetworkOfTheClient(t *testing.T) {
 	}
 	s, _ := newServer(t, nil)
 	s.SetConfig(&c)
-	for from, want := range map[string][4]byte{"10.20.0.7": {10, 20, 0, 1}, "10.30.0.200": {10, 30, 0, 1}, "192.168.50.9": {192, 168, 50, 1}, "172.16.0.5": {}} {
+	for from, want := range map[string][4]byte{"10.20.0.7": {10, 20, 0, 1}, "10.30.0.200": {10, 30, 0, 1}, "192.168.50.9": {192, 168, 50, 1}} {
 		p, _, ok := ask(t, s, netip.MustParseAddr(from), Port)
 		if !ok || p.RefID != want {
 			t.Errorf("%s: reference id %v, want %v (answered %v)", from, p.RefID, want, ok)
 		}
+	}
+	// a client of no network is not served; its reference id would be zero (several networks with different gateways)
+	outside := netip.MustParseAddr("172.16.0.5")
+	if _, _, ok := ask(t, s, outside, Port); ok || s.parsed.Load().gatewayOf(outside) != [4]byte{} {
+		t.Errorf("a client outside every network: answered %v", ok)
 	}
 }
 
@@ -115,11 +120,16 @@ func TestTheReferenceIdOfAClientBehindARouterIsTheGatewayOfItsNetwork(t *testing
 	}
 	s, _ := newServer(t, nil)
 	s.SetConfig(&c)
-	for from, want := range map[string][4]byte{"10.30.0.7": {10, 20, 0, 1}, "10.30.0.200": {10, 40, 0, 1}, "10.40.0.9": {10, 40, 0, 1}, "172.16.0.5": {}} {
+	for from, want := range map[string][4]byte{"10.30.0.7": {10, 20, 0, 1}, "10.30.0.200": {10, 40, 0, 1}, "10.40.0.9": {10, 40, 0, 1}} {
 		p, _, ok := ask(t, s, netip.MustParseAddr(from), Port)
 		if !ok || p.RefID != want {
 			t.Errorf("%s: reference id %v, want %v (answered %v)", from, p.RefID, want, ok)
 		}
+	}
+	// a client of no network is not served; its reference id would be zero (several networks with different gateways)
+	outside := netip.MustParseAddr("172.16.0.5")
+	if _, _, ok := ask(t, s, outside, Port); ok || s.parsed.Load().gatewayOf(outside) != [4]byte{} {
+		t.Errorf("a client outside every network: answered %v", ok)
 	}
 }
 

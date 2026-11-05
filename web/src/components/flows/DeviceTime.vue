@@ -29,6 +29,8 @@ const ntp = useGetDeviceNtp(() => props.device.id, { query: { refetchInterval: 5
 const data = computed(() => ntp.data.value);
 const last = computed(() => data.value?.last_query);
 const faults = computed(() => activeTimeFaults(props.overlays, profiles.data.value ?? []));
+/** The activation of a profile is a time fault only if its profile has a time part: that is not known without the profile list. */
+const profilesKnown = computed(() => !!profiles.data.value);
 /** The fault that shaped the last answer, as the overlays name it (it may have been removed since). */
 const lastFault = computed(() => (last.value?.fault ? props.overlays.find((o) => o.id === last.value!.fault) : undefined));
 const recent = computed(() => (data.value?.recent ?? []).slice(0, 5));
@@ -41,7 +43,10 @@ const tones = { normal: '', fault: 'text-fault-text', block: 'text-block-text' }
     <LoadError v-if="ntp.error.value && !data" :error="ntp.error.value" what="The NTP queries are not loaded" :retry="ntp.refetch" />
     <p v-else-if="ntp.isPending.value && !data" class="m-0 text-sm text-text-2" role="status">Loading the NTP queries…</p>
     <template v-else-if="data">
-      <p v-if="!last" class="m-0 text-sm text-text-2" data-testid="device-ntp-empty">
+      <p v-if="!last && (data.nts_ke || data.dropped)" class="m-0 text-sm text-text-2" data-testid="device-ntp-empty">
+        The NTP server has answered no query of {{ device.name }} yet, only the ones counted below.
+      </p>
+      <p v-else-if="!last" class="m-0 text-sm text-text-2" data-testid="device-ntp-empty">
         The NTP server has seen no query of {{ device.name }} yet. A device asks the gateway when its NTP server is the gateway (DHCP hands it out), or when its queries are redirected.
       </p>
       <dl v-else class="m-0 grid grid-cols-[130px_1fr] gap-x-4 gap-y-2 text-sm" data-testid="device-ntp">
@@ -73,8 +78,11 @@ const tones = { normal: '', fault: 'text-fault-text', block: 'text-block-text' }
 
       <div class="text-[13px] text-text-2" data-testid="device-ntp-active">
         <span class="mr-2">Active time faults</span>
-        <span v-if="faults.length === 0" class="text-text-3" data-testid="device-ntp-active-none">none: the server answers with the correct time</span>
-        <span v-else class="inline-flex flex-wrap gap-1.5">
+        <span v-if="!profilesKnown" class="text-text-3" role="status" data-testid="device-ntp-active-unknown">{{
+          profiles.error.value ? 'not known: the profiles are not loaded, so the activation of a time profile is not recognized' : 'loading the profiles…'
+        }}</span>
+        <span v-if="faults.length === 0 && profilesKnown" class="text-text-3" data-testid="device-ntp-active-none">none: the server answers with the correct time</span>
+        <span v-else-if="faults.length > 0" class="inline-flex flex-wrap gap-1.5">
           <template v-for="o in faults" :key="o.id">
             <FaultChip v-for="c in overlayChips(o, names.profile, names)" :key="`${o.id}/${c}`" :text="c" />
           </template>
@@ -82,7 +90,7 @@ const tones = { normal: '', fault: 'text-fault-text', block: 'text-block-text' }
       </div>
       <p v-if="data.queries > 0 || data.silenced || data.dropped" class="m-0 text-xs text-text-3" data-testid="device-ntp-counters">
         {{ formatCount(data.queries) }} {{ data.queries === 1 ? 'query' : 'queries' }}<template v-if="data.silenced"> · {{ formatCount(data.silenced) }} left unanswered by a fault</template
-        ><template v-if="data.dropped"> · {{ formatCount(data.dropped) }} over the rate limit</template>
+        ><template v-if="data.dropped"> · {{ formatCount(data.dropped) }} dropped (sampled, at most one a second)</template>
       </p>
       <p v-if="nts" class="m-0 text-[13px] text-block-text" data-testid="device-ntp-nts">{{ nts }}</p>
 

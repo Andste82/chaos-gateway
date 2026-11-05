@@ -27,8 +27,8 @@ import SectionCard from '../components/ui/SectionCard.vue';
 import TestCaLink from '../components/ui/TestCaLink.vue';
 import { firstError, useActiveConfig, useConfigFaults, useGatewayState, useNames, useOverlays } from '../composables/gateway';
 import { useNow } from '../composables/useNow';
-import { describeMatch, describeScope, describeTunnel, faultChips, overlayChips } from '../lib/faults';
-import { formatCount, formatRemaining } from '../lib/format';
+import { counterText, describeMatch, describeScope, describeTunnel, faultChips, overlayChips } from '../lib/faults';
+import { formatRemaining } from '../lib/format';
 import { profileTitle } from '../lib/profiles';
 import { useApiPanelStore, useApiScreen } from '../stores/apiPanel';
 import { useConnectionStore } from '../stores/connection';
@@ -336,7 +336,7 @@ const context = computed(() => `The most specific fault wins · an overlay beats
             {{ linuxOpen === rowKey(r) ? 'Hide Linux view' : 'Show Linux view (classes and queues)' }}
           </DisclosureButton>
         </span>
-        <span role="cell" class="mono text-[13px] text-text-2">{{ r.packets !== undefined ? `${formatCount(r.packets)} pkts` : '—' }}</span>
+        <span role="cell" class="mono text-[13px] text-text-2">{{ r.packets !== undefined ? counterText(r.family, r.packets) : '—' }}</span>
         <span role="cell" class="mono text-[13px]" :class="r.expiresAt ? 'text-fault-text' : 'text-text-2'" data-testid="fault-expiry">{{
           r.expiresAt ? formatRemaining(new Date(r.expiresAt).getTime() - now.getTime()) : r.layer === 'config' ? 'configured' : 'no TTL'
         }}</span>

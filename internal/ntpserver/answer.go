@@ -1,6 +1,7 @@
 package ntpserver
 
 import (
+	"math"
 	"net/netip"
 	"time"
 
@@ -18,8 +19,9 @@ import (
 //	zero_transmit    a transmit timestamp of zero
 //	wrong_mode       the mode of the answer is 5, not 4
 //
-// A normal answer is also stratum 16 while the host clock is not synchronized (the server never claims a time it does not
-// have), unless the fault sets the time by itself (absolute).
+// A normal answer, and an origin_mismatch, zero_transmit or wrong_mode one, is also leap indicator 3 and stratum 16 while
+// the host clock is not synchronized (the server never claims a time it does not have), unless the fault sets the time
+// by itself (absolute); the invalid part of the three kinds applies on top.
 
 const (
 	// answerStratum is the stratum of a server that gets its time from the host's clock, which a time source disciplines
@@ -42,6 +44,18 @@ type result struct {
 	offsetMs int64
 }
 
+// referenceOf is the reference timestamp of an answer: the time the clock was last set, the whole second the answer's
+// receive time lies in. The seconds wrap at the end of an era, and the one second that wraps to 0 would read "not set"
+// (RFC 5905 §6) next to a synchronized stratum, so that second shows the one before it (the last second of the era
+// before, which a client resolves to a time just in the past, as a reference time is).
+func referenceOf(servedRx time.Time) Timestamp {
+	ts := TimestampOf(time.Unix(servedRx.Unix(), 0))
+	if ts == 0 {
+		return Timestamp(math.MaxUint32) << 32
+	}
+	return ts
+}
+
 // answerTo builds the answer to a client query q that arrived at host time rx and is answered now (tx). f is the time
 // fault that decides, nil for none.
 func (s *Server) answerTo(q Packet, f *parsedFault, cfg *parsedConfig, client netip.Addr, rx, tx time.Time) result {
@@ -54,8 +68,10 @@ func (s *Server) answerTo(q Packet, f *parsedFault, cfg *parsedConfig, client ne
 	}
 	sync := s.opt.Sync.State()
 	// the host's clock is not to be trusted, and what a fault serves on top of it is not either; a fault that sets the
-	// time itself does not depend on it
-	if kind == model.NtpQueryLogEntryAnswerNormal && !sync.Synchronized && (f == nil || f.absolute.IsZero()) {
+	// time itself does not depend on it. The kinds that break one part of the answer (origin_mismatch, zero_transmit,
+	// wrong_mode) claim no synchronization either, and so keep their kind and break their part on top of it.
+	unsynced := !sync.Synchronized && (f == nil || f.absolute.IsZero())
+	if kind == model.NtpQueryLogEntryAnswerNormal && unsynced {
 		kind = model.NtpQueryLogEntryAnswerUnsynchronized
 	}
 	servedRx, servedTx := f.serve(rx), f.serve(tx)
@@ -68,14 +84,19 @@ func (s *Server) answerTo(q Packet, f *parsedFault, cfg *parsedConfig, client ne
 		RootDelay:      shortFormat(sync.EstError),
 		RootDispersion: shortFormat(sync.MaxError),
 		RefID:          cfg.gatewayOf(client),
-		// the time the clock was last set: the whole second the answer's receive time lies in
-		Reference: TimestampOf(time.Unix(servedRx.Unix(), 0)),
-		Origin:    q.Transmit,
-		Receive:   TimestampOf(servedRx),
-		Transmit:  TimestampOf(servedTx),
+		Reference:      referenceOf(servedRx),
+		Origin:         q.Transmit,
+		Receive:        TimestampOf(servedRx),
+		Transmit:       TimestampOf(servedTx),
 	}
 	if f != nil && kind == model.NtpQueryLogEntryAnswerNormal {
 		p.Leap = f.leap
+	}
+	switch kind {
+	case model.NtpQueryLogEntryAnswerOriginMismatch, model.NtpQueryLogEntryAnswerZeroTransmit, model.NtpQueryLogEntryAnswerWrongMode:
+		if unsynced {
+			p.Leap, p.Stratum, p.RefID = LeapUnsynchronized, invalidStratum, [4]byte{}
+		}
 	}
 	switch kind {
 	case model.NtpQueryLogEntryAnswerUnsynchronized:

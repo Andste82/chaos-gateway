@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Overlay } from '../api/generated/model';
-import { describeMatch, describeOwner, describeScope, faultChips, impairmentCombines, impairmentOf, overlayChips, timeChips, tlsChips, withImpairment } from './faults';
+import { counterText, describeMatch, describeOwner, describeScope, faultChips, impairmentCombines, impairmentOf, overlayChips, timeChips, tlsChips, withImpairment } from './faults';
 
 const names = { device: (id: string) => ({ d1: 'ESP32-42' })[id], network: (id: string) => ({ n1: 'IoT' })[id], group: () => 'Sensors' };
 
@@ -177,5 +177,16 @@ describe('time fault chips (M34)', () => {
     const base = { id: 'o', owner: { type: 'user', id: 'admin' }, created_at: '', updated_at: '', generation: 1, kind: 'time' } as const;
     expect(overlayChips({ ...base, time: { offset: '+400d' } } as Overlay)).toEqual(['Time +400d']);
     expect(overlayChips({ ...base } as Overlay)).toEqual(['Time fault']);
+  });
+});
+
+describe('the counter of a fault', () => {
+  it('counts the answers of a time fault and the packets of every other fault', () => {
+    expect(counterText('time', 9)).toBe('9 answers');
+    expect(counterText('time', 1)).toBe('1 answer');
+    expect(counterText('time', 18342)).toBe('18 342 answers');
+    expect(counterText('fault', 18342)).toBe('18 342 pkts');
+    expect(counterText(undefined, 0, 'packets')).toBe('0 packets');
+    expect(counterText('time', 0, 'packets')).toBe('0 answers');
   });
 });

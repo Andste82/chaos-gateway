@@ -238,8 +238,10 @@ Devices take their time from NTP, and a wrong time breaks them in ways that are 
 has already expired, a schedule that fires twice. The gateway's NTP server answers the device's queries instead of the real server
 (`offset`, `absolute`, `skew`, `leap`, `unsynchronized`, `kiss-of-death`, `silence` and invalid answers), and the eight presets
 (`time-plus-1y`, `time-minus-1d`, `time-1970`, `time-2038`, `time-ntp-era-1`, `time-leap-second`, `time-unsynchronized`, `time-kiss-of-death`)
-are built-in profiles. A fault for one device does not touch the device next to it, and the NTP traffic of its target is redirected to the
-server even when the device has a hardcoded server (an NTS client is the exception: it gets no time from the gateway).
+are built-in profiles (a profile takes the profile slot of its scope, so a preset on a device replaces an LTE profile of it: to have both, use `chaosctl time set`, which adds a
+time overlay; a profile with a time part is activated on a device, a group or a network, not on *Everything*). A fault for one device does not touch the device next to it, and the NTP traffic of its target is redirected to the
+server even when the device has a hardcoded server (an NTS client is the exception: it gets no time from the gateway; so is a server in the device's own network segments, which is switched directly and
+never redirected: the preview warns with `ntp_server_inside`).
 
 ```sh run
 chaosctl time set offset --offset +400d --device esp32-42 --ttl 10m
@@ -290,7 +292,7 @@ checks:
 
 `zero_hit: error` makes the run fail when the time fault shaped no answer: the device does not ask the gateway (DHCP gives it the
 gateway as NTP server unless the network names others, and a time fault redirects the queries of a hardcoded server by itself), or it uses
-NTS. To test only one server ("`time.google.com` is wrong, the fallback is right"), name it with `--to`; the gateway gives each such
+NTS, or the server it asks lies in its own network segments (`ntp_server_inside`); a WireGuard client has no DHCP and must be pointed at the gateway's tunnel address. To test only one server ("`time.google.com` is wrong, the fallback is right"), name it with `--to`; the gateway gives each such
 server a port of its own, up to 32 per gateway. A delayed or one-way slow NTP path is not a time fault but a latency fault on UDP
 port 123 with a delay in one direction only (the `upload` set of a fault, in the web app or the API), which shifts the offset a client
 measures by half of the difference between the two directions.

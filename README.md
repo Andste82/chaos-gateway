@@ -86,7 +86,7 @@ Next: the [user guide](docs/user-guide.md) walks through faults, scenarios and c
 
 ## Limits
 
-Test networks are IPv4 only; there are no VLANs yet, time faults reach a device only through plain NTP (not NTS, HTTP `Date` headers or a device's own clock), and faults do not apply to connections that reach a
+Test networks are IPv4 only; there are no VLANs yet, time faults reach a device only through plain NTP (not NTS, HTTP `Date` headers or a device's own clock) and not an NTP server inside the device's own network segments, and faults do not apply to connections that reach a
 device through a port forward. The performance targets for a Raspberry Pi are not measured on real hardware yet
 ([#151](https://github.com/Andste82/chaos-gateway/issues/151)). The interception proxy has no supported screen in the web app yet; use the API or
 `chaosctl`.

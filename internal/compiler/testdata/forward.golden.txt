@@ -16,10 +16,10 @@ f1000000-0000-4000-8000-000000000001  web  tcp/8080-8080 on wan0 (uplink) -> 10.
   meta iifname br-iot ip daddr 10.10.0.1 tcp dport 53 dnat ip to 169.254.100.2:53
   meta iifname br-lab ip daddr 10.20.0.1 udp dport 53 dnat ip to 169.254.100.2:53
   meta iifname br-lab ip daddr 10.20.0.1 tcp dport 53 dnat ip to 169.254.100.2:53
-  meta iifname br-iot ip daddr 10.10.0.1 udp dport 123 dnat ip to 169.254.100.2:123
-  meta iifname br-iot ip daddr 10.10.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460
-  meta iifname br-lab ip daddr 10.20.0.1 udp dport 123 dnat ip to 169.254.100.2:123
-  meta iifname br-lab ip daddr 10.20.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460
+  meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr 10.10.0.1 udp dport 123 dnat ip to 169.254.100.2:123
+  meta iifname br-iot ip saddr { 10.10.0.0/24, 10.30.0.0/24 } ip daddr 10.10.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460
+  meta iifname br-lab ip saddr 10.20.0.0/24 ip daddr 10.20.0.1 udp dport 123 dnat ip to 169.254.100.2:123
+  meta iifname br-lab ip saddr 10.20.0.0/24 ip daddr 10.20.0.1 tcp dport 4460 dnat ip to 169.254.100.2:4460
   meta iifname wan0 meta nfproto ipv4 meta l4proto tcp fib daddr . iif type local th dport 2222 counter "fwd_74f89ac51f" last
   meta iifname mgmt0 meta nfproto ipv4 meta l4proto tcp fib daddr . iif type local th dport 8443 ct mark set ct mark | 0x400000 counter "fwd_e1e1f5dfd8" last
   meta iifname wan0 meta nfproto ipv4 meta l4proto udp fib daddr . iif type local th dport 8000-8003 counter "fwd_adc7fa6ad9" last
@@ -68,8 +68,8 @@ set asrc_be61152c2009e2fc3b2690cd_8743d6 { 10.20.0.0/24 }
   meta iifname wan0 meta oifname @ifs_lan_bf4feb ct status dnat meta l4proto tcp ct original proto-dst 8080 accept
   meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 udp dport 53 accept
   meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 tcp dport 53 accept
-  meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 udp dport 123 accept
-  meta iifname @ifs_cg_bf4feb meta oifname svc0 ip daddr 169.254.100.2 tcp dport 4460 accept
+  meta iifname @ifs_cg_bf4feb meta oifname svc0 ip saddr { 10.10.0.0/24, 10.20.0.0/24, 10.30.0.0/24 } ip daddr 169.254.100.2 udp dport 123 accept
+  meta iifname @ifs_cg_bf4feb meta oifname svc0 ip saddr { 10.10.0.0/24, 10.20.0.0/24, 10.30.0.0/24 } ip daddr 169.254.100.2 tcp dport 4460 accept
   meta iifname svc0 meta oifname wan0 accept
   meta iifname svc0 meta oifname @ifs_test_bf4feb accept
   meta iifname @ifs_lan_bf4feb meta oifname wan0 accept

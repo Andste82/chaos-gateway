@@ -25,6 +25,9 @@ func (e *Engine) signal() {
 	}
 }
 
+// maxFailedRuns is the number of failed applies the loop remembers for the NTP flows of the next success.
+const maxFailedRuns = 4
+
 // runApplyLoop compiles the latest desired state, applies it and verifies it. Whatever the state
 // owner decided while an apply was running is contained in the next one: the loop always takes the
 // newest desired state, so a burst of changes costs one or two applies, not one per change.
@@ -51,6 +54,11 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 	// the access rules of the next apply are compared with it to find the connections a rule cuts
 	// (cut.go). Nil until the first apply of this process, which cuts nothing.
 	var verified *compiler.Target
+	// failedRuns are the targets of the (last few) full applies that failed since the last success: the nft transaction of one
+	// may have swapped the NAT rules of the NTP redirects before a later step or the verification failed, so the kernel ran
+	// redirects that verified does not know. The tracked NTP flows the next successful full apply deletes are those of all of
+	// them (ntpflows.go); the restore of the committed revision after a failed apply is such an apply.
+	var failedRuns []*compiler.Target
 	// cutStuck reports that the window of a cut could not be closed: until the chains are flushed,
 	// the cutting rules reset established connections. A full apply flushes them, an incremental one
 	// tries to close the window again.
@@ -202,6 +210,9 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			if err != nil {
 				e.cfg.Log.Warn("apply failed", "generation", d.Generation, "revision", d.Revision, "error", err)
 				last = nil
+				if !incremental {
+					failedRuns = append(failedRuns[max(0, len(failedRuns)-maxFailedRuns+1):], target)
+				}
 				flapT.stop()
 			} else {
 				last = &appliedState{d: d, target: target}
@@ -232,7 +243,7 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 				cut = e.cutExisting(ctx, verified, target)
 				// the flows of the clients keep the redirect they were first sent to; a change of the redirects of time faults
 				// would not reach a device that keeps its socket (ntpflows.go)
-				if n, nerr := e.dropNTPFlows(ctx, verified, target); nerr != nil {
+				if n, nerr := e.dropNTPFlows(ctx, verified, failedRuns, target); nerr != nil {
 					e.cfg.Log.Warn("deleting the tracked NTP flows failed: the redirects are in force, a device that keeps its socket may be served by the old ones for up to two minutes", "generation", d.Generation, "error", nerr)
 				} else if n > 0 {
 					e.cfg.Log.Info("the redirects of the NTP server changed: the tracked NTP flows were deleted", "generation", d.Generation, "flows", n)
@@ -246,6 +257,9 @@ func (e *Engine) runApplyLoop(ctx context.Context) error {
 			}
 			if err == nil {
 				verified = target
+				if !incremental {
+					failedRuns = nil
+				}
 			}
 			res := applyResult{d: d, target: target, err: err, took: took, dhcpErr: dhcpErr, plan: plan, cut: cut, cutStuck: cutStuck, started: picked, execWait: execWait}
 			if err == nil && incremental && last != nil {

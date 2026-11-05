@@ -62,7 +62,7 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   with a reason, or deferred to M38 (the preflight clauses of §3.3/§3.4 and the expiry warning of the installed certificate), see the verdict table. The five
   items the phase raised, P7-M27-01, -02, P7-M28-01, P7-M29-01 and -02, were decided by the maintainer on 2026-10-31 and are closed. **Phase 7 is closed on 2026-11-02 with the release of V1 (`v1.0.0`, `image.yml` run 41543627145).** No item of the phase is open. One CI item remains as maintenance after V1, not as scope of Phase 7: P7-CI-01 (three timing tests of the weekly emulated jobs, not caused by Phase 7; one green Weekly run of the two asked for); P7-CI-02 (a probe namespace seen by a test of another package) was closed on 2026-11-05 after 14 level 1 runs on `main` without the failure; P7-M27-05 (what the engine does when the active revision fails because the executor is not there) was decided by the maintainer on 2026-11-02 and is closed.
 - **M34** (NTP server and time faults, delivered in four stages, D37, branch `m34-ntp`): the questions the stages raise and that no later stage of M34 settles are under
-  [M34 open items](#m34-open-items) at the end of the file. Stage 1 (specification and domain) raised P34-01 to P34-03, stage 2 (server and wiring) P34-04 to P34-06 and stage 3 (scenarios, API reads and `chaosctl`) P34-07 and P34-08, and stage 4 (web app and documents) P34-09, and the first CI run of the level 1 tests P34-10. P34-01 to P34-09 were decided on 2026-11-05 (each keeps what the code does); P34-10 was decided by the maintainer the same day (the median). The PR #157 merged on 2026-11-05 with green CI.
+  [M34 open items](#m34-open-items) at the end of the file. Stage 1 (specification and domain) raised P34-01 to P34-03, stage 2 (server and wiring) P34-04 to P34-06 and stage 3 (scenarios, API reads and `chaosctl`) P34-07 and P34-08, and stage 4 (web app and documents) P34-09, and the first CI run of the level 1 tests P34-10, and the audit after stage 4 P34-11. P34-01 to P34-09 were decided on 2026-11-05 (each keeps what the code does); P34-10 was decided by the maintainer the same day (the median). The PR #157 merged on 2026-11-05 with green CI. P34-11 (WireGuard variants of two level 1 tests) is open for the maintainer.
 
 ## Phase 1 audit result
 
@@ -3637,3 +3637,16 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 - Decision: (a), chosen by the maintainer on 2026-11-05. The criterion "adds less than 1 ms" binds the median of the span from the kernel's stamp to the answer at a steady 5,000 queries per second (level 1) and, for the server's own work from the read to the reply, the median and the 99th percentile (level 0, `TestBuildingAnAnswerTakesLessThanAMillisecond`, now 1 ms at the 99th percentile where it had 5 ms). The 99th percentile of the whole span is recorded in the measurement record without a bound. Plan §3.10 and the acceptance map in `docs/development.md` say so.
 - Needs maintainer: no (decided 2026-11-05)
 - Effort: S
+
+### P34-11 Should the level 1 tests for a device-target time fault and a device that keeps its socket also run over WireGuard
+
+- Status: open
+- Severity: minor
+- Reason: needs-decision. The audit after stage 4 found that two level 1 tests of M34 have no WireGuard variant: the time fault whose target is a device (`TestAnOffsetShiftsOnlyTheAnswersOfItsDeviceAndEndsWithTheOverlayOnTheRealKernel`) and the device that keeps its socket (`TestADeviceThatKeepsItsSocketIsReachedByATimeFaultAndReleasedWhenItEndsOnTheRealKernel`, the engine deletes the tracked NTP flows when the redirects change). A WireGuard client has its own interface, its own covers and its own redirect rules, so the attachment matrix of §4.2 would ask for both. The existing tests cover a WireGuard network as the target (`TestAWireGuardClientIsServedLikeADeviceAndAnUploadLatencyShiftsItsOffsetByHalfOnTheRealKernel`, `TestAWireGuardClientAskingAHardcodedServerIsServedTheFaultFromTheAskedServersAddressOnTheRealKernel`) and a fresh socket per query.
+- Evidence: `internal/api/e2e_ntpfaults_test.go`, the list `M34_LEVEL1` of `.github/level1-tests.env`, the acceptance map of M34 in `docs/development.md`.
+- Task: decide whether the two WireGuard variants are written now.
+- Options: (a) add the two variants now (about 3 hours of CI per cycle); (b) leave it: the existing tests cover a WireGuard network target and a fresh socket per query.
+- Recommendation: (b) until a regression shows.
+- Acceptance: for (a) two level 1 tests in `M34_LEVEL1` that fail on the old behaviour and pass in CI; for (b) the acceptance map says "open: P34-11" until the maintainer decides.
+- Needs maintainer: yes
+- Effort: M for (a), none for (b)

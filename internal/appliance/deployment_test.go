@@ -557,7 +557,7 @@ func deployment(t *testing.T, rel appliance.Release, two bool, imageTar string) 
 
 	// ---- the holder of the service namespace (M6b-10, three ports)
 	if full {
-		holderPIDFileReusedByAnotherProcess(t, ctx, vm, compose, tag, must, output)
+		holderPIDFileReusedByAnotherProcess(t, ctx, vm, lease, compose, tag, must, output)
 	}
 
 	// ---- a reboot: Docker brings the containers back; the gateway rebuilds the test network from the confirmed revision
@@ -720,8 +720,8 @@ func deployment(t *testing.T, rel appliance.Release, two bool, imageTar string) 
 
 // holderPIDFileReusedByAnotherProcess is the test of M6b-10 on the real stack: the holder of the service namespace is stopped, its PID
 // file names another real container process (the PID was reused, the inode is that of the old holder's namespace), and the executor
-// refuses to attach that process's namespace; the next holder heals it.
-func holderPIDFileReusedByAnotherProcess(t *testing.T, ctx context.Context, vm *appliance.VM, compose, tag string, must func(string) string, output func(string) string) {
+// refuses to attach that process's namespace; the next holder heals it, and the NTP container serves from the namespace of that holder.
+func holderPIDFileReusedByAnotherProcess(t *testing.T, ctx context.Context, vm *appliance.VM, lease *device, compose, tag string, must func(string) string, output func(string) string) {
 	t.Helper()
 	nsInode := func(path string) string {
 		return strings.TrimSpace(output("sudo stat -L -c %i " + path))
@@ -762,6 +762,38 @@ func holderPIDFileReusedByAnotherProcess(t *testing.T, ctx context.Context, vm *
 		pid := strings.Fields(output("sudo docker run --rm --user 0:0 --entrypoint cat -v chaosgw_chaosgw-svcns:/p:ro " + tag + " /p/pid"))
 		return len(pid) == 2 && nsInode("/run/netns/cgsvc") == pid[1] && strings.Contains(output("sudo ip -o link show svc0"), "svc0")
 	})
+	// "running" is also what a container is between two restarts of a loop (`chaosgw ntp` exits with code 3 when its namespace is
+	// not the holder's), and one that kept serving in the old namespace is running, too: the server in the new namespace answers
+	// the device's query, and says what the VM's own clock says (the kernel's state that systemd reports, which the server reads
+	// through adjtimex): a synchronized clock at stratum 2, one that is not at stratum 16 with leap indicator 3
+	synced := func() string { return strings.TrimSpace(output("timedatectl show -p NTPSynchronized --value")) }
+	var mode, stratum, leap int
+	var delta float64
+	var before string
+	waitFor(t, 3*time.Minute, "the NTP server to answer from the namespace of the new holder", func() bool {
+		before = synced()
+		m, s, l, d, _, err := lease.ntp(appliance.GatewayLAN)
+		if err != nil || m != 4 || before != synced() { // the clock changed state while it was asked: ask again
+			return false
+		}
+		mode, stratum, leap, delta = m, s, l, d
+		return true
+	})
+	if delta < -5 || delta > 5 {
+		t.Errorf("the NTP server after the holder changed is %.3f s from the clock of the host (mode %d)", delta, mode)
+	}
+	switch before {
+	case "no":
+		if stratum != 16 || leap != 3 {
+			t.Errorf("the VM's clock is not synchronized and the NTP server answered stratum %d, leap indicator %d, want 16 and 3", stratum, leap)
+		}
+	case "yes":
+		if stratum == 16 || leap == 3 {
+			t.Errorf("the VM's clock is synchronized and the NTP server answered stratum %d, leap indicator %d", stratum, leap)
+		}
+	default:
+		t.Errorf("timedatectl reports NTPSynchronized %q", before)
+	}
 }
 
 // apiClient calls the API from inside the VM, on the management address (the container runs in the host's network namespace).

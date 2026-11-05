@@ -410,13 +410,13 @@ func TestBuildingAnAnswerTakesLessThanAMillisecond(t *testing.T) {
 		took = append(took, time.Since(start))
 	}
 	sort.Slice(took, func(i, j int) bool { return took[i] < took[j] })
-	// the typical answer takes microseconds: it must be under a millisecond whatever else runs. The tail is looser, because a
-	// garbage collection or another test's load on a shared machine may delay an answer. This is the server's own work only
-	// (the level 1 test adds the time the operating system takes to run the server once a datagram is in, which has a long tail).
+	// the server's own work (P34-10): under a millisecond at the median and at the 99th percentile (it takes some 2 and 54
+	// microseconds). The level 1 test adds the time the operating system takes to run the server once a datagram is in, which has a
+	// long tail, and asserts the median of that.
 	if median := took[len(took)/2]; median >= time.Millisecond {
 		t.Errorf("the median answer took %v, want less than a millisecond", median)
 	}
-	if worst := took[len(took)*99/100]; worst >= 5*time.Millisecond {
-		t.Errorf("99 percent of the answers took less than %v, want less than 5 ms", worst)
+	if worst := took[len(took)*99/100]; worst >= time.Millisecond {
+		t.Errorf("99 percent of the answers took less than %v, want less than 1 ms", worst)
 	}
 }

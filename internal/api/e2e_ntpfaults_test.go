@@ -348,7 +348,7 @@ func TestAKissOfDeathRATELengthensThePollIntervalOfChronyAndDENYIsNotTakenOnTheR
 
 	// RATE: the answer is stratum 0 with the code, and chrony asks less often than without it
 	rate := b.overlay(t, `{"target":{"device":"`+clientA+`"},"time":{"answer":"kiss_of_death","kiss_code":"RATE"}}`)
-	r := b.until(t, "the RATE answer", a, ntpGateway, func(r sntpReply) bool { return r.Replied && r.Stratum == 0 })
+	r := b.until(t, "the RATE answer", a, ntpGateway, func(r sntpReply) bool { return r.Replied && r.Stratum == 0 && r.RefIDASCII == "RATE" })
 	if r.RefIDASCII != "RATE" || r.Leap != 3 || r.Mode != 4 || r.StrictOK {
 		t.Errorf("a RATE answer: %+v", r)
 	}
@@ -364,7 +364,7 @@ func TestAKissOfDeathRATELengthensThePollIntervalOfChronyAndDENYIsNotTakenOnTheR
 
 	// DENY: chrony does not take the server (it asks on: only RATE changes its behaviour)
 	deny := b.overlay(t, `{"target":{"device":"`+clientA+`"},"time":{"answer":"kiss_of_death","kiss_code":"DENY"}}`)
-	r = b.until(t, "the DENY answer", a, ntpGateway, func(r sntpReply) bool { return r.Replied && r.Stratum == 0 })
+	r = b.until(t, "the DENY answer", a, ntpGateway, func(r sntpReply) bool { return r.Replied && r.Stratum == 0 && r.RefIDASCII == "DENY" })
 	if r.RefIDASCII != "DENY" || r.Leap != 3 {
 		t.Errorf("a DENY answer: %+v", r)
 	}
@@ -380,7 +380,7 @@ func TestAKissOfDeathRATELengthensThePollIntervalOfChronyAndDENYIsNotTakenOnTheR
 
 	// RSTR is a kiss code, too
 	rstr := b.overlay(t, `{"target":{"device":"`+clientA+`"},"time":{"answer":"kiss_of_death","kiss_code":"RSTR"}}`)
-	if r := b.until(t, "the RSTR answer", a, ntpGateway, func(r sntpReply) bool { return r.Replied && r.Stratum == 0 }); r.RefIDASCII != "RSTR" {
+	if r := b.until(t, "the RSTR answer", a, ntpGateway, func(r sntpReply) bool { return r.Replied && r.Stratum == 0 && r.RefIDASCII == "RSTR" }); r.RefIDASCII != "RSTR" {
 		t.Errorf("a RSTR answer: %+v", r)
 	}
 	b.remove(t, rstr)
@@ -942,7 +942,7 @@ func TestAScenarioWithATimeStepAWaitForTheQueryAndTheCheckSeesTheQueryOfARealCli
 	body := inlineRun("time-wait", iotTarget,
 		step("shift", "0s", "time", map[string]any{"offset": "+400d"}),
 		step("polled", "10s", "wait", map[string]any{"for": "ntp_query_seen", "timeout": "90s"}),
-		step("end", "3s", "restore", true),
+		step("end", "14s", "restore", true), // the offsets are those of the timeline: after the wait, which holds it until the query
 	)
 	body["inline"].(map[string]any)["checks"] = []any{
 		map[string]any{"ntp_queried": map[string]any{}, "window": map[string]any{"from": "shift", "until": "end"}},

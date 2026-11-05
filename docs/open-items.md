@@ -60,9 +60,9 @@ This file holds the audits of the phases of `docs/plan.md` §5, what they left o
   2026-11-01 at `5d1ed45` by five reviewers. The result is in [Phase 7 audit result](#phase-7-audit-result), right before the Phase 7 open items: 12 items of major and 58 of
   minor severity, P7-AUDIT-01 to P7-AUDIT-70. The round after the audit closed them in the pull requests #135 to #139 (and the closure that records them): fixed with a test, fixed differently, accepted
   with a reason, or deferred to M38 (the preflight clauses of §3.3/§3.4 and the expiry warning of the installed certificate), see the verdict table. The five
-  items the phase raised, P7-M27-01, -02, P7-M28-01, P7-M29-01 and -02, were decided by the maintainer on 2026-10-31 and are closed. **Phase 7 is closed on 2026-11-02 with the release of V1 (`v1.0.0`, `image.yml` run 41543627145).** No item of the phase is open. Two CI items remain as maintenance after V1, not as scope of Phase 7: P7-CI-01 (three timing tests of the weekly emulated jobs, not caused by Phase 7) and P7-CI-02 (a probe namespace seen by a test of another package; watch the level 1 runs); P7-M27-05 (what the engine does when the active revision fails because the executor is not there) was decided by the maintainer on 2026-11-02 and is closed.
+  items the phase raised, P7-M27-01, -02, P7-M28-01, P7-M29-01 and -02, were decided by the maintainer on 2026-10-31 and are closed. **Phase 7 is closed on 2026-11-02 with the release of V1 (`v1.0.0`, `image.yml` run 41543627145).** No item of the phase is open. One CI item remains as maintenance after V1, not as scope of Phase 7: P7-CI-01 (three timing tests of the weekly emulated jobs, not caused by Phase 7; one green Weekly run of the two asked for); P7-CI-02 (a probe namespace seen by a test of another package) was closed on 2026-11-05 after 14 level 1 runs on `main` without the failure; P7-M27-05 (what the engine does when the active revision fails because the executor is not there) was decided by the maintainer on 2026-11-02 and is closed.
 - **M34** (NTP server and time faults, delivered in four stages, D37, branch `m34-ntp`): the questions the stages raise and that no later stage of M34 settles are under
-  [M34 open items](#m34-open-items) at the end of the file. Stage 1 (specification and domain) raised P34-01 to P34-03, stage 2 (server and wiring) P34-04 to P34-06 and stage 3 (scenarios, API reads and `chaosctl`) P34-07 and P34-08, and stage 4 (web app and documents) P34-09, and the first CI run of the level 1 tests P34-10, all open.
+  [M34 open items](#m34-open-items) at the end of the file. Stage 1 (specification and domain) raised P34-01 to P34-03, stage 2 (server and wiring) P34-04 to P34-06 and stage 3 (scenarios, API reads and `chaosctl`) P34-07 and P34-08, and stage 4 (web app and documents) P34-09, and the first CI run of the level 1 tests P34-10. P34-01 to P34-09 were decided on 2026-11-05 (each keeps what the code does); P34-10 stays open for the maintainer. The PR #157 merged on 2026-11-05 with green CI.
 
 ## Phase 1 audit result
 
@@ -3472,7 +3472,7 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 
 ### P7-CI-01 The weekly emulated level 1b jobs fail for three tests
 
-- Status: open (CI maintenance after V1, not scope of Phase 7; it does not block the release)
+- Status: open (CI maintenance after V1, not scope of Phase 7; it does not block the release). Fixed by the three commits 942f4dd, 6dbe2d5 and f9d1b1d; the Weekly run 41641083495 (2026-11-03, `067ee56`) is green in every job, the second green run in a row is still to come
 - Severity: minor
 - Reason: not caused by Phase 7, found while closing P7-AUDIT-58. The Weekly run 41314639507 (2026-11-01, on `c2a90c8`) passed the arm64 appliance job and failed both emulated level 1b jobs: `TestDNSQuerySeenDecidesForADeviceOnTheRealKernel` ("no device of the target asked for example.test in the window of 8s"; the same message failed the Weekly run 40177095678 of 2026-10-25, before Phase 7), and `TestADeviceFaultStaysAttachedAfterTheForcedNewIPOnTheRealKernel` and `TestAHostnameFaultStillActsAfterTheForcedNewIPWithoutANewQueryOnTheRealKernel` in the engine job (the engine log shows "an identity update failed: applying everything ... context canceled" after 14 seconds of a full apply under emulation). The tests pass in the VM job of CI (with KVM); the emulated machine has no KVM and is much slower, and each of the three has a window or a deadline that the slowness can miss (not measured; this is the reading of the logs). The weekly jobs are not a gate of the merge rule.
 - Evidence: Weekly runs 41314639507 and 40177095678, `internal/api/e2e_dns_test.go:511`, `internal/api/e2e_checks_test.go:306`, `internal/engine/integration_dhcpactions_test.go:324`.
@@ -3485,7 +3485,7 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 
 ### P7-CI-02 A probe namespace of another package makes the verify of an apply fail in level 1
 
-- Status: open (observation, CI maintenance after V1, not scope of Phase 7): changed on 2026-11-02 and waiting for more level 1 runs on `main`
+- Status: closed (2026-11-05): the acceptance is met. Since PR #142 (the CI run 41352829885 on `5d7d000`) 14 CI runs on `main` have run the level 1 job and none failed with `probes:` (the one red run, 41634224896 on `2f2f259`, failed in `level0` and its level 1 jobs were green).
 - Severity: minor
 - Reason: not a decision, found while closing P7-AUDIT-38. CI run 41344903641 (on `82486de`) failed the level 1 job with `apply verify: probes: cgp-3a1f7c52 is not wanted` in `TestADeviceFaultStaysAttachedAfterTheForcedNewIPOnTheRealKernel`, a test without probes; a run on `5d1ed45` had failed the same way. The executor reads `ip netns list` for the namespaces of probes whose pair is gone (`probeNSIsOrphan`), and that list is the container's, not the gateway namespace's. `testvm run` in the direct mode let `go test` start the packages at the same time, and several packages use the probe with the fixed id `3a1f7c52`, so a namespace that a test of another package was just making or deleting looked like a leftover. This is the likely cause, not a proved one: the logs of the packages have no common clock. PR #142 runs the packages one at a time (`-p 1`, the job takes about 70 minutes instead of 48, its timeout is 180). The first run after it, CI run 41352829885 on `5d7d000`, is green in every job (level 1 in 70 minutes, the VM in 131).
 - Evidence: CI runs 41344903641 and 41352829885, `internal/executor/probe.go` (`probeNSIsOrphan`), `tools/testvm/main.go`.
@@ -3500,7 +3500,7 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 
 ### P34-01 Does a time fault that names a destination beat a newer time fault of the same scope without one
 
-- Status: open
+- Status: decided (2026-11-05): (a), decided
 - Severity: minor
 - Reason: needs-decision. The normative precedence table of plan §2.4 gives both faults the same level (5 for a group, 7 for a network), so within one group or network the newer fault wins, whether or not it names a server. Stage 1 implements the table and corrected the spec text that said otherwise. On a device scope a fault that names a server does rank above one for every server (that is the device rule of the table). A tester who puts a fault for one server on a network and later a fault for all servers on the same network will see the second one win for the first server too.
 - Evidence: `docs/plan.md` §2.4 and §2.18, `internal/domain/resolve.go` (the time family), `internal/domain/timefault_test.go` (`TestOnAGroupAndOnANetworkTheNewerTimeFaultWinsWhetherOrNotItNamesAServer`, `TestATimeFaultForOneServerBeatsAFaultOfTheSameScopeForEveryServer`).
@@ -3508,12 +3508,13 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 - Options: (a) keep the table: newer wins within a level, whether or not a destination is named (what stage 1 does); (b) a fault that names a destination beats a newer one that names none within the same level; this deviates from the table and has to be applied to `Resolve` and `explain` and to `TimeCandidates` alike, and the table of §2.4 gets a note for this family.
 - Recommendation: (a): one rule for every family, and the tester sees the winner in the explain view; (b) only if testers are found to be surprised.
 - Acceptance: for (a) the text of §2.18 says the newer fault wins within a level; for (b) a domain test shows the destination fault winning on a group and on a network, in `Resolve`, `explain` and `TimeCandidates`.
-- Needs maintainer: yes
+- Decision: the table of plan §2.4 stays as it is for the family `time`: within a level the newer fault wins, whether or not it names a destination (D26: no explicit priorities, within a level the newer entry wins). One rule for every family, and the explain view names the winner. On a device scope a fault that names a server ranks above one for every server, which is the device rule of the table. Plan §2.18 says so ("Decisions of the first implementation").
+- Needs maintainer: no (decided 2026-11-05 on the maintainer's instruction to settle what the project context allows)
 - Effort: S for (a), M for (b)
 
 ### P34-02 Which ports does the validation refuse for a time fault
 
-- Status: open
+- Status: decided (2026-11-05): (a), decided
 - Severity: minor
 - Reason: needs-decision. A time fault may name a destination with ports, and the stage 2 compiler redirects that destination to the NTP server. If the destination named port 53, 67 or 68, the redirect would pull the device's DNS or DHCP traffic into the NTP server. Stage 1 therefore refuses the ports 53, 67 and 68 with `invalid_time_fault`. 51820 (WireGuard) and 4460 (NTS-KE, TCP) are not on the list, because that traffic is addressed to the gateway itself and not forwarded. The maintainer may want a different list, or free ports for tests.
 - Evidence: `internal/domain/timefault.go` (the list of refused ports), `internal/domain/timefault_test.go` (`TestATimeFaultThatIsNotValid`), `docs/plan.md` §2.18.
@@ -3521,12 +3522,13 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 - Options: (a) keep 53, 67 and 68 refused (what stage 1 does); (b) refuse also 51820 and 4460; (c) refuse none in the validation and let the stage 2 compiler leave these ports out of the redirect, so a test can use them as a destination.
 - Recommendation: (a): the redirect can never capture the device's DNS or DHCP, and the other two are not forwarded traffic.
 - Acceptance: the validation and the table of `invalid_time_fault` in `docs/development.md` name the same ports as the decision; for (c) the compiler test shows the excluded ports are not redirected.
-- Needs maintainer: yes
+- Decision: the ports 53, 67 and 68 stay refused with `invalid_time_fault`: the redirect can then never capture the device's DNS or DHCP. 51820 and 4460 are traffic to the gateway itself and are not forwarded, so they need no entry. Plan §2.18 names the list.
+- Needs maintainer: no (decided 2026-11-05 on the maintainer's instruction to settle what the project context allows)
 - Effort: S
 
 ### P34-03 What the activation of a profile with a time part does on a target that has no client addresses
 
-- Status: open
+- Status: decided (2026-11-05): (a), decided
 - Severity: minor
 - Reason: needs-decision. The resolution drops a time part from a target without client addresses (the global target and a remote network), because the NTP server tells the scope from the client address. Stage 1 refuses the activation of such a profile as a whole, with a message that names the cause. The other reading, activating the other parts and leaving the time part out with a warning, is equally consistent with the resolution. A stored activation that gains a time part later (the profile is edited while activated) has no revision-time check yet if the answer is to refuse.
 - Evidence: `internal/domain/timefault.go` (`timeTarget`, used by `internal/domain/overlay.go`), `internal/domain/timefault_scenario_test.go` (`TestTheActivationOfAProfileWithATimePartNeedsADeviceAGroupOrANetwork`).
@@ -3534,12 +3536,13 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 - Options: (a) refuse the activation as a whole (what stage 1 does): the tester never believes a time fault is active when it is not; (b) activate the other parts and leave the time part out with a warning in the response and in the explain view.
 - Recommendation: (a), the safest reading and the same reasoning as the fail-closed service table (risk 35); then a revision that adds a time part to a profile that is activated on such a target is refused too, which a later stage adds.
 - Acceptance: for (a) a test shows the refusal on the global target and on a remote network, and a revision that gives an activated profile a time part there is refused; for (b) a test shows the other parts active and the warning present.
-- Needs maintainer: yes
+- Decision: the activation of a profile with a time part on a target without client addresses (the global target, a remote network) is refused as a whole, as the fail-closed service table does (risk 35): the tester never believes that a time fault is active when it is not. One corner stays as a known limit: a profile that is edited while it is activated and gains a time part there keeps its other parts, and the time part is left out of the resolution (`timeScopeAllowed`); a run with that profile shows it by the zero-hit warning. A check at the revision of the profile is not built: the case needs a profile edited while it is activated on such a target, and the profile editor does not edit a time part (P34-09).
+- Needs maintainer: no (decided 2026-11-05 on the maintainer's instruction to settle what the project context allows)
 - Effort: S for (a), M for (b)
 
 ### P34-04 Does a fault with `absolute` answer stratum 16 when the host clock is not synchronized
 
-- Status: open
+- Status: decided (2026-11-05): (a), decided
 - Severity: minor
 - Reason: needs-decision. Plan §2.18 ("Honest when unsynchronized") names this question itself as open for the maintainer. When the host clock is not synchronized the server answers leap 3 and stratum 16 so that a client does not take an unsynchronized time for good. A fault with `absolute` sets the time by itself, so the time the client gets does not depend on the host clock. Stage 2 serves `absolute` as it is (stratum 2, leap 0): the tester asked for exactly that time, and the host clock is not part of it.
 - Evidence: `docs/plan.md` §2.18, `internal/ntpserver/answer.go` (the `f.absolute.IsZero()` exception), `internal/ntpserver/server_test.go` (`TestAnUnsynchronizedHostClockMakesTheServerAnswerStratum16`).
@@ -3547,12 +3550,13 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 - Options: (a) `absolute` is served as it is, whatever the host clock says (what stage 2 does); (b) `absolute` answers stratum 16 and leap 3 as well, so a client sees a clock that it must not use, also when the tester asked for a fixed time.
 - Recommendation: (a): the fault exists to give a device a chosen time, and a client that refuses the answer would make the fault useless on a host that has no time source; the health report and the preflight check `host.clock` still say that the host clock is not synchronized.
 - Acceptance: for (a) the text of §2.18 says that `absolute` is exempt; for (b) the exception in `answer.go` goes and the test shows stratum 16 and leap 3 for a fault with `absolute` too.
-- Needs maintainer: yes
+- Decision: `absolute` is served as it is (stratum 2, leap 0) whatever the host clock says: the fault exists to give a device a chosen time, a client that refused the answer would make it useless on a host without a time source (the usual test host), and the preflight check `host.clock` and the health report still say that the host clock is not synchronized. The "open question" in plan §2.18 is closed.
+- Needs maintainer: no (decided 2026-11-05 on the maintainer's instruction to settle what the project context allows)
 - Effort: S
 
 ### P34-05 Does a destination selector with several ports get one redirect port or one per port
 
-- Status: open
+- Status: decided (2026-11-05): (a), decided
 - Severity: minor
 - Reason: needs-decision. D36 gives one redirect port per distinct destination selector. A selector that names several ports or a port range therefore shares one redirect port, and the server cannot tell which of the selector's ports a query was for. A fault without a selector (UDP 123 only) is served on that port for the traffic to the other ports too, and the "server asked" is not named for such a selector. Stage 2 implements D36 as written and documents the limit in plan §2.18.
 - Evidence: `docs/plan.md` §2.18 (the paragraph on hardcoded servers), `internal/compiler/ntp.go` (the allocation of the redirect ports), `internal/compiler/ntp_test.go`.
@@ -3560,12 +3564,13 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 - Options: (a) accept and document the limit (what stage 2 does); (b) allocate a redirect port per (selector, destination port), which uses up the 32-destination budget faster; (c) refuse a time fault whose selector names several ports or ranges in the validation (`invalid_time_fault`).
 - Recommendation: (a) until a tester needs several ports; NTP is on UDP 123 in practice and a selector with another port is the exception.
 - Acceptance: for (a) the text of §2.18 names the limit; for (b) a compiler test shows two ports of one selector on two redirect ports and the budget counted per pair; for (c) a domain test shows the refusal.
-- Needs maintainer: yes
+- Decision: the limit stays and is documented in plan §2.18: a selector of several ports shares one redirect port. NTP is on UDP 123 in practice, and a selector with another port is the exception. Revisit if a tester needs two ports of one selector told apart.
+- Needs maintainer: no (decided 2026-11-05 on the maintainer's instruction to settle what the project context allows)
 - Effort: S for (a) and (c), M for (b)
 
 ### P34-06 Is the broad deletion of the tracked NTP flows on a change of the redirects acceptable
 
-- Status: open
+- Status: decided (2026-11-05): (a), decided
 - Severity: minor
 - Reason: needs-decision. The redirect is NAT and a NAT chain sees only the first packet of a flow, so the engine deletes the tracked NTP flows when an apply changes the redirects of NTP (decided in stage 2, S2-CONF-01). The deletion takes the flows of every client in the namespace, not only those of the affected scope. It does not run on the first apply of a process (the engine does not know what the kernel ran before) and not when only the DNS-derived set of a hostname selector changes, so a device that keeps its source port can keep the decision of its first packet for up to 30 s unreplied or 120 s replied in those two cases.
 - Evidence: `docs/plan.md` §2.18, `internal/engine/ntpflows.go`, `internal/engine/ntpflows_test.go`, `internal/engine/timefault_flows_test.go`.
@@ -3573,12 +3578,13 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 - Options: (a) keep the broad deletion (what stage 2 does): NTP flows are cheap to recreate, a client sends its next query anyway; (b) limit the deletion to the sources of the changed scopes, which needs the engine to know the addresses of each scope at the time of the change; (c) as (b), and delete also on the first apply and on a change of a DNS-derived set.
 - Recommendation: (a): a query lost in the moment of an apply costs a retry, and the two cases without deletion are bounded by the flow timeouts.
 - Acceptance: for (a) the text of §2.18 names the breadth of the deletion; for (b) and (c) a test shows that the flows of an unaffected client survive the apply and (c) that the first apply and a changed DNS set delete the affected flows.
-- Needs maintainer: yes
+- Decision: the broad deletion of the tracked NTP flows stays (plan §2.18 names it): a query lost in the moment of an apply costs a retry, and the two cases that delete nothing (the first apply of a process, a changed DNS-derived set) are bounded by the flow timeouts of 30 s and 120 s.
+- Needs maintainer: no (decided 2026-11-05 on the maintainer's instruction to settle what the project context allows)
 - Effort: S for (a), M for (b) and (c)
 
 ### P34-07 Is a public NTP query log wanted
 
-- Status: open
+- Status: decided (2026-11-05): (a), decided
 - Severity: minor
 - Reason: needs-decision. Stage 1 and the plan name only `GET /devices/{id}/ntp` as the public read of NTP. Stage 3 added a public route `GET /ntp/queries` (operationId `listNtpQueries`, schema `NtpQueryPage`, filters `device` and `since`, readable with a `read` token) and added it to the API list in plan §2.5. `chaosctl wait ntp` is built on that route. The route exposes the whole in-memory log (up to 20000 entries) to every read token.
 - Evidence: `api/openapi.yaml` (`/ntp/queries`), `internal/api/ntpreads.go`, `internal/api/ntpreads_test.go` (`TestTheNTPQueryLogIsListedNewestFirstAndFilteredByDeviceAndTime`), `internal/ctl/wait.go`, `docs/plan.md` §2.5.
@@ -3586,12 +3592,13 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 - Options: (a) keep the route (what stage 3 does): the wait and a tester can read every query with its time, the device and the answer; (b) make the wait poll `GET /devices/{id}/ntp` (`last_query.time`, `recent`) and make the route internal or remove it, so a read token sees only the ring of 50 entries per device.
 - Recommendation: (a), as the DNS query log is public in the same way and the wait needs queries of a device that is not yet known by id.
 - Acceptance: for (a) the plan names the route as decided; for (b) the route is gone from the spec, the wait uses the device read, and a test shows that the wait still sees a query.
-- Needs maintainer: yes
+- Decision: `GET /ntp/queries` stays a public read with a `read` token, as `GET /dns/queries` is: the wait needs the queries of a device that is not yet known by id, and a tester reading the log is the use. Plan §2.5 names the route.
+- Needs maintainer: no (decided 2026-11-05 on the maintainer's instruction to settle what the project context allows)
 - Effort: S for (a), M for (b)
 
 ### P34-08 Choices of stage 3 that the plan and the decisions do not fix
 
-- Status: open
+- Status: decided (2026-11-05): all five kept, decided
 - Severity: minor
 - Reason: needs-decision. Stage 3 kept the safest reading in five places. (a) There is no precondition `uses_gateway_ntp` for a scenario. (b) The preset `time-kiss-of-death` uses the kiss code `DENY`. (c) The preset for the leap second is a date in the past, 2016-12-31 23:55:00 UTC (stage 3 changed the stage 1 example in `api/examples/overlays.yaml` from 2026-12-31 to match); the plan says only "a few minutes before midnight UTC at the end of a month". (d) The ring of recent queries per device is fixed at 50 entries. (e) A query answered with `silence` or a kiss-of-death counts as a query for the wait `ntp_query_seen` and for the check `ntp_queried`.
 - Evidence: `internal/domain/builtin.go` (the time presets), `internal/domain/builtin_time_test.go`, `internal/api/ntpreads.go` (the ring), `internal/api/runs.go` (the observer), `internal/run/ntp_test.go`, `api/examples/overlays.yaml`.
@@ -3599,12 +3606,13 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 - Options: (a) add a precondition that the device uses the gateway NTP server, or leave it out; (b) `DENY`, `RSTR` or `RATE`; (c) keep the date in the past or use a configurable or relative date; (d) keep 50 or make the size a setting; (e) count every query, or only the queries that were answered with a time.
 - Recommendation: keep all five as they are: no precondition (the zero-hit warning already says that no query came), `DENY` (the code clients react to most), a fixed past date (a test client can set its clock to it), 50 entries, and every query counts (the question the check answers is whether the device asked).
 - Acceptance: each changed choice has a test that fails on the old behaviour; each kept choice is named in plan §2.18.
-- Needs maintainer: yes
+- Decision: (a) no precondition `uses_gateway_ntp` (the zero-hit warning says that no query came); (b) the preset `time-kiss-of-death` keeps `DENY`, which RFC 5905 defines as "stop using this server" (a client that ignores it is the finding; chrony 4.8 reacts to `RATE` only, which the level 1 test and the user guide say); (c) the preset for the leap second keeps the fixed date 2016-12-31 23:55:00 UTC, which a test client can set its clock to; (d) the ring is 50 entries per device; (e) every query counts for the wait and the check, because the question is whether the device asked. Plan §2.18 names the five.
+- Needs maintainer: no (decided 2026-11-05 on the maintainer's instruction to settle what the project context allows)
 - Effort: S
 
 ### P34-09 Should the profile editor create and edit the parts `time`, `dns` and `tls`
 
-- Status: open
+- Status: decided (2026-11-05): (a), decided
 - Severity: minor
 - Reason: needs-decision. The profile editor of the web app (`web/src/components/profiles/ProfileDialog.vue`, `web/src/lib/profileForm.ts`) edits the parts `impairment` and `mtu`. It keeps a `dns`, `tls` or `time` part that comes from a built-in profile or the API when a profile is saved, shows it as a chip and activates it, but it has no fields to create or change one. Stage 4 followed the safest reading: the same limit that `dns` and `tls` have had since M23b, so the `time` part is made with the API, `chaosctl` or the eight built-in `time-*` profiles.
 - Evidence: `web/src/lib/profileForm.ts` (`keptParts`), `web/src/components/profiles/ProfileDialog.vue`, `web/src/lib/profileForm.test.ts`, `web/src/lib/timeForm.ts` (the fields exist for the Add fault dialog and the step dialog and could be reused), `docs/development.md` ("The web app (stage 4)").
@@ -3612,7 +3620,8 @@ These fixes are tested at level 0 and wait for a run that is not available on th
 - Options: (a) leave it to the API and the built-in profiles for all three (what stage 4 does); (b) add the `time` part only, with the fields and checks of `timeForm.ts`; (c) add all three.
 - Recommendation: (a): the built-in `time-*` profiles cover the presets, a custom time profile is rare, and a form for it is better made together with the forms for `dns` and `tls` than alone. For (a) the user guide names the limit (section "Time faults and the NTP server").
 - Acceptance: for (a) nothing more; for (b) and (c) a vitest file and a Playwright test show that the part is created, edited and removed in the editor, and that a part the editor does not know is still kept.
-- Needs maintainer: yes
+- Decision: the profile editor keeps, shows and activates the parts `time`, `dns` and `tls` but does not create or edit them: the `time` part is made with the API, `chaosctl` or the eight built-in `time-*` profiles, and a form for it is better made together with the forms for `dns` and `tls`. The user guide names the limit.
+- Needs maintainer: no (decided 2026-11-05 on the maintainer's instruction to settle what the project context allows)
 - Effort: S for (a), M for (b), L for (c)
 
 ### P34-10 What does "adds less than 1 ms to an answer" measure for the NTP server

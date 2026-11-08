@@ -66,6 +66,9 @@ type hostElem struct {
 	// life is the lifetime the element was written with
 	life  time.Duration
 	names []string
+	// reported is the tick of the last report of the element by the proxy (record), 0 for one that only rekey
+	// or adopt wrote
+	reported uint64
 }
 
 type hostSetInfo struct {
@@ -84,9 +87,14 @@ type hostSets struct {
 	elems map[string]map[hostKey]*hostElem
 	// gates hold the ids of the sets a plan in flight replaces: a channel that is closed when it is through
 	gates map[string]chan struct{}
-	// owner is the device of each address in the identity of the last applied target (rekey); nil before
-	// the first apply
+	// owner is the device of each address in the identity of the last applied target (rekey), and of an
+	// address with elements whose device has no address now; nil before the first apply
 	owner map[netip.Addr]string
+	// orphaned is the tick at which an address that owner keeps for a device without an address lost its holder:
+	// a report of the address after it is the next holder's (rekey)
+	orphaned map[netip.Addr]uint64
+	// tick orders the reports and the rekeys (under mu)
+	tick uint64
 
 	qmu      sync.Mutex
 	queue    []*hostWrite
@@ -102,6 +110,8 @@ type hostWrite struct {
 	id    map[string][]executor.DNSElement
 	names map[string]map[hostKey][]string
 	done  chan error
+	// tick is the tick of the report the write is for, 0 for a write of rekey
+	tick uint64
 }
 
 func lifetimeOf(ttl time.Duration) time.Duration {
@@ -132,6 +142,8 @@ func (h *hostSets) record(ctx context.Context, rs []HostResolution) (RecordResul
 	now := h.e.cfg.Clock.Now()
 	w := &hostWrite{id: map[string][]executor.DNSElement{}, names: map[string]map[hostKey][]string{}, done: make(chan error, 1)}
 	h.mu.Lock()
+	h.tick++
+	w.tick = h.tick
 	for _, r := range rs {
 		info, ok := h.sets[r.Set]
 		if !ok || !inPrefixes(info.sources, r.Client) {
@@ -148,8 +160,12 @@ func (h *hostSets) record(ctx context.Context, rs []HostResolution) (RecordResul
 			cur := h.elems[r.Set][k]
 			if cur != nil && cur.expires.Sub(now) > life/2 && cur.expires.Sub(now) > 0 {
 				h.addName(cur, r.Name)
+				cur.reported = w.tick
 				res.Kept++
 				continue
+			}
+			if cur != nil {
+				cur.reported = w.tick // before the write is through: a rekey meanwhile must see the report
 			}
 			w.id[r.Set] = append(w.id[r.Set], executor.DNSElement{Client: r.Client.String(), Addr: a.String(), TimeoutSeconds: int(life / time.Second), Replace: cur != nil && cur.expires.After(now)})
 			if w.names[r.Set] == nil {
@@ -266,6 +282,7 @@ func (h *hostSets) writeBatch(batch []*hostWrite) error {
 		el    executor.DNSElement
 		names []string
 		k     hostKey
+		tick  uint64
 	}
 	merged := map[string]map[string]*pair{} // set id, client|addr
 	for _, w := range batch {
@@ -282,16 +299,17 @@ func (h *hostSets) writeBatch(batch []*hostWrite) error {
 					if !el.Delete {
 						el.Replace = true
 					}
-					*p = pair{el: el, names: append([]string(nil), w.names[id][k]...), k: k}
+					*p = pair{el: el, names: append([]string(nil), w.names[id][k]...), k: k, tick: max(p.tick, w.tick)}
 					continue
 				}
 				if p := merged[id][key]; p != nil {
 					p.el.TimeoutSeconds = max(p.el.TimeoutSeconds, el.TimeoutSeconds)
 					p.el.Replace = p.el.Replace || el.Replace
 					p.names = append(p.names, w.names[id][k]...)
+					p.tick = max(p.tick, w.tick)
 					continue
 				}
-				merged[id][key] = &pair{el: el, names: append([]string(nil), w.names[id][k]...), k: k}
+				merged[id][key] = &pair{el: el, names: append([]string(nil), w.names[id][k]...), k: k, tick: w.tick}
 			}
 		}
 	}
@@ -358,7 +376,7 @@ func (h *hostSets) writeBatch(batch []*hostWrite) error {
 				el = &hostElem{}
 				h.elems[id][p.k] = el
 			}
-			el.expires, el.life = now.Add(life), life
+			el.expires, el.life, el.reported = now.Add(life), life, max(el.reported, p.tick)
 			for _, n := range p.names {
 				h.addName(el, n)
 			}
@@ -436,8 +454,9 @@ func (h *hostSets) applied(t *compiler.Target, kernel *linux.Ruleset) {
 // rules and faults without a new query. The element (A, x) is taken out when A went to another device (the
 // new holder wins, as it does in the identity map) or when it left a device that has other addresses: the
 // old address carries no connection any more, and a device that is given it later must not inherit the
-// answers. An address that only stays mapped for its connections keeps its elements. It runs after every
-// apply that succeeded, full or incremental, with the identity that apply used.
+// answers. An address that only stays mapped for its connections keeps its elements, and so does one whose
+// device has no address at all for a while: it stays the device's until the device is back or another one
+// takes it. It runs after every apply that succeeded, full or incremental, with the identity that apply used.
 func (h *hostSets) rekey(ctx context.Context, id *domain.Identity) {
 	if id == nil {
 		return
@@ -445,8 +464,11 @@ func (h *hostSets) rekey(ctx context.Context, id *domain.Identity) {
 	now := h.e.cfg.Clock.Now()
 	w := &hostWrite{id: map[string][]executor.DNSElement{}, names: map[string]map[hostKey][]string{}, done: make(chan error, 1)}
 	h.mu.Lock()
-	prev := h.owner
+	prev, orphaned := h.owner, h.orphaned
+	h.tick++
+	tick := h.tick
 	h.owner = make(map[netip.Addr]string, len(id.Owner))
+	h.orphaned = map[netip.Addr]uint64{}
 	for a, d := range id.Owner {
 		h.owner[a] = d
 	}
@@ -492,8 +514,24 @@ func (h *hostSets) rekey(ctx context.Context, id *domain.Identity) {
 				add(set, nk, executor.DNSElement{Client: b.String(), Addr: k.addr.String(), TimeoutSeconds: min(secs, executor.MaxDNSTimeout),
 					Replace: cur != nil && cur.expires.After(now)}, el.names)
 			}
-			if holder := id.Owner[k.client]; holder != dev && (holder != "" || len(id.Addresses[dev]) > 0) {
+			holder := id.Owner[k.client]
+			switch {
+			case holder != dev && holder != "" && orphaned[k.client] != 0 && el.reported > orphaned[k.client]:
+				// the proxy reported the element after the address lost its device, which had no address then: the
+				// device that holds the address now asked for it, and it is that device's
+			case holder != dev && (holder != "" || len(id.Addresses[dev]) > 0):
 				add(set, k, executor.DNSElement{Client: k.client.String(), Addr: k.addr.String(), Delete: true}, nil)
+			case holder == "":
+				// the device has no address for now (between a refused renewal and its new lease): the address keeps
+				// it as its owner, so its elements follow it to the address it comes back with, and go when another
+				// device takes the address
+				h.owner[k.client] = dev
+				if h.orphaned[k.client] == 0 {
+					h.orphaned[k.client] = orphaned[k.client]
+					if h.orphaned[k.client] == 0 {
+						h.orphaned[k.client] = tick
+					}
+				}
 			}
 		}
 	}

@@ -407,7 +407,9 @@ func TestAHostnameFaultStillActsAfterTheForcedNewIPWithoutANewQueryOnTheRealKern
 		time.Sleep(100 * time.Millisecond)
 	}
 	if !strings.Contains(listing, want) {
-		t.Fatalf("the set does not hold %q after the move from %s:\n%s", want, old, listing)
+		snap := b.e.Snapshot()
+		t.Fatalf("the set does not hold %q after the move from %s (the engine's sets %+v, devices %+v):\n%s", want, old, snap.DNSSets,
+			snap.Devices, listing)
 	}
 	if rtt := b.delayedWithin(t, 45*time.Second); rtt < 250*time.Millisecond {
 		t.Errorf("the hostname fault does not act at the new address %s without a new query (median %v)", moved, rtt)

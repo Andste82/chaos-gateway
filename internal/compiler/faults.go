@@ -317,6 +317,7 @@ func (t *Target) compileFaults(in Input, idx *domain.Index) {
 		identity = *in.Identity
 	}
 	sources := w.Sources(identity)
+	t.keepHostSets(w.HostnameSelectors())
 	t.compilePMTU(in, w, sources, idx)
 	if t.HasErrors() {
 		return

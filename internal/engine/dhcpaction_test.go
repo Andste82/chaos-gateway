@@ -323,6 +323,187 @@ func TestTheDNSDerivedElementsOfADeviceFollowItAfterTheForcedNewIP(t *testing.T)
 	}
 }
 
+// Plan §2.3 (P7-CI-01): the DNS-derived elements of a device without a fixed address follow it across an apply in which it has no
+// address at all, the time between the refused renewal and the new lease: the set of its hostname fault stays (an apply would delete
+// it with the device's answers), the old address keeps its element while the device is away, and the element goes to the address the
+// device comes back with. The weekly emulated job saw that gap, an empty set after the move (Weekly run 42471992971).
+func TestTheDNSDerivedElementsOfADeviceFollowItAcrossAnApplyWithoutAnAddress(t *testing.T) {
+	h, f := dhcpHarness(t)
+	h.mustApply(h.revision(func(c *model.Configuration) {
+		withDHCPAndDevice(c)
+		d := (*c.Devices)[devID]
+		d.Network = ptr("IoT")
+		(*c.Devices)[devID] = d
+	}))
+	sid := 0
+	for id := range h.e.Snapshot().KeaNetworks {
+		sid = id
+	}
+	f.setLeases(lease("10.10.0.150", macCfg, sid))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.150", macCfg)})
+	h.observe()
+	h.mustPut(alice, "target: {device: esp32-42}\nfault: {latency: 150ms, destination: {hostname: broker.example.com}}")
+	sets := h.barrier().DNSSets
+	if len(sets) != 1 {
+		t.Fatalf("%+v", sets)
+	}
+	set := sets[0]
+	if _, err := h.e.RecordResolutions(context.Background(), []engine.HostResolution{{Set: set.ID, Client: netip.MustParseAddr("10.10.0.150"),
+		Name: "broker.example.com", TTL: time.Minute, Addrs: []netip.Addr{netip.MustParseAddr("203.0.113.7")}}}); err != nil {
+		t.Fatal(err)
+	}
+	holds := func(client string) bool {
+		for _, el := range h.k.SetElements(set.Name) {
+			if strings.Contains(el, `"`+client+`"`) && strings.Contains(el, `"203.0.113.7"`) {
+				return true
+			}
+		}
+		return false
+	}
+	if !holds("10.10.0.150") {
+		t.Fatalf("setup: the set holds %v", h.k.SetElements(set.Name))
+	}
+
+	res := h.mustPut(alice, "target: {device: esp32-42}\ndhcp: {action: force_new_ip}")
+	moved := derefS(res.Overlay.Dhcp.Ip)
+	// the client was refused and let go of its address: no lease, no neighbor entry
+	f.setLeases()
+	h.k.SetNeighbors(nil)
+	h.observe()
+	snap := h.barrier()
+	if d := h.device(devID); d != nil && len(d.Addresses) > 0 {
+		t.Fatalf("setup: the device still has %v", d.Addresses)
+	}
+	if len(snap.DNSSets) != 1 || snap.DNSSets[0].Name != set.Name {
+		t.Errorf("the set of the fault did not stay while the device has no address: %+v", snap.DNSSets)
+	}
+	if !holds("10.10.0.150") {
+		t.Errorf("the element went while the device has no address: the set holds %v", h.k.SetElements(set.Name))
+	}
+
+	// the device comes back after the window of devices that came or went
+	h.clk.Advance(3 * time.Second)
+	f.setLeases(lease(moved, macCfg, sid))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor(moved, macCfg)})
+	h.observe()
+	h.barrier()
+	if !holds(moved) {
+		t.Errorf("the element did not follow the device to %s: the set holds %v", moved, h.k.SetElements(set.Name))
+	}
+	if holds("10.10.0.150") {
+		t.Errorf("the old address still holds the element: %v", h.k.SetElements(set.Name))
+	}
+}
+
+// The other side of the gap: the old address of a device that has no address for now is kept for that device, so a device that is given
+// the address in the meantime does not inherit the answers (the new holder wins, as in the identity map).
+func TestTheElementOfADeviceWithoutAnAddressIsNotInheritedByTheNextHolderOfTheAddress(t *testing.T) {
+	h, f := dhcpHarness(t)
+	h.mustApply(h.revision(func(c *model.Configuration) {
+		withDHCPAndDevice(c)
+		d := (*c.Devices)[devID]
+		d.Network = ptr("IoT")
+		(*c.Devices)[devID] = d
+	}))
+	sid := 0
+	for id := range h.e.Snapshot().KeaNetworks {
+		sid = id
+	}
+	f.setLeases(lease("10.10.0.150", macCfg, sid))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.150", macCfg)})
+	h.observe()
+	h.mustPut(alice, "target: {device: esp32-42}\nfault: {latency: 150ms, destination: {hostname: broker.example.com}}")
+	set := h.barrier().DNSSets[0]
+	if _, err := h.e.RecordResolutions(context.Background(), []engine.HostResolution{{Set: set.ID, Client: netip.MustParseAddr("10.10.0.150"),
+		Name: "broker.example.com", TTL: time.Minute, Addrs: []netip.Addr{netip.MustParseAddr("203.0.113.7")}}}); err != nil {
+		t.Fatal(err)
+	}
+	f.setLeases()
+	h.k.SetNeighbors(nil)
+	h.observe()
+	h.barrier()
+
+	const other = "02:00:00:00:00:99"
+	h.clk.Advance(3 * time.Second)
+	f.setLeases(lease("10.10.0.150", other, sid))
+	h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.150", other)})
+	h.observe()
+	h.barrier()
+	if got := h.e.HostNames(netip.MustParseAddr("10.10.0.150"), netip.MustParseAddr("203.0.113.7")); len(got) != 0 {
+		t.Errorf("the next holder of the address inherited the names %v", got)
+	}
+	for _, el := range h.k.SetElements(set.Name) {
+		if strings.Contains(el, `"10.10.0.150"`) {
+			t.Errorf("the next holder of the address inherited the element %s", el)
+		}
+	}
+}
+
+// The next holder of the address keeps an element that it asked for itself: a fault of the network covers it too, and when the proxy
+// reports its query before the apply that gives it the address, that apply must not take the element out as one of the device that
+// left. The report either finds the element with enough time left (it writes nothing) or refreshes it (a write), and another apply,
+// for something else, may come between the report and the one that maps the address.
+func TestTheNextHolderOfTheAddressKeepsTheElementItAskedForItself(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		after time.Duration // from the first report to the next holder's
+	}{{"kept", 3 * time.Second}, {"refreshed", 6 * time.Minute}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, f := dhcpHarness(t)
+			h.mustApply(h.revision(func(c *model.Configuration) {
+				withDHCPAndDevice(c)
+				d := (*c.Devices)[devID]
+				d.Network = ptr("IoT")
+				(*c.Devices)[devID] = d
+			}))
+			sid := 0
+			for id := range h.e.Snapshot().KeaNetworks {
+				sid = id
+			}
+			f.setLeases(lease("10.10.0.150", macCfg, sid))
+			h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.150", macCfg)})
+			h.observe()
+			h.mustPut(alice, "target: {network: IoT}\nfault: {latency: 150ms, destination: {hostname: broker.example.com}}")
+			set := h.barrier().DNSSets[0]
+			report := func(want engine.RecordResult) {
+				t.Helper()
+				got, err := h.e.RecordResolutions(context.Background(), []engine.HostResolution{{Set: set.ID, Client: netip.MustParseAddr("10.10.0.150"),
+					Name: "broker.example.com", TTL: time.Minute, Addrs: []netip.Addr{netip.MustParseAddr("203.0.113.7")}}})
+				if err != nil || got != want {
+					t.Fatalf("the report: %+v, %v; want %+v", got, err, want)
+				}
+			}
+			report(engine.RecordResult{Written: 1})
+			f.setLeases()
+			h.k.SetNeighbors(nil)
+			h.observe()
+			h.barrier()
+
+			const other = "02:00:00:00:00:99"
+			h.clk.Advance(tc.after)
+			if tc.after < engine.MinHostLifetime/2 {
+				report(engine.RecordResult{Kept: 1})
+			} else {
+				report(engine.RecordResult{Written: 1})
+			}
+			// an apply for something else before the one that maps the address
+			h.mustPut(alice, "target: {device: esp32-42}\nfault: {latency: 10ms}")
+			h.barrier()
+			f.setLeases(lease("10.10.0.150", other, sid))
+			h.k.SetNeighbors([]linux.Neighbor{neighbor("10.10.0.150", other)})
+			h.observe()
+			h.barrier()
+			found := false
+			for _, el := range h.k.SetElements(set.Name) {
+				found = found || (strings.Contains(el, `"10.10.0.150"`) && strings.Contains(el, `"203.0.113.7"`))
+			}
+			if !found {
+				t.Errorf("the element the next holder asked for was taken out: the set holds %v", h.k.SetElements(set.Name))
+			}
+		})
+	}
+}
+
 // An action whose configuration the DHCP server refuses (an option it cannot parse, a lease time it does not take) is refused when it
 // is written: the server would keep the configuration it has, and the retry would send the same one for ever, so no later
 // change of a network or another action would reach the server.

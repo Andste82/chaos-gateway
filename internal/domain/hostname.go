@@ -76,6 +76,31 @@ func (w *World) DNSCandidates(src Source) []Candidate {
 	return out
 }
 
+// HostnameSelectors returns the hostname selectors of the faults in force whose rules look up a DNS-derived set (impairment, MTU,
+// TLS and time faults), sorted, whether or not a source of traffic has an address for them now: a device without an address
+// (between a refused renewal and its new lease) is no source, and the set of its fault stays with what the device resolved
+// (plan §2.3).
+func (w *World) HostnameSelectors() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, c := range w.candidates() {
+		switch c.Family {
+		case FamilyImpairment, FamilyMTU, FamilyTLS, FamilyTime:
+		default:
+			continue
+		}
+		if c.Match.Destination == nil || c.Match.Destination.Hostname == nil {
+			continue
+		}
+		if p := HostnamePattern(*c.Match.Destination.Hostname); !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Prefixes are the addresses of a source as prefixes: the device's addresses (one prefix each) and the
 // ranges of a stretch of addresses.
 func (s Source) Prefixes() []netip.Prefix {

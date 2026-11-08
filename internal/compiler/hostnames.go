@@ -111,6 +111,16 @@ func (t *Target) hostSet(pattern string, clients []netip.Prefix) DNSSet {
 	return b.set
 }
 
+// keepHostSets registers the sets of the hostname selectors of the faults in force, also those that no source reaches now: a device
+// without an address is no source, and an apply would delete the set of its fault with what the device resolved, while the device
+// keeps its cached answer and comes back at a new address (plan §2.3, the engine re-keys the elements then). An access rule keeps
+// its set the same way.
+func (t *Target) keepHostSets(patterns []string) {
+	for _, p := range patterns {
+		t.hostSet(p, nil)
+	}
+}
+
 // hostSourceSet registers the source set of a hostname fault (the addresses of the devices it applies
 // to) and returns its name. The name is derived from the key of the fault, so a fault that stays keeps
 // its set.

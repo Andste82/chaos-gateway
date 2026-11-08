@@ -290,6 +290,34 @@ func TestAnMTUFaultThatNamesAHostnameHasARuleInTheMTULookup(t *testing.T) {
 	}
 }
 
+// Plan §2.3 (P7-CI-01): the set of a hostname fault stays while its device has no address (no source, no rule), with the same name,
+// so an apply does not delete it with what the device resolved before it lost its address; the same for an MTU fault and a TLS case.
+func TestTheSetOfAHostnameFaultStaysWhileItsDeviceHasNoAddress(t *testing.T) {
+	w := newFaultWorld(t)
+	w.overlay(`{target: {device: esp32-42}, fault: {destination: {hostname: broker.example.com}, latency: 50ms}}`, 0)
+	w.overlay(`{target: {device: esp32-42}, fault: {family: mtu, mtu: {size: 1280}, destination: {hostname: example.com}}}`, time.Second)
+	w.overlay(`{target: {device: esp32-42}, tls: {case: expired, destination: {hostname: "*.example.com"}}}`, 2*time.Second)
+	with := w.compile(nil)
+	w.setAddrs(map[string][]string{devESP43: {"10.10.0.43"}, devLab: {"10.20.0.50"}})
+	without := w.compile(nil)
+	if with.HasErrors() || without.HasErrors() {
+		t.Fatalf("%+v %+v", with.Problems, without.Problems)
+	}
+	for _, name := range []string{"broker.example.com", "example.com", "*.example.com"} {
+		before, ok1 := with.DNSSetOf(name)
+		after, ok2 := without.DNSSetOf(name)
+		if !ok1 || !ok2 || after.Name != before.Name || len(after.Sources) != 0 {
+			t.Errorf("the set of %s with the address %+v, without %+v (%v)", name, before, after, ok2)
+		}
+		if _, ok := setByName(without, after.Name); !ok {
+			t.Errorf("the nft table has no set %s", after.Name)
+		}
+	}
+	if rules := classifyHostRules(t, without); len(rules) != 0 {
+		t.Errorf("a device without an address has rules: %v", rules)
+	}
+}
+
 // A hostname selector makes no difference to a target that has none: no set, no rule, the same hash.
 func TestWithoutHostnamesNothingChanges(t *testing.T) {
 	w := newFaultWorld(t)
